@@ -14,6 +14,7 @@ import urllib.error
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "minutes_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_runs.jsonl"
+DEBUG_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_debug.jsonl"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 NOTION_KEY_PATH = Path.home() / ".config" / "notion" / "api_key"
 
@@ -335,7 +336,7 @@ def export_doc_text(doc_id: str, env: Dict[str, str], account: str) -> str:
     return text.strip()
 
 
-def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_projects: List[str], today: str) -> List[Dict[str, Any]]:
+def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_projects: List[str], today: str) -> Tuple[List[Dict[str, Any]], str]:
     known = ", ".join(sorted(set([p for p in known_projects if p]))[:25])
     prompt = (
         "Extract actionable tasks from the meeting minutes. "
@@ -365,17 +366,17 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     data = json.loads(out)
     summary = data.get("summary", "")
     if not summary:
-        return []
+        return [], ""
     try:
-        return json.loads(summary)
+        return json.loads(summary), summary
     except Exception:
         m = re.search(r"\[.*\]", summary, re.DOTALL)
         if m:
             try:
-                return json.loads(m.group(0))
+                return json.loads(m.group(0)), summary
             except Exception:
-                return []
-        return []
+                return [], summary
+        return [], summary
 
 
 def _stable_origin_id(task: Dict[str, Any], source_id: str) -> str:
@@ -566,6 +567,7 @@ def main() -> int:
     parser.add_argument("--skip-gdocs", action="store_true")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
     env = load_env()
@@ -668,6 +670,7 @@ def main() -> int:
         selected = [c for i, c in enumerate(candidates, 1) if i in idxs]
 
     all_tasks: List[Dict[str, Any]] = []
+    debug_records: List[Dict[str, Any]] = []
 
     for item in selected:
         if item.get("source") == "notion":
@@ -676,7 +679,19 @@ def main() -> int:
             if not text:
                 processed_notion[page_id] = item.get("updated", "")
                 continue
-            extracted = summarize_tasks(text, env, item.get("project") or "TOKIWAGI", known_projects, today_str)
+            extracted, raw_summary = summarize_tasks(
+                text, env, item.get("project") or "TOKIWAGI", known_projects, today_str
+            )
+            if args.debug:
+                debug_records.append({
+                    "source": "notion",
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "text_len": len(text),
+                    "summary_len": len(raw_summary or ""),
+                    "summary_snippet": (raw_summary or "")[:800],
+                    "tasks": len(extracted),
+                })
             tasks = build_neuronic_tasks(
                 extracted,
                 "notion",
@@ -694,7 +709,17 @@ def main() -> int:
             if not text:
                 processed_gdocs[doc_id] = item.get("updated", "")
                 continue
-            extracted = summarize_tasks(text, env, "GDocs", known_projects, today_str)
+            extracted, raw_summary = summarize_tasks(text, env, "GDocs", known_projects, today_str)
+            if args.debug:
+                debug_records.append({
+                    "source": "gdocs",
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "text_len": len(text),
+                    "summary_len": len(raw_summary or ""),
+                    "summary_snippet": (raw_summary or "")[:800],
+                    "tasks": len(extracted),
+                })
             tasks = build_neuronic_tasks(
                 extracted,
                 "gdocs",
@@ -722,6 +747,11 @@ def main() -> int:
     state["gdocs"] = processed_gdocs
     save_state(state)
     log_run({"ts": int(time.time()), "summary": summary})
+    if args.debug and debug_records:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            for rec in debug_records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     slack_url = env.get("SLACK_WEBHOOK_URL", "").strip()
     if slack_url:
