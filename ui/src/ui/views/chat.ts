@@ -99,7 +99,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   if (status.active) {
     return html`
       <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
-        ${icons.loader} Compacting context...
+        ${icons.loader} コンテキストを圧縮中…
       </div>
     `;
   }
@@ -110,7 +110,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
         <div class="compaction-indicator compaction-indicator--complete" role="status" aria-live="polite">
-          ${icons.check} Context compacted
+          ${icons.check} コンテキストを圧縮しました
         </div>
       `;
     }
@@ -129,18 +129,18 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
     return nothing;
   }
   const details = [
-    `Selected: ${status.selected}`,
-    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
-    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
-    status.reason ? `Reason: ${status.reason}` : null,
-    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
+    `選択: ${status.selected}`,
+    phase === "cleared" ? `稼働: ${status.selected}` : `稼働: ${status.active}`,
+    phase === "cleared" && status.previous ? `前回フォールバック: ${status.previous}` : null,
+    status.reason ? `理由: ${status.reason}` : null,
+    status.attempts.length > 0 ? `試行: ${status.attempts.slice(0, 3).join(" | ")}` : null,
   ]
     .filter(Boolean)
     .join(" • ");
   const message =
     phase === "cleared"
-      ? `Fallback cleared: ${status.selected}`
-      : `Fallback active: ${status.active}`;
+      ? `フォールバック解除: ${status.selected}`
+      : `フォールバック稼働: ${status.active}`;
   const className =
     phase === "cleared"
       ? "compaction-indicator compaction-indicator--fallback-cleared"
@@ -216,13 +216,13 @@ function renderAttachmentPreview(props: ChatProps) {
           <div class="chat-attachment">
             <img
               src=${att.dataUrl}
-              alt="Attachment preview"
+              alt="添付プレビュー"
               class="chat-attachment__img"
             />
             <button
               class="chat-attachment__remove"
               type="button"
-              aria-label="Remove attachment"
+              aria-label="添付を削除"
               @click=${() => {
                 const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
                 props.onAttachmentsChange?.(next);
@@ -252,9 +252,9 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const composePlaceholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
-    : "Connect to the gateway to start chatting…";
+      ? "メッセージを追加するか、画像を貼り付けてください…"
+      : "メッセージ（↩で送信 / Shift+↩で改行 / 画像貼り付け可）"
+    : "ゲートウェイに接続してチャットを開始…";
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
@@ -268,7 +268,7 @@ export function renderChat(props: ChatProps) {
       ${
         props.loading
           ? html`
-              <div class="muted">Loading chat…</div>
+              <div class="muted">チャットを読み込み中…</div>
             `
           : nothing
       }
@@ -327,8 +327,8 @@ export function renderChat(props: ChatProps) {
               class="chat-focus-exit"
               type="button"
               @click=${props.onToggleFocusMode}
-              aria-label="Exit focus mode"
-              title="Exit focus mode"
+              aria-label="フォーカスモードを終了"
+              title="フォーカスモードを終了"
             >
               ${icons.x}
             </button>
@@ -375,7 +375,7 @@ export function renderChat(props: ChatProps) {
         props.queue.length
           ? html`
             <div class="chat-queue" role="status" aria-live="polite">
-              <div class="chat-queue__title">Queued (${props.queue.length})</div>
+              <div class="chat-queue__title">キュー (${props.queue.length})</div>
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
@@ -383,13 +383,13 @@ export function renderChat(props: ChatProps) {
                       <div class="chat-queue__text">
                         ${
                           item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
+                          (item.attachments?.length ? `画像 (${item.attachments.length})` : "")
                         }
                       </div>
                       <button
                         class="btn chat-queue__remove"
                         type="button"
-                        aria-label="Remove queued message"
+                        aria-label="キューから削除"
                         @click=${() => props.onQueueRemove(item.id)}
                       >
                         ${icons.x}
@@ -414,7 +414,7 @@ export function renderChat(props: ChatProps) {
               type="button"
               @click=${props.onScrollToBottom}
             >
-              New messages ${icons.arrowDown}
+              新着メッセージ ${icons.arrowDown}
             </button>
           `
           : nothing
@@ -424,7 +424,7 @@ export function renderChat(props: ChatProps) {
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
-            <span>Message</span>
+            <span>メッセージ</span>
             <textarea
               ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
               .value=${props.draft}
@@ -463,14 +463,14 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected || (!canAbort && props.sending)}
               @click=${canAbort ? props.onAbort : props.onNewSession}
             >
-              ${canAbort ? "Stop" : "New session"}
+              ${canAbort ? "停止" : "新規セッション"}
             </button>
             <button
               class="btn primary"
               ?disabled=${!props.connected}
               @click=${props.onSend}
             >
-              ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+              ${isBusy ? "キュー" : "送信"}<kbd class="btn-kbd">↵</kbd>
             </button>
           </div>
         </div>
@@ -533,7 +533,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       key: "chat:history:notice",
       message: {
         role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
+        content: `最新${CHAT_HISTORY_RENDER_LIMIT}件のみ表示（${historyStart}件は省略）。`,
         timestamp: Date.now(),
       },
     });
@@ -550,7 +550,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
+        label: "圧縮",
         timestamp: normalized.timestamp ?? Date.now(),
       });
       continue;

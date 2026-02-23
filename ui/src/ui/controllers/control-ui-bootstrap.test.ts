@@ -19,7 +19,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "/openclaw",
-      assistantName: "Assistant",
+      assistantName: "Roby",
       assistantAvatar: null,
       assistantAgentId: null,
     };
@@ -43,7 +43,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "",
-      assistantName: "Assistant",
+      assistantName: "Roby",
       assistantAvatar: null,
       assistantAgentId: null,
     };
@@ -54,7 +54,7 @@ describe("loadControlUiBootstrapConfig", () => {
       CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
       expect.objectContaining({ method: "GET" }),
     );
-    expect(state.assistantName).toBe("Assistant");
+    expect(state.assistantName).toBe("Roby");
 
     vi.unstubAllGlobals();
   });
@@ -65,7 +65,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "/openclaw/",
-      assistantName: "Assistant",
+      assistantName: "Roby",
       assistantAvatar: null,
       assistantAgentId: null,
     };

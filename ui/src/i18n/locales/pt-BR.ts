@@ -15,6 +15,7 @@ export const pt_BR: TranslationMap = {
     resources: "Recursos",
   },
   nav: {
+    roby: "Roby",
     chat: "Chat",
     control: "Controle",
     agent: "Agente",
@@ -23,6 +24,7 @@ export const pt_BR: TranslationMap = {
     collapse: "Recolher barra lateral",
   },
   tabs: {
+    roby: "Roby",
     agents: "Agentes",
     overview: "Visão Geral",
     channels: "Canais",
@@ -38,6 +40,7 @@ export const pt_BR: TranslationMap = {
     logs: "Logs",
   },
   subtitles: {
+    roby: "Central Roby, automações e ações rápidas.",
     agents: "Gerenciar espaços de trabalho, ferramentas e identidades de agentes.",
     overview: "Status do gateway, pontos de entrada e leitura rápida de saúde.",
     channels: "Gerenciar canais e configurações.",
@@ -117,6 +120,7 @@ export const pt_BR: TranslationMap = {
   },
   languages: {
     en: "English",
+    ja: "日本語",
     zhCN: "简体中文 (Chinês Simplificado)",
     zhTW: "繁體中文 (Chinês Tradicional)",
     ptBR: "Português (Português Brasileiro)",

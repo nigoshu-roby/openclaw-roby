@@ -4,14 +4,7 @@ import type { Locale, TranslationMap } from "./types.ts";
 
 type Subscriber = (locale: Locale) => void;
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [
-  "en",
-  "ja",
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = ["en", "ja", "zh-CN", "zh-TW", "pt-BR"];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
@@ -32,8 +25,17 @@ class I18nManager {
   private resolveInitialLocale(): Locale {
     const saved = localStorage.getItem("openclaw.i18n.locale");
     if (isSupportedLocale(saved)) {
-      if (saved === "en") {
-        return "ja";
+      this.locale = saved;
+    } else {
+      const navLang = navigator.language;
+      if (navLang.startsWith("ja")) {
+        this.locale = "ja";
+      } else if (navLang.startsWith("zh")) {
+        this.locale = navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
+      } else if (navLang.startsWith("pt")) {
+        this.locale = "pt-BR";
+      } else {
+        this.locale = "en";
       }
       return saved;
     }

@@ -26,6 +26,7 @@ describe("iconForTab", () => {
   });
 
   it("returns stable icons for known tabs", () => {
+    expect(iconForTab("roby")).toBe("zap");
     expect(iconForTab("chat")).toBe("messageSquare");
     expect(iconForTab("overview")).toBe("barChart");
     expect(iconForTab("channels")).toBe("link");
@@ -56,6 +57,7 @@ describe("titleForTab", () => {
   });
 
   it("returns expected titles", () => {
+    expect(titleForTab("roby")).toBe("Roby");
     expect(titleForTab("chat")).toBe("Chat");
     expect(titleForTab("overview")).toBe("Overview");
     expect(titleForTab("cron")).toBe("Cron Jobs");
@@ -71,6 +73,7 @@ describe("subtitleForTab", () => {
   });
 
   it("returns descriptive subtitles", () => {
+    expect(subtitleForTab("roby")).toContain("Roby");
     expect(subtitleForTab("chat")).toContain("chat session");
     expect(subtitleForTab("config")).toContain("openclaw.json");
   });
@@ -159,6 +162,7 @@ describe("inferBasePathFromPathname", () => {
   it("returns empty string for direct tab path", () => {
     expect(inferBasePathFromPathname("/chat")).toBe("");
     expect(inferBasePathFromPathname("/overview")).toBe("");
+    expect(inferBasePathFromPathname("/roby")).toBe("");
   });
 
   it("infers base path from nested paths", () => {
@@ -175,10 +179,10 @@ describe("inferBasePathFromPathname", () => {
 describe("TAB_GROUPS", () => {
   it("contains all expected groups", () => {
     const labels = TAB_GROUPS.map((g) => g.label);
-    expect(labels).toContain("Chat");
-    expect(labels).toContain("Control");
-    expect(labels).toContain("Agent");
-    expect(labels).toContain("Settings");
+    expect(labels).toContain("roby");
+    expect(labels).toContain("chat");
+    expect(labels).toContain("control");
+    expect(labels).toContain("settings");
   });
 
   it("all tabs are unique", () => {

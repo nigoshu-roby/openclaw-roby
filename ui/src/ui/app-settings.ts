@@ -12,12 +12,7 @@ import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
-import {
-  loadCronJobs,
-  loadCronModelSuggestions,
-  loadCronRuns,
-  loadCronStatus,
-} from "./controllers/cron.ts";
+import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
@@ -186,6 +181,14 @@ export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTra
 export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "overview") {
     await loadOverview(host);
+  }
+  if (host.tab === "roby") {
+    await loadCron(host);
+    await loadSkills(host as unknown as OpenClawApp);
+    const job = host.cronJobs?.find((entry) => entry.name === "Roby Self-Growth Hourly");
+    if (job) {
+      await loadCronRuns(host as unknown as OpenClawApp, job.id);
+    }
   }
   if (host.tab === "channels") {
     await loadChannelsTab(host);

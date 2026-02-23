@@ -15,6 +15,7 @@ export const zh_CN: TranslationMap = {
     resources: "资源",
   },
   nav: {
+    roby: "Roby",
     chat: "聊天",
     control: "控制",
     agent: "代理",
@@ -23,6 +24,7 @@ export const zh_CN: TranslationMap = {
     collapse: "折叠侧边栏",
   },
   tabs: {
+    roby: "Roby",
     agents: "代理",
     overview: "概览",
     channels: "频道",
@@ -38,6 +40,7 @@ export const zh_CN: TranslationMap = {
     logs: "日志",
   },
   subtitles: {
+    roby: "Roby 控制台、自动化与快捷操作。",
     agents: "管理代理工作区、工具和身份。",
     overview: "网关状态、入口点和快速健康读取。",
     channels: "管理频道和设置。",
@@ -114,6 +117,7 @@ export const zh_CN: TranslationMap = {
   },
   languages: {
     en: "English",
+    ja: "日语",
     zhCN: "简体中文 (简体中文)",
     zhTW: "繁體中文 (繁体中文)",
     ptBR: "Português (巴西葡萄牙语)",

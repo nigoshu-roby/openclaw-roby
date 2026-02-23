@@ -51,18 +51,18 @@ export function renderLogs(props: LogsProps) {
     }
     return matchesFilter(entry, needle);
   });
-  const exportLabel = needle || levelFiltered ? "filtered" : "visible";
+  const exportLabel = needle || levelFiltered ? "絞り込み" : "表示中";
 
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Logs</div>
-          <div class="card-sub">Gateway file logs (JSONL).</div>
+          <div class="card-title">ログ</div>
+          <div class="card-sub">ゲートウェイのファイルログ（JSONL）。</div>
         </div>
         <div class="row" style="gap: 8px;">
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
+            ${props.loading ? "読み込み中…" : "更新"}
           </button>
           <button
             class="btn"
@@ -73,22 +73,22 @@ export function renderLogs(props: LogsProps) {
                 exportLabel,
               )}
           >
-            Export ${exportLabel}
+            エクスポート ${exportLabel}
           </button>
         </div>
       </div>
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="min-width: 220px;">
-          <span>Filter</span>
+          <span>フィルタ</span>
           <input
             .value=${props.filterText}
             @input=${(e: Event) => props.onFilterTextChange((e.target as HTMLInputElement).value)}
-            placeholder="Search logs"
+            placeholder="ログを検索"
           />
         </label>
         <label class="field checkbox">
-          <span>Auto-follow</span>
+          <span>自動追尾</span>
           <input
             type="checkbox"
             .checked=${props.autoFollow}
@@ -116,13 +116,13 @@ export function renderLogs(props: LogsProps) {
 
       ${
         props.file
-          ? html`<div class="muted" style="margin-top: 10px;">File: ${props.file}</div>`
+          ? html`<div class="muted" style="margin-top: 10px;">ファイル: ${props.file}</div>`
           : nothing
       }
       ${
         props.truncated
           ? html`
-              <div class="callout" style="margin-top: 10px">Log output truncated; showing latest chunk.</div>
+              <div class="callout" style="margin-top: 10px">ログが省略されました。最新部分を表示します。</div>
             `
           : nothing
       }
@@ -136,7 +136,7 @@ export function renderLogs(props: LogsProps) {
         ${
           filtered.length === 0
             ? html`
-                <div class="muted" style="padding: 12px">No log entries.</div>
+                <div class="muted" style="padding: 12px">ログがありません。</div>
               `
             : filtered.map(
                 (entry) => html`

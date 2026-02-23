@@ -14,25 +14,25 @@ export function renderSlackCard(params: {
   return html`
     <div class="card">
       <div class="card-title">Slack</div>
-      <div class="card-sub">Socket mode status and channel configuration.</div>
+      <div class="card-sub">Socketモードの状態とチャネル設定。</div>
       ${accountCountLabel}
 
       <div class="status-list" style="margin-top: 16px;">
         <div>
-          <span class="label">Configured</span>
-          <span>${slack?.configured ? "Yes" : "No"}</span>
+          <span class="label">設定済み</span>
+          <span>${slack?.configured ? "はい" : "いいえ"}</span>
         </div>
         <div>
-          <span class="label">Running</span>
-          <span>${slack?.running ? "Yes" : "No"}</span>
+          <span class="label">稼働中</span>
+          <span>${slack?.running ? "はい" : "いいえ"}</span>
         </div>
         <div>
-          <span class="label">Last start</span>
-          <span>${slack?.lastStartAt ? formatRelativeTimestamp(slack.lastStartAt) : "n/a"}</span>
+          <span class="label">最終起動</span>
+          <span>${slack?.lastStartAt ? formatRelativeTimestamp(slack.lastStartAt) : "—"}</span>
         </div>
         <div>
-          <span class="label">Last probe</span>
-          <span>${slack?.lastProbeAt ? formatRelativeTimestamp(slack.lastProbeAt) : "n/a"}</span>
+          <span class="label">最終プローブ</span>
+          <span>${slack?.lastProbeAt ? formatRelativeTimestamp(slack.lastProbeAt) : "—"}</span>
         </div>
       </div>
 
@@ -47,7 +47,7 @@ export function renderSlackCard(params: {
       ${
         slack?.probe
           ? html`<div class="callout" style="margin-top: 12px;">
-            Probe ${slack.probe.ok ? "ok" : "failed"} ·
+            プローブ ${slack.probe.ok ? "OK" : "失敗"} ·
             ${slack.probe.status ?? ""} ${slack.probe.error ?? ""}
           </div>`
           : nothing
@@ -57,7 +57,7 @@ export function renderSlackCard(params: {
 
       <div class="row" style="margin-top: 12px;">
         <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
+          プローブ
         </button>
       </div>
     </div>

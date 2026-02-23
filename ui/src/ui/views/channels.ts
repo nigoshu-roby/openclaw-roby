@@ -4,35 +4,16 @@ import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,
   ChannelsStatusSnapshot,
-  DiscordStatus,
-  GoogleChatStatus,
-  IMessageStatus,
-  NostrProfile,
-  NostrStatus,
-  SignalStatus,
   SlackStatus,
-  TelegramStatus,
 } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
-import { renderDiscordCard } from "./channels.discord.ts";
-import { renderGoogleChatCard } from "./channels.googlechat.ts";
-import { renderIMessageCard } from "./channels.imessage.ts";
-import { renderNostrCard } from "./channels.nostr.ts";
 import { channelEnabled, renderChannelAccountCount } from "./channels.shared.ts";
-import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
-import { renderTelegramCard } from "./channels.telegram.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
 
 export function renderChannels(props: ChannelsProps) {
   const channels = props.snapshot?.channels as Record<string, unknown> | null;
-  const telegram = (channels?.telegram ?? undefined) as TelegramStatus | undefined;
-  const discord = (channels?.discord ?? null) as DiscordStatus | null;
-  const googlechat = (channels?.googlechat ?? null) as GoogleChatStatus | null;
   const slack = (channels?.slack ?? null) as SlackStatus | null;
-  const signal = (channels?.signal ?? null) as SignalStatus | null;
-  const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
-  const nostr = (channels?.nostr ?? null) as NostrStatus | null;
   const channelOrder = resolveChannelOrder(props.snapshot);
   const orderedChannels = channelOrder
     .map((key, index) => ({
@@ -52,13 +33,7 @@ export function renderChannels(props: ChannelsProps) {
     <section class="grid grid-cols-2">
       ${orderedChannels.map((channel) =>
         renderChannel(channel.key, props, {
-          telegram,
-          discord,
-          googlechat,
           slack,
-          signal,
-          imessage,
-          nostr,
           channelAccounts: props.snapshot?.channelAccounts ?? null,
         }),
       )}
@@ -67,10 +42,10 @@ export function renderChannels(props: ChannelsProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Channel health</div>
-          <div class="card-sub">Channel status snapshots from the gateway.</div>
+          <div class="card-title">チャネルの状態</div>
+          <div class="card-sub">ゲートウェイからのスナップショット。</div>
         </div>
-        <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}</div>
+        <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "—"}</div>
       </div>
       ${
         props.lastError
@@ -80,7 +55,7 @@ export function renderChannels(props: ChannelsProps) {
           : nothing
       }
       <pre class="code-block" style="margin-top: 12px;">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
+${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "まだスナップショットはありません。"}
       </pre>
     </section>
   `;
@@ -88,81 +63,29 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
   if (snapshot?.channelMeta?.length) {
-    return snapshot.channelMeta.map((entry) => entry.id);
+    const onlySlack = snapshot.channelMeta.map((entry) => entry.id).filter((id) => id === "slack");
+    if (onlySlack.length) {
+      return onlySlack as ChannelKey[];
+    }
   }
   if (snapshot?.channelOrder?.length) {
-    return snapshot.channelOrder;
+    const onlySlack = snapshot.channelOrder.filter((id) => id === "slack");
+    if (onlySlack.length) {
+      return onlySlack as ChannelKey[];
+    }
   }
-  return ["telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
+  return ["slack"];
 }
 
 function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
   const accountCountLabel = renderChannelAccountCount(key, data.channelAccounts);
   switch (key) {
-    case "telegram":
-      return renderTelegramCard({
-        props,
-        telegram: data.telegram,
-        telegramAccounts: data.channelAccounts?.telegram ?? [],
-        accountCountLabel,
-      });
-    case "discord":
-      return renderDiscordCard({
-        props,
-        discord: data.discord,
-        accountCountLabel,
-      });
-    case "googlechat":
-      return renderGoogleChatCard({
-        props,
-        googleChat: data.googlechat,
-        accountCountLabel,
-      });
     case "slack":
       return renderSlackCard({
         props,
         slack: data.slack,
         accountCountLabel,
       });
-    case "signal":
-      return renderSignalCard({
-        props,
-        signal: data.signal,
-        accountCountLabel,
-      });
-    case "imessage":
-      return renderIMessageCard({
-        props,
-        imessage: data.imessage,
-        accountCountLabel,
-      });
-    case "nostr": {
-      const nostrAccounts = data.channelAccounts?.nostr ?? [];
-      const primaryAccount = nostrAccounts[0];
-      const accountId = primaryAccount?.accountId ?? "default";
-      const profile =
-        (primaryAccount as { profile?: NostrProfile | null } | undefined)?.profile ?? null;
-      const showForm =
-        props.nostrProfileAccountId === accountId ? props.nostrProfileFormState : null;
-      const profileFormCallbacks = showForm
-        ? {
-            onFieldChange: props.onNostrProfileFieldChange,
-            onSave: props.onNostrProfileSave,
-            onImport: props.onNostrProfileImport,
-            onCancel: props.onNostrProfileCancel,
-            onToggleAdvanced: props.onNostrProfileToggleAdvanced,
-          }
-        : null;
-      return renderNostrCard({
-        props,
-        nostr: data.nostr,
-        nostrAccounts,
-        accountCountLabel,
-        profileFormState: showForm,
-        profileFormCallbacks,
-        onEditProfile: () => props.onNostrProfileEdit(accountId, profile),
-      });
-    }
     default:
       return renderGenericChannelCard(key, props, data.channelAccounts ?? {});
   }
@@ -185,7 +108,7 @@ function renderGenericChannelCard(
   return html`
     <div class="card">
       <div class="card-title">${label}</div>
-      <div class="card-sub">Channel status and configuration.</div>
+      <div class="card-sub">チャネルの状態と設定。</div>
       ${accountCountLabel}
 
       ${
@@ -198,16 +121,16 @@ function renderGenericChannelCard(
           : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
-                <span>${configured == null ? "n/a" : configured ? "Yes" : "No"}</span>
+                <span class="label">設定済み</span>
+                <span>${configured == null ? "—" : configured ? "はい" : "いいえ"}</span>
               </div>
               <div>
-                <span class="label">Running</span>
-                <span>${running == null ? "n/a" : running ? "Yes" : "No"}</span>
+                <span class="label">稼働中</span>
+                <span>${running == null ? "—" : running ? "はい" : "いいえ"}</span>
               </div>
               <div>
-                <span class="label">Connected</span>
-                <span>${connected == null ? "n/a" : connected ? "Yes" : "No"}</span>
+                <span class="label">接続中</span>
+                <span>${connected == null ? "—" : connected ? "はい" : "いいえ"}</span>
               </div>
             </div>
           `
@@ -249,29 +172,31 @@ function hasRecentActivity(account: ChannelAccountSnapshot): boolean {
   return Date.now() - account.lastInboundAt < RECENT_ACTIVITY_THRESHOLD_MS;
 }
 
-function deriveRunningStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" {
+function deriveRunningStatus(account: ChannelAccountSnapshot): "はい" | "いいえ" | "稼働中" {
   if (account.running) {
-    return "Yes";
+    return "はい";
   }
   // If we have recent inbound activity, the channel is effectively running
   if (hasRecentActivity(account)) {
-    return "Active";
+    return "稼働中";
   }
-  return "No";
+  return "いいえ";
 }
 
-function deriveConnectedStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" | "n/a" {
+function deriveConnectedStatus(
+  account: ChannelAccountSnapshot,
+): "はい" | "いいえ" | "稼働中" | "—" {
   if (account.connected === true) {
-    return "Yes";
+    return "はい";
   }
   if (account.connected === false) {
-    return "No";
+    return "いいえ";
   }
   // If connected is null/undefined but we have recent activity, show as active
   if (hasRecentActivity(account)) {
-    return "Active";
+    return "稼働中";
   }
-  return "n/a";
+  return "—";
 }
 
 function renderGenericAccount(account: ChannelAccountSnapshot) {
@@ -286,20 +211,20 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
       </div>
       <div class="status-list account-card-status">
         <div>
-          <span class="label">Running</span>
+          <span class="label">稼働中</span>
           <span>${runningStatus}</span>
         </div>
         <div>
-          <span class="label">Configured</span>
-          <span>${account.configured ? "Yes" : "No"}</span>
+          <span class="label">設定済み</span>
+          <span>${account.configured ? "はい" : "いいえ"}</span>
         </div>
         <div>
-          <span class="label">Connected</span>
+          <span class="label">接続中</span>
           <span>${connectedStatus}</span>
         </div>
         <div>
-          <span class="label">Last inbound</span>
-          <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
+          <span class="label">最終受信</span>
+          <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "—"}</span>
         </div>
         ${
           account.lastError

@@ -28,7 +28,7 @@ export function formatTimeAgo(
   options?: FormatTimeAgoOptions,
 ): string {
   const suffix = options?.suffix !== false;
-  const fallback = options?.fallback ?? "unknown";
+  const fallback = options?.fallback ?? "不明";
 
   if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) {
     return fallback;
@@ -38,17 +38,17 @@ export function formatTimeAgo(
   const minutes = Math.round(totalSeconds / 60);
 
   if (minutes < 1) {
-    return suffix ? "just now" : `${totalSeconds}s`;
+    return suffix ? "たった今" : `${totalSeconds}秒`;
   }
   if (minutes < 60) {
-    return suffix ? `${minutes}m ago` : `${minutes}m`;
+    return suffix ? `${minutes}分前` : `${minutes}分`;
   }
   const hours = Math.round(minutes / 60);
   if (hours < 48) {
-    return suffix ? `${hours}h ago` : `${hours}h`;
+    return suffix ? `${hours}時間前` : `${hours}時間`;
   }
   const days = Math.round(hours / 24);
-  return suffix ? `${days}d ago` : `${days}d`;
+  return suffix ? `${days}日前` : `${days}日`;
 }
 
 export type FormatRelativeTimestampOptions = {
@@ -70,7 +70,7 @@ export function formatRelativeTimestamp(
   timestampMs: number | null | undefined,
   options?: FormatRelativeTimestampOptions,
 ): string {
-  const fallback = options?.fallback ?? "n/a";
+  const fallback = options?.fallback ?? "—";
   if (timestampMs == null || !Number.isFinite(timestampMs)) {
     return fallback;
   }
@@ -81,32 +81,32 @@ export function formatRelativeTimestamp(
 
   const sec = Math.round(absDiff / 1000);
   if (sec < 60) {
-    return isPast ? "just now" : "in <1m";
+    return isPast ? "たった今" : "1分未満後";
   }
 
   const min = Math.round(sec / 60);
   if (min < 60) {
-    return isPast ? `${min}m ago` : `in ${min}m`;
+    return isPast ? `${min}分前` : `${min}分後`;
   }
 
   const hr = Math.round(min / 60);
   if (hr < 48) {
-    return isPast ? `${hr}h ago` : `in ${hr}h`;
+    return isPast ? `${hr}時間前` : `${hr}時間後`;
   }
 
   const day = Math.round(hr / 24);
   if (!options?.dateFallback || day <= 7) {
-    return isPast ? `${day}d ago` : `in ${day}d`;
+    return isPast ? `${day}日前` : `${day}日後`;
   }
 
   // Fall back to short date display for old timestamps
   try {
-    return new Intl.DateTimeFormat("en-US", {
+    return new Intl.DateTimeFormat("ja-JP", {
       month: "short",
       day: "numeric",
       ...(options.timezone ? { timeZone: options.timezone } : {}),
     }).format(new Date(timestampMs));
   } catch {
-    return `${day}d ago`;
+    return `${day}日前`;
   }
 }

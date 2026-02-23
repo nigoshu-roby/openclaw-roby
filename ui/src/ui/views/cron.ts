@@ -130,9 +130,11 @@ function buildChannelOptions(props: CronProps): string[] {
   });
 }
 
+const NA_LABEL = "—";
+
 function resolveChannelLabel(props: CronProps, channel: string): string {
   if (channel === "last") {
-    return "last";
+    return "前回のチャネル";
   }
   const meta = props.channelMeta?.find((entry) => entry.id === channel);
   if (meta?.label) {
@@ -141,184 +143,48 @@ function resolveChannelLabel(props: CronProps, channel: string): string {
   return props.channelLabels?.[channel] ?? channel;
 }
 
-function renderRunFilterDropdown(params: {
-  id: string;
-  title: string;
-  summary: string;
-  options: Array<{ value: string; label: string }>;
-  selected: string[];
-  onToggle: (value: string, checked: boolean) => void;
-  onClear: () => void;
-}) {
-  return html`
-    <div class="field cron-filter-dropdown" data-filter=${params.id}>
-      <span>${params.title}</span>
-      <details class="cron-filter-dropdown__details">
-        <summary class="btn cron-filter-dropdown__trigger">
-          <span>${params.summary}</span>
-        </summary>
-        <div class="cron-filter-dropdown__panel">
-          <div class="cron-filter-dropdown__list">
-            ${params.options.map(
-              (option) => html`
-                <label class="cron-filter-dropdown__option">
-                  <input
-                    type="checkbox"
-                    value=${option.value}
-                    .checked=${params.selected.includes(option.value)}
-                    @change=${(event: Event) => {
-                      const target = event.target as HTMLInputElement;
-                      params.onToggle(option.value, target.checked);
-                    }}
-                  />
-                  <span>${option.label}</span>
-                </label>
-              `,
-            )}
-          </div>
-          <div class="row">
-            <button class="btn" type="button" @click=${params.onClear}>Clear</button>
-          </div>
-        </div>
-      </details>
-    </div>
-  `;
+function formatSessionTarget(value?: string | null): string {
+  switch (value) {
+    case "main":
+      return "メイン";
+    case "isolated":
+      return "隔離";
+    default:
+      return value ?? NA_LABEL;
+  }
 }
 
-function renderSuggestionList(id: string, options: string[]) {
-  const clean = Array.from(new Set(options.map((option) => option.trim()).filter(Boolean)));
-  if (clean.length === 0) {
-    return nothing;
+function formatWakeMode(value?: string | null): string {
+  switch (value) {
+    case "now":
+      return "即時";
+    case "next-heartbeat":
+      return "次のハートビート";
+    default:
+      return value ?? NA_LABEL;
   }
-  return html`<datalist id=${id}>
-    ${clean.map((value) => html`<option value=${value}></option> `)}
-  </datalist>`;
 }
 
-type BlockingField = {
-  key: CronFieldKey;
-  label: string;
-  message: string;
-  inputId: string;
-};
-
-function errorIdForField(key: CronFieldKey) {
-  return `cron-error-${key}`;
+function formatStatusLabel(status?: string | null): string {
+  switch (status) {
+    case "ok":
+      return "成功";
+    case "error":
+      return "失敗";
+    case "skipped":
+      return "スキップ";
+    case "n/a":
+      return NA_LABEL;
+    default:
+      return status ?? NA_LABEL;
+  }
 }
 
-function inputIdForField(key: CronFieldKey) {
-  if (key === "name") {
-    return "cron-name";
+function formatDeliveryChannel(channel?: string | null): string {
+  if (!channel) {
+    return NA_LABEL;
   }
-  if (key === "scheduleAt") {
-    return "cron-schedule-at";
-  }
-  if (key === "everyAmount") {
-    return "cron-every-amount";
-  }
-  if (key === "cronExpr") {
-    return "cron-cron-expr";
-  }
-  if (key === "staggerAmount") {
-    return "cron-stagger-amount";
-  }
-  if (key === "payloadText") {
-    return "cron-payload-text";
-  }
-  if (key === "payloadModel") {
-    return "cron-payload-model";
-  }
-  if (key === "payloadThinking") {
-    return "cron-payload-thinking";
-  }
-  if (key === "timeoutSeconds") {
-    return "cron-timeout-seconds";
-  }
-  return "cron-delivery-to";
-}
-
-function fieldLabelForKey(
-  key: CronFieldKey,
-  form: CronFormState,
-  deliveryMode: CronFormState["deliveryMode"],
-) {
-  if (key === "payloadText") {
-    return form.payloadKind === "systemEvent" ? "Main timeline message" : "Assistant task prompt";
-  }
-  if (key === "deliveryTo") {
-    return deliveryMode === "webhook" ? "Webhook URL" : "To";
-  }
-  const labels: Record<CronFieldKey, string> = {
-    name: "Name",
-    scheduleAt: "Run at",
-    everyAmount: "Every",
-    cronExpr: "Expression",
-    staggerAmount: "Stagger window",
-    payloadText: "Payload text",
-    payloadModel: "Model",
-    payloadThinking: "Thinking",
-    timeoutSeconds: "Timeout (seconds)",
-    deliveryTo: "To",
-  };
-  return labels[key];
-}
-
-function collectBlockingFields(
-  errors: CronFieldErrors,
-  form: CronFormState,
-  deliveryMode: CronFormState["deliveryMode"],
-): BlockingField[] {
-  const orderedKeys: CronFieldKey[] = [
-    "name",
-    "scheduleAt",
-    "everyAmount",
-    "cronExpr",
-    "staggerAmount",
-    "payloadText",
-    "payloadModel",
-    "payloadThinking",
-    "timeoutSeconds",
-    "deliveryTo",
-  ];
-  const fields: BlockingField[] = [];
-  for (const key of orderedKeys) {
-    const message = errors[key];
-    if (!message) {
-      continue;
-    }
-    fields.push({
-      key,
-      label: fieldLabelForKey(key, form, deliveryMode),
-      message,
-      inputId: inputIdForField(key),
-    });
-  }
-  return fields;
-}
-
-function focusFormField(id: string) {
-  const el = document.getElementById(id);
-  if (!(el instanceof HTMLElement)) {
-    return;
-  }
-  if (typeof el.scrollIntoView === "function") {
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-  }
-  el.focus();
-}
-
-function renderFieldLabel(text: string, required = false) {
-  return html`<span>
-    ${text}
-    ${
-      required
-        ? html`
-            <span class="cron-required-marker" aria-hidden="true">*</span>
-            <span class="cron-required-sr">required</span>
-          `
-        : nothing
-    }
-  </span>`;
+  return channel === "last" ? "前回" : channel;
 }
 
 export function renderCron(props: CronProps) {
@@ -328,19 +194,8 @@ export function renderCron(props: CronProps) {
   const channelOptions = buildChannelOptions(props);
   const selectedJob =
     props.runsJobId == null ? undefined : props.jobs.find((job) => job.id === props.runsJobId);
-  const selectedRunTitle =
-    props.runsScope === "all"
-      ? "all jobs"
-      : (selectedJob?.name ?? props.runsJobId ?? "(select a job)");
-  const runs = props.runs;
-  const selectedStatusLabels = RUN_STATUS_OPTIONS.filter((option) =>
-    props.runsStatuses.includes(option.value),
-  ).map((option) => option.label);
-  const selectedDeliveryLabels = RUN_DELIVERY_OPTIONS.filter((option) =>
-    props.runsDeliveryStatuses.includes(option.value),
-  ).map((option) => option.label);
-  const statusSummary = summarizeSelection(selectedStatusLabels, "All statuses");
-  const deliverySummary = summarizeSelection(selectedDeliveryLabels, "All delivery");
+  const selectedRunTitle = selectedJob?.name ?? props.runsJobId ?? "ジョブを選択";
+  const orderedRuns = props.runs.toSorted((a, b) => b.ts - a.ts);
   const supportsAnnounce =
     props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
   const selectedDeliveryMode =
@@ -352,23 +207,31 @@ export function renderCron(props: CronProps) {
       ? `Fix ${blockingFields.length} ${blockingFields.length === 1 ? "field" : "fields"} to continue.`
       : "";
   return html`
-    <section class="card cron-summary-strip">
-      <div class="cron-summary-strip__left">
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">Enabled</div>
-          <div class="cron-summary-value">
-            <span class=${`chip ${props.status?.enabled ? "chip-ok" : "chip-danger"}`}>
-              ${props.status ? (props.status.enabled ? "Yes" : "No") : "n/a"}
-            </span>
+    <section class="grid grid-cols-2">
+      <div class="card">
+        <div class="card-title">スケジューラ</div>
+        <div class="card-sub">ゲートウェイのスケジューラ状況。</div>
+        <div class="stat-grid" style="margin-top: 16px;">
+          <div class="stat">
+            <div class="stat-label">有効</div>
+            <div class="stat-value">
+              ${props.status ? (props.status.enabled ? "はい" : "いいえ") : NA_LABEL}
+            </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">ジョブ数</div>
+            <div class="stat-value">${props.status?.jobs ?? NA_LABEL}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">次回起動</div>
+            <div class="stat-value">${formatNextRun(props.status?.nextWakeAtMs ?? null)}</div>
           </div>
         </div>
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">Jobs</div>
-          <div class="cron-summary-value">${props.status?.jobs ?? "n/a"}</div>
-        </div>
-        <div class="cron-summary-item cron-summary-item--wide">
-          <div class="cron-summary-label">Next wake</div>
-          <div class="cron-summary-value">${formatNextRun(props.status?.nextWakeAtMs ?? null)}</div>
+        <div class="row" style="margin-top: 12px;">
+          <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+            ${props.loading ? "更新中…" : "更新"}
+          </button>
+          ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
         </div>
       </div>
       <div class="cron-summary-strip__actions">
@@ -379,445 +242,202 @@ export function renderCron(props: CronProps) {
       </div>
     </section>
 
-    <section class="cron-workspace">
-      <div class="cron-workspace-main">
-        <section class="card">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px;">
-            <div>
-              <div class="card-title">Jobs</div>
-              <div class="card-sub">All scheduled jobs stored in the gateway.</div>
-            </div>
-            <div class="muted">${props.jobs.length} shown of ${props.jobsTotal}</div>
-          </div>
-          <div class="filters" style="margin-top: 12px;">
-            <label class="field cron-filter-search">
-              <span>Search jobs</span>
-              <input
-                .value=${props.jobsQuery}
-                placeholder="Name, description, or agent"
-                @input=${(e: Event) =>
-                  props.onJobsFiltersChange({
-                    cronJobsQuery: (e.target as HTMLInputElement).value,
-                  })}
-              />
-            </label>
-            <label class="field">
-              <span>Enabled</span>
-              <select
-                .value=${props.jobsEnabledFilter}
-                @change=${(e: Event) =>
-                  props.onJobsFiltersChange({
-                    cronJobsEnabledFilter: (e.target as HTMLSelectElement)
-                      .value as CronJobsEnabledFilter,
-                  })}
-              >
-                <option value="all">All</option>
-                <option value="enabled">Enabled</option>
-                <option value="disabled">Disabled</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Sort</span>
-              <select
-                .value=${props.jobsSortBy}
-                @change=${(e: Event) =>
-                  props.onJobsFiltersChange({
-                    cronJobsSortBy: (e.target as HTMLSelectElement).value as CronJobsSortBy,
-                  })}
-              >
-                <option value="nextRunAtMs">Next run</option>
-                <option value="updatedAtMs">Recently updated</option>
-                <option value="name">Name</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Direction</span>
-              <select
-                .value=${props.jobsSortDir}
-                @change=${(e: Event) =>
-                  props.onJobsFiltersChange({
-                    cronJobsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
-                  })}
-              >
-                <option value="asc">Ascending</option>
-                <option value="desc">Descending</option>
-              </select>
-            </label>
-          </div>
-          ${
-            props.jobs.length === 0
-              ? html`
-                  <div class="muted" style="margin-top: 12px">No matching jobs.</div>
-                `
-              : html`
-                  <div class="list" style="margin-top: 12px;">
-                    ${props.jobs.map((job) => renderJob(job, props))}
-                  </div>
-                `
-          }
-          ${
-            props.jobsHasMore
-              ? html`
-                  <div class="row" style="margin-top: 12px">
-                    <button
-                      class="btn"
-                      ?disabled=${props.loading || props.jobsLoadingMore}
-                      @click=${props.onLoadMoreJobs}
-                    >
-                      ${props.jobsLoadingMore ? "Loading..." : "Load more jobs"}
-                    </button>
-                  </div>
-                `
-              : nothing
-          }
-        </section>
-
-        <section class="card">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px;">
-            <div>
-              <div class="card-title">Run history</div>
-              <div class="card-sub">
-                ${
-                  props.runsScope === "all"
-                    ? "Latest runs across all jobs."
-                    : `Latest runs for ${selectedRunTitle}.`
-                }
-              </div>
-            </div>
-            <div class="muted">${runs.length} shown of ${props.runsTotal}</div>
-          </div>
-          <div class="cron-run-filters">
-            <div class="cron-run-filters__row cron-run-filters__row--primary">
-              <label class="field">
-                <span>Scope</span>
-                <select
-                  .value=${props.runsScope}
-                  @change=${(e: Event) =>
-                    props.onRunsFiltersChange({
-                      cronRunsScope: (e.target as HTMLSelectElement).value as CronRunScope,
-                    })}
-                >
-                  <option value="all">All jobs</option>
-                  <option value="job" ?disabled=${props.runsJobId == null}>Selected job</option>
-                </select>
-              </label>
-              <label class="field cron-run-filter-search">
-                <span>Search runs</span>
-                <input
-                  .value=${props.runsQuery}
-                  placeholder="Summary, error, or job"
-                  @input=${(e: Event) =>
-                    props.onRunsFiltersChange({
-                      cronRunsQuery: (e.target as HTMLInputElement).value,
-                    })}
-                />
-              </label>
-              <label class="field">
-                <span>Sort</span>
-                <select
-                  .value=${props.runsSortDir}
-                  @change=${(e: Event) =>
-                    props.onRunsFiltersChange({
-                      cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
-                    })}
-                >
-                  <option value="desc">Newest first</option>
-                  <option value="asc">Oldest first</option>
-                </select>
-              </label>
-            </div>
-            <div class="cron-run-filters__row cron-run-filters__row--secondary">
-              ${renderRunFilterDropdown({
-                id: "status",
-                title: "Status",
-                summary: statusSummary,
-                options: RUN_STATUS_OPTIONS,
-                selected: props.runsStatuses,
-                onToggle: (value, checked) => {
-                  const next = toggleSelection(
-                    props.runsStatuses,
-                    value as CronRunsStatusValue,
-                    checked,
-                  );
-                  void props.onRunsFiltersChange({ cronRunsStatuses: next });
-                },
-                onClear: () => {
-                  void props.onRunsFiltersChange({ cronRunsStatuses: [] });
-                },
-              })}
-              ${renderRunFilterDropdown({
-                id: "delivery",
-                title: "Delivery",
-                summary: deliverySummary,
-                options: RUN_DELIVERY_OPTIONS,
-                selected: props.runsDeliveryStatuses,
-                onToggle: (value, checked) => {
-                  const next = toggleSelection(
-                    props.runsDeliveryStatuses,
-                    value as CronDeliveryStatus,
-                    checked,
-                  );
-                  void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
-                },
-                onClear: () => {
-                  void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
-                },
-              })}
-            </div>
-          </div>
-          ${
-            props.runsScope === "job" && props.runsJobId == null
-              ? html`
-                  <div class="muted" style="margin-top: 12px">Select a job to inspect run history.</div>
-                `
-              : runs.length === 0
-                ? html`
-                    <div class="muted" style="margin-top: 12px">No matching runs.</div>
-                  `
-                : html`
-                    <div class="list" style="margin-top: 12px;">
-                      ${runs.map((entry) => renderRun(entry, props.basePath))}
-                    </div>
-                  `
-          }
-          ${
-            (props.runsScope === "all" || props.runsJobId != null) && props.runsHasMore
-              ? html`
-                  <div class="row" style="margin-top: 12px">
-                    <button
-                      class="btn"
-                      ?disabled=${props.runsLoadingMore}
-                      @click=${props.onLoadMoreRuns}
-                    >
-                      ${props.runsLoadingMore ? "Loading..." : "Load more runs"}
-                    </button>
-                  </div>
-                `
-              : nothing
-          }
-        </section>
-      </div>
-
-      <section class="card cron-workspace-form">
-        <div class="card-title">${isEditing ? "Edit Job" : "New Job"}</div>
-        <div class="card-sub">
-          ${isEditing ? "Update the selected scheduled job." : "Create a scheduled wakeup or agent run."}
+      <div class="card">
+        <div class="card-title">新規ジョブ</div>
+        <div class="card-sub">定期起動やエージェント実行を作成します。</div>
+        <div class="form-grid" style="margin-top: 16px;">
+          <label class="field">
+            <span>名前</span>
+            <input
+              .value=${props.form.name}
+              @input=${(e: Event) =>
+                props.onFormChange({ name: (e.target as HTMLInputElement).value })}
+            />
+          </label>
+          <label class="field">
+            <span>説明</span>
+            <input
+              .value=${props.form.description}
+              @input=${(e: Event) =>
+                props.onFormChange({ description: (e.target as HTMLInputElement).value })}
+            />
+          </label>
+          <label class="field">
+            <span>エージェントID</span>
+            <input
+              .value=${props.form.agentId}
+              @input=${(e: Event) =>
+                props.onFormChange({ agentId: (e.target as HTMLInputElement).value })}
+              placeholder="default"
+            />
+          </label>
+          <label class="field checkbox">
+            <span>有効</span>
+            <input
+              type="checkbox"
+              .checked=${props.form.enabled}
+              @change=${(e: Event) =>
+                props.onFormChange({ enabled: (e.target as HTMLInputElement).checked })}
+            />
+          </label>
+          <label class="field">
+            <span>スケジュール</span>
+            <select
+              .value=${props.form.scheduleKind}
+              @change=${(e: Event) =>
+                props.onFormChange({
+                  scheduleKind: (e.target as HTMLSelectElement)
+                    .value as CronFormState["scheduleKind"],
+                })}
+            >
+              <option value="every">間隔</option>
+              <option value="at">日時</option>
+              <option value="cron">Cron式</option>
+            </select>
+          </label>
         </div>
-        <div class="cron-form">
-          <div class="cron-required-legend">
-            <span class="cron-required-marker" aria-hidden="true">*</span> Required
-          </div>
-          <section class="cron-form-section">
-            <div class="cron-form-section__title">Basics</div>
-            <div class="cron-form-section__sub">Name it, choose the assistant, and set enabled state.</div>
-            <div class="form-grid cron-form-grid">
-              <label class="field">
-                ${renderFieldLabel("Name", true)}
-                <input
-                  id="cron-name"
-                  .value=${props.form.name}
-                  placeholder="Morning brief"
-                  aria-invalid=${props.fieldErrors.name ? "true" : "false"}
-                  aria-describedby=${ifDefined(
-                    props.fieldErrors.name ? errorIdForField("name") : undefined,
-                  )}
-                  @input=${(e: Event) =>
-                    props.onFormChange({ name: (e.target as HTMLInputElement).value })}
-                />
-                ${renderFieldError(props.fieldErrors.name, errorIdForField("name"))}
-              </label>
-              <label class="field">
-                <span>Description</span>
-                <input
-                  .value=${props.form.description}
-                  placeholder="Optional context for this job"
-                  @input=${(e: Event) =>
-                    props.onFormChange({ description: (e.target as HTMLInputElement).value })}
-                />
-              </label>
-              <label class="field">
-                ${renderFieldLabel("Agent ID")}
-                <input
-                  id="cron-agent-id"
-                  .value=${props.form.agentId}
-                  list="cron-agent-suggestions"
-                  ?disabled=${props.form.clearAgent}
-                  @input=${(e: Event) =>
-                    props.onFormChange({ agentId: (e.target as HTMLInputElement).value })}
-                  placeholder="main or ops"
-                />
-                <div class="cron-help">
-                  Start typing to pick a known agent, or enter a custom one.
-                </div>
-              </label>
-              <label class="field checkbox cron-checkbox cron-checkbox-inline">
-                <input
-                  type="checkbox"
-                  .checked=${props.form.enabled}
-                  @change=${(e: Event) =>
-                    props.onFormChange({ enabled: (e.target as HTMLInputElement).checked })}
-                />
-                <span class="field-checkbox__label">Enabled</span>
-              </label>
-            </div>
-          </section>
-
-          <section class="cron-form-section">
-            <div class="cron-form-section__title">Schedule</div>
-            <div class="cron-form-section__sub">Control when this job runs.</div>
-            <div class="form-grid cron-form-grid">
-              <label class="field cron-span-2">
-                ${renderFieldLabel("Schedule")}
-                <select
-                  id="cron-schedule-kind"
-                  .value=${props.form.scheduleKind}
-                  @change=${(e: Event) =>
-                    props.onFormChange({
-                      scheduleKind: (e.target as HTMLSelectElement)
-                        .value as CronFormState["scheduleKind"],
-                    })}
-                >
-                  <option value="every">Every</option>
-                  <option value="at">At</option>
-                  <option value="cron">Cron</option>
-                </select>
-              </label>
-            </div>
-            ${renderScheduleFields(props)}
-          </section>
-
-          <section class="cron-form-section">
-            <div class="cron-form-section__title">Execution</div>
-            <div class="cron-form-section__sub">Choose when to wake, and what this job should do.</div>
-            <div class="form-grid cron-form-grid">
-              <label class="field">
-                ${renderFieldLabel("Session")}
-                <select
-                  id="cron-session-target"
-                  .value=${props.form.sessionTarget}
-                  @change=${(e: Event) =>
-                    props.onFormChange({
-                      sessionTarget: (e.target as HTMLSelectElement)
-                        .value as CronFormState["sessionTarget"],
-                    })}
-                >
-                  <option value="main">Main</option>
-                  <option value="isolated">Isolated</option>
-                </select>
-                <div class="cron-help">Main posts a system event. Isolated runs a dedicated agent turn.</div>
-              </label>
-              <label class="field">
-                ${renderFieldLabel("Wake mode")}
-                <select
-                  id="cron-wake-mode"
-                  .value=${props.form.wakeMode}
-                  @change=${(e: Event) =>
-                    props.onFormChange({
-                      wakeMode: (e.target as HTMLSelectElement).value as CronFormState["wakeMode"],
-                    })}
-                >
-                  <option value="now">Now</option>
-                  <option value="next-heartbeat">Next heartbeat</option>
-                </select>
-                <div class="cron-help">Now triggers immediately. Next heartbeat waits for the next cycle.</div>
-              </label>
-              <label class="field ${isAgentTurn ? "" : "cron-span-2"}">
-                ${renderFieldLabel("What should run?")}
-                <select
-                  id="cron-payload-kind"
-                  .value=${props.form.payloadKind}
-                  @change=${(e: Event) =>
-                    props.onFormChange({
-                      payloadKind: (e.target as HTMLSelectElement)
-                        .value as CronFormState["payloadKind"],
-                    })}
-                >
-                  <option value="systemEvent">Post message to main timeline</option>
-                  <option value="agentTurn">Run assistant task (isolated)</option>
-                </select>
-                <div class="cron-help">
-                  ${
-                    props.form.payloadKind === "systemEvent"
-                      ? "Sends your text to the gateway main timeline (good for reminders/triggers)."
-                      : "Starts an assistant run in its own session using your prompt."
-                  }
-                </div>
-              </label>
+        ${renderScheduleFields(props)}
+        <div class="form-grid" style="margin-top: 12px;">
+          <label class="field">
+            <span>セッション</span>
+            <select
+              .value=${props.form.sessionTarget}
+              @change=${(e: Event) =>
+                props.onFormChange({
+                  sessionTarget: (e.target as HTMLSelectElement)
+                    .value as CronFormState["sessionTarget"],
+                })}
+            >
+              <option value="main">メイン</option>
+              <option value="isolated">隔離</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>起動モード</span>
+            <select
+              .value=${props.form.wakeMode}
+              @change=${(e: Event) =>
+                props.onFormChange({
+                  wakeMode: (e.target as HTMLSelectElement).value as CronFormState["wakeMode"],
+                })}
+            >
+              <option value="now">今すぐ</option>
+              <option value="next-heartbeat">次のハートビート</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>ペイロード</span>
+            <select
+              .value=${props.form.payloadKind}
+              @change=${(e: Event) =>
+                props.onFormChange({
+                  payloadKind: (e.target as HTMLSelectElement)
+                    .value as CronFormState["payloadKind"],
+                })}
+            >
+              <option value="systemEvent">システムイベント</option>
+              <option value="agentTurn">エージェント実行</option>
+            </select>
+          </label>
+        </div>
+        <label class="field" style="margin-top: 12px;">
+          <span>${props.form.payloadKind === "systemEvent" ? "システム本文" : "エージェントメッセージ"}</span>
+          <textarea
+            .value=${props.form.payloadText}
+            @input=${(e: Event) =>
+              props.onFormChange({
+                payloadText: (e.target as HTMLTextAreaElement).value,
+              })}
+            rows="4"
+          ></textarea>
+        </label>
+        <div class="form-grid" style="margin-top: 12px;">
+          <label class="field">
+            <span>配信</span>
+            <select
+              .value=${selectedDeliveryMode}
+              @change=${(e: Event) =>
+                props.onFormChange({
+                  deliveryMode: (e.target as HTMLSelectElement)
+                    .value as CronFormState["deliveryMode"],
+                })}
+            >
               ${
                 isAgentTurn
                   ? html`
-                      <label class="field">
-                        ${renderFieldLabel("Timeout (seconds)")}
-                        <input
-                          id="cron-timeout-seconds"
-                          .value=${props.form.timeoutSeconds}
-                          placeholder="Optional, e.g. 90"
-                          aria-invalid=${props.fieldErrors.timeoutSeconds ? "true" : "false"}
-                          aria-describedby=${ifDefined(
-                            props.fieldErrors.timeoutSeconds
-                              ? errorIdForField("timeoutSeconds")
-                              : undefined,
-                          )}
-                          @input=${(e: Event) =>
-                            props.onFormChange({
-                              timeoutSeconds: (e.target as HTMLInputElement).value,
-                            })}
-                        />
-                        <div class="cron-help">
-                          Optional. Leave blank to use the gateway default timeout behavior for this run.
-                        </div>
-                        ${renderFieldError(
-                          props.fieldErrors.timeoutSeconds,
-                          errorIdForField("timeoutSeconds"),
-                        )}
-                      </label>
+                      <option value="announce">要約を通知（既定）</option>
                     `
                   : nothing
               }
-            </div>
-            <label class="field cron-span-2">
-              ${renderFieldLabel(
-                props.form.payloadKind === "systemEvent"
-                  ? "Main timeline message"
-                  : "Assistant task prompt",
-                true,
-              )}
-              <textarea
-                id="cron-payload-text"
-                .value=${props.form.payloadText}
-                aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
-                aria-describedby=${ifDefined(
-                  props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
-                )}
-                @input=${(e: Event) =>
-                  props.onFormChange({
-                    payloadText: (e.target as HTMLTextAreaElement).value,
-                  })}
-                rows="4"
-              ></textarea>
-              ${renderFieldError(props.fieldErrors.payloadText, errorIdForField("payloadText"))}
-            </label>
-          </section>
-
-          <section class="cron-form-section">
-            <div class="cron-form-section__title">Delivery</div>
-            <div class="cron-form-section__sub">Choose where run summaries are sent.</div>
-            <div class="form-grid cron-form-grid">
-              <label class="field ${selectedDeliveryMode === "none" ? "cron-span-2" : ""}">
-                ${renderFieldLabel("Result delivery")}
-                <select
-                  id="cron-delivery-mode"
-                  .value=${selectedDeliveryMode}
-                  @change=${(e: Event) =>
-                    props.onFormChange({
-                      deliveryMode: (e.target as HTMLSelectElement)
-                        .value as CronFormState["deliveryMode"],
-                    })}
-                >
+              <option value="webhook">Webhook送信</option>
+              <option value="none">なし（内部）</option>
+            </select>
+          </label>
+          ${
+            props.form.payloadKind === "agentTurn"
+              ? html`
+                  <label class="field">
+                    <span>タイムアウト（秒）</span>
+                    <input
+                      .value=${props.form.timeoutSeconds}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          timeoutSeconds: (e.target as HTMLInputElement).value,
+                        })}
+                    />
+                  </label>
+                `
+              : nothing
+          }
+          ${
+            selectedDeliveryMode !== "none"
+              ? html`
+                  <label class="field">
+                    <span>${selectedDeliveryMode === "webhook" ? "Webhook URL" : "チャネル"}</span>
+                    ${
+                      selectedDeliveryMode === "webhook"
+                        ? html`
+                            <input
+                              .value=${props.form.deliveryTo}
+                              @input=${(e: Event) =>
+                                props.onFormChange({
+                                  deliveryTo: (e.target as HTMLInputElement).value,
+                                })}
+                              placeholder="https://example.invalid/cron"
+                            />
+                          `
+                        : html`
+                            <select
+                              .value=${props.form.deliveryChannel || "last"}
+                              @change=${(e: Event) =>
+                                props.onFormChange({
+                                  deliveryChannel: (e.target as HTMLSelectElement).value,
+                                })}
+                            >
+                              ${channelOptions.map(
+                                (channel) =>
+                                  html`<option value=${channel}>
+                                    ${resolveChannelLabel(props, channel)}
+                                  </option>`,
+                              )}
+                            </select>
+                          `
+                    }
+                  </label>
                   ${
                     supportsAnnounce
                       ? html`
-                          <option value="announce">Announce summary (default)</option>
+                          <label class="field">
+                            <span>宛先</span>
+                            <input
+                              .value=${props.form.deliveryTo}
+                              @input=${(e: Event) =>
+                                props.onFormChange({
+                                  deliveryTo: (e.target as HTMLInputElement).value,
+                                })}
+                              placeholder="+1555… または チャットID"
+                            />
+                          </label>
                         `
                       : nothing
                   }
@@ -1102,14 +722,49 @@ export function renderCron(props: CronProps) {
               : nothing
           }
         </div>
-      </section>
+        <div class="row" style="margin-top: 14px;">
+          <button class="btn primary" ?disabled=${props.busy} @click=${props.onAdd}>
+            ${props.busy ? "保存中…" : "ジョブ追加"}
+          </button>
+        </div>
+      </div>
     </section>
 
-    ${renderSuggestionList("cron-agent-suggestions", props.agentSuggestions)}
-    ${renderSuggestionList("cron-model-suggestions", props.modelSuggestions)}
-    ${renderSuggestionList("cron-thinking-suggestions", props.thinkingSuggestions)}
-    ${renderSuggestionList("cron-tz-suggestions", props.timezoneSuggestions)}
-    ${renderSuggestionList("cron-delivery-to-suggestions", props.deliveryToSuggestions)}
+    <section class="card" style="margin-top: 18px;">
+      <div class="card-title">ジョブ一覧</div>
+      <div class="card-sub">ゲートウェイに保存された全ジョブ。</div>
+      ${
+        props.jobs.length === 0
+          ? html`
+              <div class="muted" style="margin-top: 12px">ジョブはまだありません。</div>
+            `
+          : html`
+            <div class="list" style="margin-top: 12px;">
+              ${props.jobs.map((job) => renderJob(job, props))}
+            </div>
+          `
+      }
+    </section>
+
+    <section class="card" style="margin-top: 18px;">
+      <div class="card-title">実行履歴</div>
+      <div class="card-sub">対象: ${selectedRunTitle} の最新実行。</div>
+      ${
+        props.runsJobId == null
+          ? html`
+              <div class="muted" style="margin-top: 12px">履歴を見るジョブを選択してください。</div>
+            `
+          : orderedRuns.length === 0
+            ? html`
+                <div class="muted" style="margin-top: 12px">実行履歴はありません。</div>
+              `
+            : html`
+              <div class="list" style="margin-top: 12px;">
+                ${orderedRuns.map((entry) => renderRun(entry, props.basePath))}
+              </div>
+            `
+      }
+    </section>
   `;
 }
 
@@ -1117,8 +772,8 @@ function renderScheduleFields(props: CronProps) {
   const form = props.form;
   if (form.scheduleKind === "at") {
     return html`
-      <label class="field cron-span-2" style="margin-top: 12px;">
-        ${renderFieldLabel("Run at", true)}
+      <label class="field" style="margin-top: 12px;">
+        <span>実行日時</span>
         <input
           id="cron-schedule-at"
           type="datetime-local"
@@ -1140,7 +795,7 @@ function renderScheduleFields(props: CronProps) {
     return html`
       <div class="form-grid cron-form-grid" style="margin-top: 12px;">
         <label class="field">
-          ${renderFieldLabel("Every", true)}
+          <span>間隔</span>
           <input
             id="cron-every-amount"
             .value=${form.everyAmount}
@@ -1157,7 +812,7 @@ function renderScheduleFields(props: CronProps) {
           ${renderFieldError(props.fieldErrors.everyAmount, errorIdForField("everyAmount"))}
         </label>
         <label class="field">
-          <span>Unit</span>
+          <span>単位</span>
           <select
             .value=${form.everyUnit}
             @change=${(e: Event) =>
@@ -1165,9 +820,9 @@ function renderScheduleFields(props: CronProps) {
                 everyUnit: (e.target as HTMLSelectElement).value as CronFormState["everyUnit"],
               })}
           >
-            <option value="minutes">Minutes</option>
-            <option value="hours">Hours</option>
-            <option value="days">Days</option>
+            <option value="minutes">分</option>
+            <option value="hours">時間</option>
+            <option value="days">日</option>
           </select>
         </label>
       </div>
@@ -1176,7 +831,7 @@ function renderScheduleFields(props: CronProps) {
   return html`
     <div class="form-grid cron-form-grid" style="margin-top: 12px;">
       <label class="field">
-        ${renderFieldLabel("Expression", true)}
+        <span>式</span>
         <input
           id="cron-cron-expr"
           .value=${form.cronExpr}
@@ -1191,7 +846,7 @@ function renderScheduleFields(props: CronProps) {
         ${renderFieldError(props.fieldErrors.cronExpr, errorIdForField("cronExpr"))}
       </label>
       <label class="field">
-        <span>Timezone (optional)</span>
+        <span>タイムゾーン（任意）</span>
         <input
           .value=${form.cronTz}
           list="cron-tz-suggestions"
@@ -1226,7 +881,7 @@ function renderJob(job: CronJob, props: CronProps) {
         <div class="list-title">${job.name}</div>
         <div class="list-sub">${formatCronSchedule(job)}</div>
         ${renderJobPayload(job)}
-        ${job.agentId ? html`<div class="muted cron-job-agent">Agent: ${job.agentId}</div>` : nothing}
+        ${job.agentId ? html`<div class="muted cron-job-agent">エージェント: ${job.agentId}</div>` : nothing}
       </div>
       <div class="list-meta">
         ${renderJobState(job)}
@@ -1234,10 +889,10 @@ function renderJob(job: CronJob, props: CronProps) {
       <div class="cron-job-footer">
         <div class="chip-row cron-job-chips">
           <span class=${`chip ${job.enabled ? "chip-ok" : "chip-danger"}`}>
-            ${job.enabled ? "enabled" : "disabled"}
+            ${job.enabled ? "有効" : "無効"}
           </span>
-          <span class="chip">${job.sessionTarget}</span>
-          <span class="chip">${job.wakeMode}</span>
+          <span class="chip">${formatSessionTarget(job.sessionTarget)}</span>
+          <span class="chip">${formatWakeMode(job.wakeMode)}</span>
         </div>
         <div class="row cron-job-actions">
           <button
@@ -1268,7 +923,7 @@ function renderJob(job: CronJob, props: CronProps) {
               selectAnd(() => props.onToggle(job, !job.enabled));
             }}
           >
-            ${job.enabled ? "Disable" : "Enable"}
+            ${job.enabled ? "無効化" : "有効化"}
           </button>
           <button
             class="btn"
@@ -1278,7 +933,7 @@ function renderJob(job: CronJob, props: CronProps) {
               selectAnd(() => props.onRun(job));
             }}
           >
-            Run
+            実行
           </button>
           <button
             class="btn"
@@ -1288,7 +943,7 @@ function renderJob(job: CronJob, props: CronProps) {
               selectAnd(() => props.onLoadRuns(job.id));
             }}
           >
-            History
+            履歴
           </button>
           <button
             class="btn danger"
@@ -1298,7 +953,7 @@ function renderJob(job: CronJob, props: CronProps) {
               selectAnd(() => props.onRemove(job));
             }}
           >
-            Remove
+            削除
           </button>
         </div>
       </div>
@@ -1309,7 +964,7 @@ function renderJob(job: CronJob, props: CronProps) {
 function renderJobPayload(job: CronJob) {
   if (job.payload.kind === "systemEvent") {
     return html`<div class="cron-job-detail">
-      <span class="cron-job-detail-label">System</span>
+      <span class="cron-job-detail-label">システム</span>
       <span class="muted cron-job-detail-value">${job.payload.text}</span>
     </div>`;
   }
@@ -1321,19 +976,25 @@ function renderJobPayload(job: CronJob) {
         ? ` (${delivery.to})`
         : ""
       : delivery?.channel || delivery?.to
-        ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
+        ? ` (${formatDeliveryChannel(delivery.channel)}${delivery.to ? ` -> ${delivery.to}` : ""})`
         : "";
 
   return html`
     <div class="cron-job-detail">
-      <span class="cron-job-detail-label">Prompt</span>
+      <span class="cron-job-detail-label">プロンプト</span>
       <span class="muted cron-job-detail-value">${job.payload.message}</span>
     </div>
     ${
       delivery
         ? html`<div class="cron-job-detail">
-            <span class="cron-job-detail-label">Delivery</span>
-            <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
+            <span class="cron-job-detail-label">配信</span>
+            <span class="muted cron-job-detail-value">${
+              delivery.mode === "announce"
+                ? "通知"
+                : delivery.mode === "webhook"
+                  ? "Webhook"
+                  : delivery.mode
+            }${deliveryTarget}</span>
           </div>`
         : nothing
     }
@@ -1342,7 +1003,7 @@ function renderJobPayload(job: CronJob) {
 
 function formatStateRelative(ms?: number) {
   if (typeof ms !== "number" || !Number.isFinite(ms)) {
-    return "n/a";
+    return NA_LABEL;
   }
   return formatRelativeTimestamp(ms);
 }
@@ -1354,6 +1015,7 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
 
 function renderJobState(job: CronJob) {
   const status = job.state?.lastStatus ?? "n/a";
+  const statusLabel = formatStatusLabel(status);
   const statusClass =
     status === "ok"
       ? "cron-job-status-ok"
@@ -1368,17 +1030,17 @@ function renderJobState(job: CronJob) {
   return html`
     <div class="cron-job-state">
       <div class="cron-job-state-row">
-        <span class="cron-job-state-key">Status</span>
-        <span class=${`cron-job-status-pill ${statusClass}`}>${status}</span>
+        <span class="cron-job-state-key">状態</span>
+        <span class=${`cron-job-status-pill ${statusClass}`}>${statusLabel}</span>
       </div>
       <div class="cron-job-state-row">
-        <span class="cron-job-state-key">Next</span>
+        <span class="cron-job-state-key">次回</span>
         <span class="cron-job-state-value" title=${formatMs(nextRunAtMs)}>
           ${formatStateRelative(nextRunAtMs)}
         </span>
       </div>
       <div class="cron-job-state-row">
-        <span class="cron-job-state-key">Last</span>
+        <span class="cron-job-state-key">前回</span>
         <span class="cron-job-state-value" title=${formatMs(lastRunAtMs)}>
           ${formatStateRelative(lastRunAtMs)}
         </span>
@@ -1402,19 +1064,10 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
         ? `${usage.input_tokens} in / ${usage.output_tokens} out`
         : null;
   return html`
-    <div class="list-item cron-run-entry">
-      <div class="list-main cron-run-entry__main">
-        <div class="list-title cron-run-entry__title">
-          ${entry.jobName ?? entry.jobId}
-          <span class="muted"> · ${status}</span>
-        </div>
-        <div class="list-sub cron-run-entry__summary">${entry.summary ?? entry.error ?? "No summary."}</div>
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${delivery}</span>
-          ${entry.model ? html`<span class="chip">${entry.model}</span>` : nothing}
-          ${entry.provider ? html`<span class="chip">${entry.provider}</span>` : nothing}
-          ${usageSummary ? html`<span class="chip">${usageSummary}</span>` : nothing}
-        </div>
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">${formatStatusLabel(entry.status)}</div>
+        <div class="list-sub">${entry.summary ?? ""}</div>
       </div>
       <div class="list-meta cron-run-entry__meta">
         <div>${formatMs(entry.ts)}</div>
@@ -1427,7 +1080,7 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
         }
         ${
           chatUrl
-            ? html`<div><a class="session-link" href=${chatUrl}>Open run chat</a></div>`
+            ? html`<div><a class="session-link" href=${chatUrl}>実行チャットを開く</a></div>`
             : nothing
         }
         ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}

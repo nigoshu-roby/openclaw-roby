@@ -3,9 +3,9 @@ import { icons } from "../icons.ts";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
-const COPY_LABEL = "Copy as markdown";
-const COPIED_LABEL = "Copied";
-const ERROR_LABEL = "Copy failed";
+const COPY_LABEL = "Markdownをコピー";
+const COPIED_LABEL = "コピーしました";
+const ERROR_LABEL = "コピー失敗";
 
 type CopyButtonOptions = {
   text: () => string;

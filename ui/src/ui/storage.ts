@@ -34,6 +34,7 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    locale: "ja",
   };
 
   try {
@@ -79,7 +80,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
-      locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      locale: isSupportedLocale(parsed.locale) ? parsed.locale : "ja",
     };
   } catch {
     return defaults;

@@ -114,6 +114,11 @@ export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   constructor() {
     super();
+    const desiredLocale = "ja";
+    if (isSupportedLocale(desiredLocale) && this.settings.locale !== desiredLocale) {
+      this.settings = { ...this.settings, locale: desiredLocale };
+      this.applySettings(this.settings);
+    }
     if (isSupportedLocale(this.settings.locale)) {
       void i18n.setLocale(this.settings.locale);
     }

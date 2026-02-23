@@ -85,6 +85,10 @@ USER.md
 .tgz
 .idea
 
+# Local logs
+.openclaw-gateway.log
+logs/
+
 # local tooling
 .serena/
 

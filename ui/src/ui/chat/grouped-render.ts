@@ -81,7 +81,7 @@ export function renderStreamingGroup(
     hour: "numeric",
     minute: "2-digit",
   });
-  const name = assistant?.name ?? "Assistant";
+  const name = assistant?.name ?? "アシスタント";
 
   return html`
     <div class="chat-group assistant">
@@ -115,13 +115,21 @@ export function renderMessageGroup(
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const assistantName = opts.assistantName ?? "Assistant";
-  const who =
-    normalizedRole === "user"
-      ? "You"
-      : normalizedRole === "assistant"
-        ? assistantName
-        : normalizedRole;
+  const assistantName = opts.assistantName ?? "アシスタント";
+  const who = (() => {
+    switch (normalizedRole) {
+      case "user":
+        return "あなた";
+      case "assistant":
+        return assistantName;
+      case "tool":
+        return "ツール";
+      case "system":
+        return "システム";
+      default:
+        return normalizedRole;
+    }
+  })();
   const roleClass =
     normalizedRole === "user" ? "user" : normalizedRole === "assistant" ? "assistant" : "other";
   const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
@@ -157,15 +165,15 @@ export function renderMessageGroup(
 
 function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" | "avatar">) {
   const normalized = normalizeRoleForGrouping(role);
-  const assistantName = assistant?.name?.trim() || "Assistant";
+  const assistantName = assistant?.name?.trim() || "アシスタント";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const initial =
     normalized === "user"
-      ? "U"
+      ? "私"
       : normalized === "assistant"
         ? assistantName.charAt(0).toUpperCase() || "A"
         : normalized === "tool"
-          ? "⚙"
+          ? "ツ"
           : "?";
   const className =
     normalized === "user"
@@ -211,7 +219,7 @@ function renderMessageImages(images: ImageBlock[]) {
         (img) => html`
           <img
             src=${img.url}
-            alt=${img.alt ?? "Attached image"}
+            alt=${img.alt ?? "添付画像"}
             class="chat-message-image"
             @click=${() => openImage(img.url)}
           />

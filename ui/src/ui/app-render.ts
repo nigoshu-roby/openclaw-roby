@@ -4,6 +4,7 @@ import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import { loadCron } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -77,6 +78,7 @@ import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderRoby } from "./views/roby.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
 
@@ -236,8 +238,8 @@ export function renderApp(state: AppViewState) {
               <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
             </div>
             <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
+              <div class="brand-title">ROBY</div>
+              <div class="brand-sub">ゲートウェイ ダッシュボード</div>
             </div>
           </div>
         </div>
@@ -304,13 +306,13 @@ export function renderApp(state: AppViewState) {
         ${
           availableUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${availableUpdate.latestVersion}
-              (running v${availableUpdate.currentVersion}).
+              <strong>アップデートがあります:</strong> v${state.updateAvailable.latestVersion}
+              （現在 v${state.updateAvailable.currentVersion}）
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
-              >${state.updateRunning ? "Updating…" : "Update now"}</button>
+              >${state.updateRunning ? "更新中…" : "今すぐ更新"}</button>
             </div>`
             : nothing
         }
@@ -354,6 +356,27 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "roby"
+            ? renderRoby({
+                basePath,
+                connected: state.connected,
+                cronLoading: state.cronLoading,
+                cronError: state.cronError,
+                cronBusy: state.cronBusy,
+                cronJobs: state.cronJobs,
+                cronRunsJobId: state.cronRunsJobId,
+                cronRuns: state.cronRuns,
+                skillsLoading: state.skillsLoading,
+                skillsError: state.skillsError,
+                skillsReport: state.skillsReport,
+                onRefresh: () => loadCron(state),
+                onRunJob: (job) => runCronJob(state, job),
+                onLoadRuns: (jobId) => loadCronRuns(state, jobId),
               })
             : nothing
         }

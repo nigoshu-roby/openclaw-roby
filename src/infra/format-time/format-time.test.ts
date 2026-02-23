@@ -159,49 +159,47 @@ describe("format-relative", () => {
   describe("formatTimeAgo", () => {
     it("returns fallback for invalid elapsed input", () => {
       for (const value of [null, undefined, -100]) {
-        expect(formatTimeAgo(value)).toBe("unknown");
+        expect(formatTimeAgo(value)).toBe("不明");
       }
       expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
     });
 
-    it("formats relative age around key unit boundaries", () => {
-      const cases = [
-        [0, "just now"],
-        [29000, "just now"], // rounds to <1m
-        [30000, "1m ago"], // 30s rounds to 1m
-        [300000, "5m ago"],
-        [7200000, "2h ago"],
-        [47 * 3600000, "47h ago"],
-        [48 * 3600000, "2d ago"],
-        [172800000, "2d ago"],
-      ] as const;
-      for (const [input, expected] of cases) {
-        expect(formatTimeAgo(input), String(input)).toBe(expected);
-      }
+    it("formats with 'ago' suffix by default", () => {
+      expect(formatTimeAgo(0)).toBe("たった今");
+      expect(formatTimeAgo(29000)).toBe("たった今"); // rounds to <1m
+      expect(formatTimeAgo(30000)).toBe("1分前"); // 30s rounds to 1m
+      expect(formatTimeAgo(300000)).toBe("5分前");
+      expect(formatTimeAgo(7200000)).toBe("2時間前");
+      expect(formatTimeAgo(172800000)).toBe("2日前");
     });
 
     it("omits suffix when suffix: false", () => {
-      expect(formatTimeAgo(0, { suffix: false })).toBe("0s");
-      expect(formatTimeAgo(300000, { suffix: false })).toBe("5m");
-      expect(formatTimeAgo(7200000, { suffix: false })).toBe("2h");
+      expect(formatTimeAgo(0, { suffix: false })).toBe("0秒");
+      expect(formatTimeAgo(300000, { suffix: false })).toBe("5分");
+      expect(formatTimeAgo(7200000, { suffix: false })).toBe("2時間");
+    });
+
+    it("uses 48h threshold before switching to days", () => {
+      expect(formatTimeAgo(47 * 3600000)).toBe("47時間前");
+      expect(formatTimeAgo(48 * 3600000)).toBe("2日前");
     });
   });
 
   describe("formatRelativeTimestamp", () => {
     it("returns fallback for invalid timestamp input", () => {
       for (const value of [null, undefined]) {
-        expect(formatRelativeTimestamp(value)).toBe("n/a");
+        expect(formatRelativeTimestamp(value)).toBe("—");
       }
       expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
     });
 
     it.each([
-      { offsetMs: -10000, expected: "just now" },
-      { offsetMs: -300000, expected: "5m ago" },
-      { offsetMs: -7200000, expected: "2h ago" },
-      { offsetMs: 30000, expected: "in <1m" },
-      { offsetMs: 300000, expected: "in 5m" },
-      { offsetMs: 7200000, expected: "in 2h" },
+      { offsetMs: -10000, expected: "たった今" },
+      { offsetMs: -300000, expected: "5分前" },
+      { offsetMs: -7200000, expected: "2時間前" },
+      { offsetMs: 30000, expected: "1分未満後" },
+      { offsetMs: 300000, expected: "5分後" },
+      { offsetMs: 7200000, expected: "2時間後" },
     ])("formats relative timestamp for offset $offsetMs", ({ offsetMs, expected }) => {
       const now = Date.now();
       expect(formatRelativeTimestamp(now + offsetMs)).toBe(expected);
@@ -210,8 +208,8 @@ describe("format-relative", () => {
     it("falls back to date for old timestamps when enabled", () => {
       const oldDate = Date.now() - 30 * 24 * 3600000; // 30 days ago
       const result = formatRelativeTimestamp(oldDate, { dateFallback: true });
-      // Should be a short date like "Jan 9" not "30d ago"
-      expect(result).toMatch(/[A-Z][a-z]{2} \d{1,2}/);
+      // Should be a short date like "1月9日" not "30日前"
+      expect(result).toMatch(/\d{1,2}月\d{1,2}日/);
     });
   });
 });
