@@ -169,11 +169,11 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const initial =
     normalized === "user"
-      ? "私"
+      ? "あなた"
       : normalized === "assistant"
-        ? assistantName.charAt(0).toUpperCase() || "A"
+        ? assistantName || "Roby"
         : normalized === "tool"
-          ? "ツ"
+          ? "ツール"
           : "?";
   const className =
     normalized === "user"

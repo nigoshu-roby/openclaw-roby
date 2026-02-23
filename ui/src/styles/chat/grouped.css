@@ -90,7 +90,10 @@
   display: grid;
   place-items: center;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  text-align: center;
   flex-shrink: 0;
   align-self: flex-end; /* Align with last message in group */
   margin-bottom: 4px; /* Optical alignment */
@@ -260,12 +263,12 @@ img.chat-avatar {
 }
 
 :root[data-theme="light"] .chat-group.user .chat-bubble {
-  border-color: rgba(234, 88, 12, 0.2);
-  background: rgba(251, 146, 60, 0.12);
+  border-color: rgba(59, 130, 246, 0.2);
+  background: rgba(59, 130, 246, 0.12);
 }
 
 .chat-group.user .chat-bubble:hover {
-  background: rgba(255, 77, 77, 0.15);
+  background: rgba(59, 130, 246, 0.15);
 }
 
 /* Streaming animation */

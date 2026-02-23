@@ -244,8 +244,11 @@ export function renderChat(props: ChatProps) {
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
+  const rawAssistantName = (props.assistantName ?? "").trim();
+  const assistantDisplayName =
+    !rawAssistantName || rawAssistantName.toLowerCase() === "assistant" ? "Roby" : rawAssistantName;
   const assistantIdentity = {
-    name: props.assistantName,
+    name: assistantDisplayName,
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
   };
 
@@ -303,7 +306,7 @@ export function renderChat(props: ChatProps) {
             return renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
               showReasoning,
-              assistantName: props.assistantName,
+              assistantName: assistantDisplayName,
               assistantAvatar: assistantIdentity.avatar,
             });
           }
