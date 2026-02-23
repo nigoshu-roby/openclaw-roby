@@ -629,9 +629,7 @@ def build_neuronic_tasks(
     return tasks
 
 
-def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
-    if not tasks:
-        return {"created": 0, "updated": 0, "skipped": 0}
+def _send_neuronic_once(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
     url = env.get("NEURONIC_URL", "http://127.0.0.1:5174/api/v1/tasks/import")
     fallback_url = env.get("NEURONIC_FALLBACK_URL", "http://127.0.0.1:5174/api/v1/tasks/bulk")
     token = env.get("NEURONIC_TOKEN") or env.get("TASKD_AUTH_TOKEN")
@@ -662,6 +660,75 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
         return {"error": f"HTTP {e.code}", "detail": e.read().decode("utf-8", "ignore")}
     except Exception as e:
         return {"error": str(e)}
+
+
+def _is_payload_too_large(resp: Dict[str, Any]) -> bool:
+    if not isinstance(resp, dict):
+        return False
+    err = f"{resp.get('error', '')} {resp.get('detail', '')} {resp.get('reason', '')}".lower()
+    return "413" in err or "payload too large" in err or "request entity too large" in err
+
+
+def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
+    if not tasks:
+        return {"created": 0, "updated": 0, "skipped": 0}
+
+    default_batch = int(env.get("NEURONIC_BATCH_SIZE", "20"))
+    max_batch_bytes = int(env.get("NEURONIC_MAX_BATCH_BYTES", "90000"))
+    queue: List[List[Dict[str, Any]]] = []
+
+    # First pass: split by count and estimated payload bytes.
+    batch: List[Dict[str, Any]] = []
+    batch_bytes = 0
+    for item in tasks:
+        item_bytes = len(json.dumps(item, ensure_ascii=False).encode("utf-8")) + 2
+        if batch and (len(batch) >= default_batch or batch_bytes + item_bytes > max_batch_bytes):
+            queue.append(batch)
+            batch = []
+            batch_bytes = 0
+        batch.append(item)
+        batch_bytes += item_bytes
+    if batch:
+        queue.append(batch)
+
+    aggregate: Dict[str, Any] = {
+        "created": 0,
+        "updated": 0,
+        "skipped": 0,
+        "errors": [],
+        "batches": 0,
+    }
+
+    while queue:
+        current = queue.pop(0)
+        resp = _send_neuronic_once(current, env)
+        if _is_payload_too_large(resp) and len(current) > 1:
+            mid = max(1, len(current) // 2)
+            queue.insert(0, current[mid:])
+            queue.insert(0, current[:mid])
+            continue
+
+        aggregate["batches"] += 1
+        if isinstance(resp, dict) and resp.get("error"):
+            aggregate.setdefault("errors", []).append(
+                {"reason": resp.get("detail") or resp.get("error"), "batch_size": len(current)}
+            )
+            aggregate["error"] = resp.get("error")
+            aggregate["detail"] = resp.get("detail")
+            continue
+
+        for key in ("created", "updated", "skipped", "hierarchy_updated", "order_updated"):
+            if key in resp and isinstance(resp.get(key), int):
+                aggregate[key] = int(aggregate.get(key, 0)) + int(resp.get(key, 0))
+        for key in ("hierarchy_applied", "order_applied"):
+            if key in resp:
+                aggregate[key] = bool(resp.get(key)) or bool(aggregate.get(key, False))
+        if isinstance(resp, dict) and isinstance(resp.get("errors"), list):
+            aggregate.setdefault("errors", []).extend(resp.get("errors", []))
+
+    if not aggregate.get("errors"):
+        aggregate.pop("errors", None)
+    return aggregate
 
 
 def send_slack(webhook_url: str, text: str) -> None:
