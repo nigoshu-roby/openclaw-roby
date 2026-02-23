@@ -298,6 +298,119 @@ def block_to_text(block: Dict[str, Any]) -> str:
     return ""
 
 
+ACTION_HINTS = [
+    "確認",
+    "対応",
+    "実施",
+    "作成",
+    "共有",
+    "調整",
+    "依頼",
+    "連携",
+    "実装",
+    "準備",
+    "提出",
+    "送付",
+    "ヒアリング",
+    "追跡",
+    "検討",
+    "設定",
+    "修正",
+]
+
+STATUS_ONLY_HINTS = [
+    "進捗",
+    "現状",
+    "報告",
+    "完了",
+    "問題なし",
+]
+
+
+def _clean_line(line: str) -> str:
+    s = re.sub(r"^\s*[-*・●◯□■]+\s*", "", line.strip())
+    s = re.sub(r"^\s*\d+[.)]\s*", "", s)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def _line_looks_like_project_heading(line: str, known_projects: List[str]) -> Optional[str]:
+    s = _clean_line(line)
+    if not s:
+        return None
+    for p in sorted(set([x for x in known_projects if x]), key=len, reverse=True):
+        if p and p in s:
+            return p
+    m = re.match(r"^([A-Za-z0-9一-龥ぁ-んァ-ヶー！!・／/ 　]+)[：:]\s*$", s)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _line_looks_actionable(line: str) -> bool:
+    s = _clean_line(line)
+    if not s or len(s) < 4:
+        return False
+    if any(k in s for k in STATUS_ONLY_HINTS) and not any(a in s for a in ACTION_HINTS):
+        return False
+    if any(a in s for a in ACTION_HINTS):
+        return True
+    if re.search(r"(今週|来週|今月|来月|まで|予定|必要|すべき|したい)", s):
+        return True
+    return False
+
+
+def heuristic_tasks_from_text(text: str, default_project: str, known_projects: List[str]) -> List[Dict[str, Any]]:
+    groups: Dict[str, List[str]] = {}
+    current_project = default_project
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        heading = _line_looks_like_project_heading(line, known_projects)
+        if heading:
+            current_project = heading
+            groups.setdefault(current_project, [])
+            continue
+        if _line_looks_actionable(line):
+            groups.setdefault(current_project, [])
+            cleaned = _clean_line(line)
+            if cleaned not in groups[current_project]:
+                groups[current_project].append(cleaned)
+
+    tasks: List[Dict[str, Any]] = []
+    for project, items in groups.items():
+        if not items:
+            continue
+        if len(items) == 1:
+            tasks.append({
+                "title": items[0][:120],
+                "due_date": "",
+                "project": project or default_project,
+                "assignee": "私",
+                "note": "Heuristic extraction",
+            })
+            continue
+        subtasks = []
+        for item in items[:20]:
+            subtasks.append({
+                "title": item[:120],
+                "due_date": "",
+                "project": project or default_project,
+                "assignee": "私",
+                "note": "Heuristic extraction",
+            })
+        tasks.append({
+            "title": f"{project or default_project} 対応タスク",
+            "due_date": "",
+            "project": project or default_project,
+            "assignee": "私",
+            "note": "Heuristic grouped extraction",
+            "subtasks": subtasks,
+        })
+    return tasks
+
+
 def drive_search_docs(folder_id: str, env: Dict[str, str], account: str, since_iso: str, max_docs: int) -> List[Dict[str, Any]]:
     folder_id = folder_id.strip()
     query = (
@@ -357,6 +470,9 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         "--plain",
         "--metrics",
         "off",
+        "--length",
+        env.get("MINUTES_SUMMARIZE_LENGTH", "xxl"),
+        "--force-summary",
         "--prompt",
         prompt,
         "--max-output-tokens",
@@ -367,10 +483,13 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     summary = data.get("summary", "")
     if not summary:
         return [], ""
+    cleaned = summary.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        return json.loads(summary), summary
+        return json.loads(cleaned), summary
     except Exception:
-        m = re.search(r"\[.*\]", summary, re.DOTALL)
+        m = re.search(r"\[.*\]", cleaned, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group(0)), summary
@@ -682,6 +801,10 @@ def main() -> int:
             extracted, raw_summary = summarize_tasks(
                 text, env, item.get("project") or "TOKIWAGI", known_projects, today_str
             )
+            fallback_used = False
+            if not extracted:
+                extracted = heuristic_tasks_from_text(text, item.get("project") or "TOKIWAGI", known_projects)
+                fallback_used = bool(extracted)
             if args.debug:
                 debug_records.append({
                     "source": "notion",
@@ -691,6 +814,7 @@ def main() -> int:
                     "summary_len": len(raw_summary or ""),
                     "summary_snippet": (raw_summary or "")[:800],
                     "tasks": len(extracted),
+                    "fallback": "heuristic" if fallback_used else "",
                 })
             tasks = build_neuronic_tasks(
                 extracted,
@@ -710,6 +834,10 @@ def main() -> int:
                 processed_gdocs[doc_id] = item.get("updated", "")
                 continue
             extracted, raw_summary = summarize_tasks(text, env, "GDocs", known_projects, today_str)
+            fallback_used = False
+            if not extracted:
+                extracted = heuristic_tasks_from_text(text, "GDocs", known_projects)
+                fallback_used = bool(extracted)
             if args.debug:
                 debug_records.append({
                     "source": "gdocs",
@@ -719,6 +847,7 @@ def main() -> int:
                     "summary_len": len(raw_summary or ""),
                     "summary_snippet": (raw_summary or "")[:800],
                     "tasks": len(extracted),
+                    "fallback": "heuristic" if fallback_used else "",
                 })
             tasks = build_neuronic_tasks(
                 extracted,
