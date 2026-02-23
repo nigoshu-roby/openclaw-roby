@@ -340,8 +340,9 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     prompt = (
         "Extract actionable tasks from the meeting minutes. "
         "Ignore pure status notes or commentary. "
-        "If a task is large, split into concrete subtasks. "
-        "Return ONLY a JSON array of objects with keys: title, due_date, project, assignee, note. "
+        "If tasks are related, group them under a parent task with a `subtasks` array. "
+        "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note, subtasks (optional). "
+        "Each subtask uses the same schema (title, due_date, project, assignee, note). "
         "due_date must be YYYY-MM-DD or empty string. "
         f"Today is {today} (JST). "
         f"Default project: {default_project}. "
@@ -400,6 +401,23 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
     return out
 
 
+def _normalize_task_item(item: Dict[str, Any], default_project: str) -> Dict[str, Any]:
+    title = (item.get("title") or "").strip()
+    project = (item.get("project") or "").strip() or default_project
+    due_date = (item.get("due_date") or "").strip()
+    if due_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", due_date):
+        due_date = ""
+    assignee = (item.get("assignee") or "").strip() or "私"
+    note = (item.get("note") or "").strip()
+    return {
+        "title": title,
+        "project": project,
+        "due_date": due_date,
+        "assignee": assignee,
+        "note": note,
+    }
+
+
 def build_neuronic_tasks(
     extracted: List[Dict[str, Any]],
     source: str,
@@ -409,40 +427,79 @@ def build_neuronic_tasks(
     source_id: str,
 ) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
+    group_index = 0
     for item in extracted:
-        title = (item.get("title") or "").strip()
+        normalized = _normalize_task_item(item, default_project)
+        title = normalized.get("title")
         if not title:
             continue
-        project = (item.get("project") or "").strip() or default_project
-        due_date = (item.get("due_date") or "").strip()
-        if due_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", due_date):
-            due_date = ""
-        assignee = (item.get("assignee") or "").strip() or "私"
-        note = (item.get("note") or "").strip()
+        subtasks = item.get("subtasks") or item.get("children") or []
+
         note = (
-            (note + "\n\n" if note else "")
+            (normalized.get("note") + "\n\n" if normalized.get("note") else "")
             + f"Source: {source}\n"
             + f"Title: {source_title}\n"
             + f"URL: {source_url}"
         )
         tags = _dedupe_tags([
             f"source:{source}",
-            f"project:{project}",
-            f"assignee:{assignee}",
+            f"project:{normalized.get('project')}",
+            f"assignee:{normalized.get('assignee')}",
         ])
-        task = {
+
+        parent_task = {
             "title": title,
-            "project": project,
-            "due_date": due_date,
-            "assignee": assignee,
+            "project": normalized.get("project"),
+            "due_date": normalized.get("due_date"),
+            "assignee": normalized.get("assignee"),
             "note": note,
             "source": "roby",
             "status": "inbox",
             "priority": 1,
             "tags": tags,
         }
-        task["origin_id"] = _stable_origin_id(task, source_id)
-        tasks.append(task)
+        parent_origin = _stable_origin_id(parent_task, f"{source_id}|parent|{group_index}")
+        parent_task["origin_id"] = parent_origin
+
+        if subtasks:
+            group_tag = f"group:{parent_origin}"
+            parent_task["tags"] = _dedupe_tags(parent_task["tags"] + [group_tag])
+            tasks.append(parent_task)
+            for sub_idx, sub in enumerate(subtasks):
+                sub_norm = _normalize_task_item(sub, normalized.get("project") or default_project)
+                if not sub_norm.get("title"):
+                    continue
+                sub_note = (
+                    (sub_norm.get("note") + "\n\n" if sub_norm.get("note") else "")
+                    + f"Parent: {title}\n"
+                    + f"Source: {source}\n"
+                    + f"Title: {source_title}\n"
+                    + f"URL: {source_url}"
+                )
+                sub_tags = _dedupe_tags([
+                    f"source:{source}",
+                    f"project:{sub_norm.get('project')}",
+                    f"assignee:{sub_norm.get('assignee')}",
+                    group_tag,
+                ])
+                child_task = {
+                    "title": sub_norm.get("title"),
+                    "project": sub_norm.get("project"),
+                    "due_date": sub_norm.get("due_date"),
+                    "assignee": sub_norm.get("assignee"),
+                    "note": sub_note,
+                    "source": "roby",
+                    "status": "inbox",
+                    "priority": 1,
+                    "tags": sub_tags,
+                }
+                child_task["origin_id"] = _stable_origin_id(
+                    child_task, f"{source_id}|child|{group_index}|{sub_idx}"
+                )
+                tasks.append(child_task)
+        else:
+            tasks.append(parent_task)
+        group_index += 1
     return tasks
 
 
