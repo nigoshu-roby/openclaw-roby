@@ -633,7 +633,18 @@ def _send_neuronic_once(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dic
     url = env.get("NEURONIC_URL", "http://127.0.0.1:5174/api/v1/tasks/import")
     fallback_url = env.get("NEURONIC_FALLBACK_URL", "http://127.0.0.1:5174/api/v1/tasks/bulk")
     token = env.get("NEURONIC_TOKEN") or env.get("TASKD_AUTH_TOKEN")
-    payload = {"items": tasks}
+    payload_items = []
+    for item in tasks:
+        row = dict(item)
+        # Compatibility: send both snake_case and camelCase for taskd variants.
+        if "parent_origin_id" in row:
+            row["parentOriginId"] = row.get("parent_origin_id")
+        if "sibling_order" in row:
+            row["siblingOrder"] = row.get("sibling_order")
+        if "outline_path" in row:
+            row["outlinePath"] = row.get("outline_path")
+        payload_items.append(row)
+    payload = {"items": payload_items}
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
@@ -669,27 +680,53 @@ def _is_payload_too_large(resp: Dict[str, Any]) -> bool:
     return "413" in err or "payload too large" in err or "request entity too large" in err
 
 
+def _task_group_key(item: Dict[str, Any]) -> str:
+    parent = item.get("parent_origin_id")
+    if parent:
+        return f"group:{parent}"
+    return f"group:{item.get('origin_id', '')}"
+
+
+def _split_grouped_batches(tasks: List[Dict[str, Any]], default_batch: int, max_batch_bytes: int) -> List[List[Dict[str, Any]]]:
+    groups: List[List[Dict[str, Any]]] = []
+    current_group: List[Dict[str, Any]] = []
+    current_key = None
+    for item in tasks:
+        key = _task_group_key(item)
+        if current_key is None or key == current_key:
+            current_group.append(item)
+            current_key = key
+            continue
+        groups.append(current_group)
+        current_group = [item]
+        current_key = key
+    if current_group:
+        groups.append(current_group)
+
+    batches: List[List[Dict[str, Any]]] = []
+    batch: List[Dict[str, Any]] = []
+    batch_bytes = 0
+    for group in groups:
+        group_bytes = sum(len(json.dumps(it, ensure_ascii=False).encode("utf-8")) + 2 for it in group)
+        if batch and (len(batch) + len(group) > default_batch or batch_bytes + group_bytes > max_batch_bytes):
+            batches.append(batch)
+            batch = []
+            batch_bytes = 0
+        # If a single group itself is too large, still enqueue it; recursive split handles it.
+        batch.extend(group)
+        batch_bytes += group_bytes
+    if batch:
+        batches.append(batch)
+    return batches
+
+
 def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
     if not tasks:
         return {"created": 0, "updated": 0, "skipped": 0}
 
     default_batch = int(env.get("NEURONIC_BATCH_SIZE", "20"))
     max_batch_bytes = int(env.get("NEURONIC_MAX_BATCH_BYTES", "90000"))
-    queue: List[List[Dict[str, Any]]] = []
-
-    # First pass: split by count and estimated payload bytes.
-    batch: List[Dict[str, Any]] = []
-    batch_bytes = 0
-    for item in tasks:
-        item_bytes = len(json.dumps(item, ensure_ascii=False).encode("utf-8")) + 2
-        if batch and (len(batch) >= default_batch or batch_bytes + item_bytes > max_batch_bytes):
-            queue.append(batch)
-            batch = []
-            batch_bytes = 0
-        batch.append(item)
-        batch_bytes += item_bytes
-    if batch:
-        queue.append(batch)
+    queue: List[List[Dict[str, Any]]] = _split_grouped_batches(tasks, default_batch, max_batch_bytes)
 
     aggregate: Dict[str, Any] = {
         "created": 0,
