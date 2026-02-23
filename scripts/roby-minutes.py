@@ -497,7 +497,7 @@ def build_neuronic_tasks(
                     "tags": sub_tags,
                     "parent_origin_id": parent_origin,
                     "sibling_order": sub_idx,
-                    "outline_path": f\"{group_index}/{sub_idx}\",
+                    "outline_path": f"{group_index}/{sub_idx}",
                 }
                 child_task["origin_id"] = _stable_origin_id(
                     child_task, f"{source_id}|child|{group_index}|{sub_idx}"
