@@ -15,6 +15,7 @@ import urllib.error
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "minutes_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_runs.jsonl"
 DEBUG_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_debug.jsonl"
+NEURONIC_LOG_PATH = Path.home() / ".openclaw" / "roby" / "neuronic_import_runs.jsonl"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 NOTION_KEY_PATH = Path.home() / ".config" / "notion" / "api_key"
 
@@ -654,30 +655,139 @@ def _send_neuronic_once(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dic
     def _post(target_url: str) -> Dict[str, Any]:
         req = urllib.request.Request(target_url, data=data, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
+            status_code = getattr(resp, "status", 200)
             body = resp.read().decode("utf-8", "ignore")
         try:
-            return json.loads(body)
+            parsed = json.loads(body)
         except Exception:
-            return {"response": body}
+            parsed = {"response": body}
+        return {"ok": True, "status_code": status_code, "body": parsed}
 
     try:
-        return _post(url)
+        res = _post(url)
+        res["endpoint_used"] = "/api/v1/tasks/import"
+        res["fallback_used"] = False
+        return res
     except urllib.error.HTTPError as e:
         if e.code == 404 and url.endswith("/tasks/import"):
             try:
-                return _post(fallback_url)
+                res = _post(fallback_url)
+                res["endpoint_used"] = "/api/v1/tasks/bulk"
+                res["fallback_used"] = True
+                return res
             except urllib.error.HTTPError as e2:
-                return {"error": f"HTTP {e2.code}", "detail": e2.read().decode("utf-8", "ignore")}
-        return {"error": f"HTTP {e.code}", "detail": e.read().decode("utf-8", "ignore")}
+                return {
+                    "ok": False,
+                    "status_code": e2.code,
+                    "error": f"HTTP {e2.code}",
+                    "detail": e2.read().decode("utf-8", "ignore"),
+                    "endpoint_used": "/api/v1/tasks/bulk",
+                    "fallback_used": True,
+                }
+        return {
+            "ok": False,
+            "status_code": e.code,
+            "error": f"HTTP {e.code}",
+            "detail": e.read().decode("utf-8", "ignore"),
+            "endpoint_used": "/api/v1/tasks/import",
+            "fallback_used": False,
+        }
     except Exception as e:
-        return {"error": str(e)}
+        return {
+            "ok": False,
+            "status_code": None,
+            "error": str(e),
+            "endpoint_used": "/api/v1/tasks/import",
+            "fallback_used": False,
+        }
 
 
 def _is_payload_too_large(resp: Dict[str, Any]) -> bool:
     if not isinstance(resp, dict):
         return False
-    err = f"{resp.get('error', '')} {resp.get('detail', '')} {resp.get('reason', '')}".lower()
+    body = resp.get("body", {}) if isinstance(resp.get("body"), dict) else {}
+    err = (
+        f"{resp.get('error', '')} {resp.get('detail', '')} {resp.get('reason', '')} "
+        f"{body.get('error', '')} {body.get('detail', '')} {body.get('reason', '')}"
+    ).lower()
     return "413" in err or "payload too large" in err or "request entity too large" in err
+
+
+def _count_payload_meta(items: List[Dict[str, Any]]) -> Tuple[int, int]:
+    parent_items = 0
+    order_items = 0
+    for it in items:
+        parent_val = it.get("parent_origin_id", it.get("parentOriginId"))
+        if parent_val is not None and str(parent_val).strip() != "":
+            parent_items += 1
+        if ("sibling_order" in it and it.get("sibling_order") is not None) or (
+            "siblingOrder" in it and it.get("siblingOrder") is not None
+        ):
+            order_items += 1
+    return parent_items, order_items
+
+
+def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _format_neuronic_cli_logs(result: Dict[str, Any], verbose: bool = False) -> List[str]:
+    lines: List[str] = []
+    endpoint = result.get("endpoint_used") or "(unknown)"
+    fallback = bool(result.get("fallback_used"))
+    items_sent = int(result.get("items_sent", 0) or 0)
+    parent_items = int(result.get("items_with_parent", 0) or 0)
+    order_items = int(result.get("items_with_order", 0) or 0)
+    created = int(result.get("created", 0) or 0)
+    updated = int(result.get("updated", 0) or 0)
+    skipped = int(result.get("skipped", 0) or 0)
+    error_count = int(result.get("error_count", 0) or 0)
+    status_code = result.get("status_code")
+
+    if not result.get("ok", True):
+        lines.append(
+            f"[neuronic] import failed: status={status_code or '?'} endpoint={endpoint}"
+            + (" fallback=true" if fallback else "")
+        )
+        return lines
+
+    if verbose:
+        lines.append(
+            "[neuronic] send "
+            f"items={items_sent} parent_items={parent_items} ordered_items={order_items} "
+            f"endpoint={endpoint}" + (" fallback=true" if fallback else "")
+        )
+
+    hierarchy_applied = result.get("hierarchy_applied", None)
+    order_applied = result.get("order_applied", None)
+    flags_available = (hierarchy_applied is not None) or (order_applied is not None)
+
+    if flags_available:
+        lines.append(
+            "[neuronic] import ok: "
+            f"created={created} updated={updated} skipped={skipped} errors={error_count} "
+            f"hierarchy={str(hierarchy_applied).lower()} "
+            f"order={str(order_applied).lower()} "
+            f"endpoint={endpoint}" + (" fallback=true" if fallback else "")
+        )
+    else:
+        lines.append(
+            "[neuronic] import ok (legacy response): "
+            f"created={created} updated={updated} skipped={skipped} errors={error_count} "
+            f"endpoint={endpoint}" + (" fallback=true" if fallback else "")
+        )
+        if fallback:
+            lines.append(
+                "[neuronic] import fallback to /api/v1/tasks/bulk "
+                "(hierarchy/order response flags unavailable)"
+            )
+
+    for msg in result.get("warning_messages", []) or []:
+        lines.append(f"[neuronic] warning: {msg}")
+
+    return lines
 
 
 def _task_group_key(item: Dict[str, Any]) -> str:
@@ -727,14 +837,31 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
     default_batch = int(env.get("NEURONIC_BATCH_SIZE", "20"))
     max_batch_bytes = int(env.get("NEURONIC_MAX_BATCH_BYTES", "90000"))
     queue: List[List[Dict[str, Any]]] = _split_grouped_batches(tasks, default_batch, max_batch_bytes)
+    verbose = env.get("ROBY_NEURONIC_VERBOSE", "0") == "1"
+    items_with_parent, items_with_order = _count_payload_meta(tasks)
 
     aggregate: Dict[str, Any] = {
+        "ok": True,
+        "status_code": 200,
         "created": 0,
         "updated": 0,
         "skipped": 0,
         "errors": [],
+        "error_count": 0,
         "batches": 0,
+        "items_sent": len(tasks),
+        "items_with_parent": items_with_parent,
+        "items_with_order": items_with_order,
+        "endpoint_used": None,
+        "fallback_used": False,
+        "hierarchy_applied": None,
+        "order_applied": None,
+        "warning_messages": [],
     }
+    endpoints_seen = set()
+    hierarchy_flags_seen: List[bool] = []
+    order_flags_seen: List[bool] = []
+    legacy_flags_unavailable = False
 
     while queue:
         current = queue.pop(0)
@@ -746,25 +873,97 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
             continue
 
         aggregate["batches"] += 1
-        if isinstance(resp, dict) and resp.get("error"):
+        endpoints_seen.add(resp.get("endpoint_used") or "(unknown)")
+        aggregate["fallback_used"] = bool(aggregate["fallback_used"]) or bool(resp.get("fallback_used"))
+
+        if not resp.get("ok", False):
             aggregate.setdefault("errors", []).append(
-                {"reason": resp.get("detail") or resp.get("error"), "batch_size": len(current)}
+                {
+                    "reason": resp.get("detail") or resp.get("error"),
+                    "batch_size": len(current),
+                    "endpoint": resp.get("endpoint_used"),
+                }
             )
+            aggregate["error_count"] = int(aggregate.get("error_count", 0)) + 1
+            aggregate["ok"] = False
             aggregate["error"] = resp.get("error")
             aggregate["detail"] = resp.get("detail")
+            aggregate["status_code"] = resp.get("status_code")
             continue
 
+        body = resp.get("body") if isinstance(resp.get("body"), dict) else {}
         for key in ("created", "updated", "skipped", "hierarchy_updated", "order_updated"):
-            if key in resp and isinstance(resp.get(key), int):
-                aggregate[key] = int(aggregate.get(key, 0)) + int(resp.get(key, 0))
-        for key in ("hierarchy_applied", "order_applied"):
-            if key in resp:
-                aggregate[key] = bool(resp.get(key)) or bool(aggregate.get(key, False))
-        if isinstance(resp, dict) and isinstance(resp.get("errors"), list):
-            aggregate.setdefault("errors", []).extend(resp.get("errors", []))
+            if key in body and isinstance(body.get(key), int):
+                aggregate[key] = int(aggregate.get(key, 0)) + int(body.get(key, 0))
+        if isinstance(body.get("errors"), list):
+            aggregate.setdefault("errors", []).extend(body.get("errors", []))
+            aggregate["error_count"] = len(aggregate.get("errors", []))
+        if "hierarchy_applied" in body:
+            if body.get("hierarchy_applied") is not None:
+                hierarchy_flags_seen.append(bool(body.get("hierarchy_applied")))
+        else:
+            legacy_flags_unavailable = True
+        if "order_applied" in body:
+            if body.get("order_applied") is not None:
+                order_flags_seen.append(bool(body.get("order_applied")))
+        else:
+            legacy_flags_unavailable = True
+
+    if len(endpoints_seen) == 1:
+        aggregate["endpoint_used"] = next(iter(endpoints_seen))
+    elif len(endpoints_seen) > 1:
+        aggregate["endpoint_used"] = "mixed"
+
+    if hierarchy_flags_seen:
+        aggregate["hierarchy_applied"] = all(hierarchy_flags_seen)
+    elif not legacy_flags_unavailable:
+        aggregate["hierarchy_applied"] = False
+    else:
+        aggregate["hierarchy_applied"] = None
+
+    if order_flags_seen:
+        aggregate["order_applied"] = all(order_flags_seen)
+    elif not legacy_flags_unavailable:
+        aggregate["order_applied"] = False
+    else:
+        aggregate["order_applied"] = None
+
+    if aggregate["items_with_parent"] > 0 and aggregate.get("hierarchy_applied") is False:
+        aggregate["warning_messages"].append(
+            f"parent tasks were sent ({aggregate['items_with_parent']}) but hierarchy_applied=false"
+        )
+    if aggregate["items_with_order"] > 0 and aggregate.get("order_applied") is False:
+        aggregate["warning_messages"].append(
+            f"sibling order was sent ({aggregate['items_with_order']}) but order_applied=false"
+        )
 
     if not aggregate.get("errors"):
         aggregate.pop("errors", None)
+
+    for line in _format_neuronic_cli_logs(aggregate, verbose=verbose):
+        print(line)
+
+    _append_jsonl(
+        NEURONIC_LOG_PATH,
+        {
+            "event": "neuronic_import_result",
+            "timestamp": datetime.now(JST).isoformat(),
+            "endpoint_used": aggregate.get("endpoint_used"),
+            "fallback_used": aggregate.get("fallback_used", False),
+            "status_code": aggregate.get("status_code"),
+            "ok": aggregate.get("ok", True),
+            "items_sent": aggregate.get("items_sent", 0),
+            "items_with_parent": aggregate.get("items_with_parent", 0),
+            "items_with_order": aggregate.get("items_with_order", 0),
+            "created": aggregate.get("created", 0),
+            "updated": aggregate.get("updated", 0),
+            "skipped": aggregate.get("skipped", 0),
+            "error_count": aggregate.get("error_count", 0),
+            "hierarchy_applied": aggregate.get("hierarchy_applied"),
+            "order_applied": aggregate.get("order_applied"),
+            "warnings": aggregate.get("warning_messages", []),
+        },
+    )
     return aggregate
 
 
@@ -794,6 +993,8 @@ def main() -> int:
     args = parser.parse_args()
 
     env = load_env()
+    if args.debug:
+        env["ROBY_NEURONIC_VERBOSE"] = "1"
     notion_root = args.notion_root or env.get("TOKIWAGI_ROOT_ID") or env.get("NOTION_TOKIWAGI_ID", "")
     drive_folder = args.drive_folder or env.get("GDRIVE_MINUTES_FOLDER_ID", "")
     account = args.account or env.get("GOG_ACCOUNT", "")
@@ -970,9 +1171,23 @@ def main() -> int:
     if not args.dry_run:
         if all_tasks:
             resp = send_neuronic(all_tasks, env)
-            if isinstance(resp, dict) and resp.get("error"):
-                summary["neuronic_errors"] += 1
-                summary["last_neuronic_error"] = resp.get("detail") or resp.get("error")
+            if isinstance(resp, dict):
+                summary["neuronic_created"] = int(resp.get("created", 0) or 0)
+                summary["neuronic_updated"] = int(resp.get("updated", 0) or 0)
+                summary["neuronic_skipped"] = int(resp.get("skipped", 0) or 0)
+                summary["neuronic_error_count"] = int(resp.get("error_count", 0) or 0)
+                if "hierarchy_applied" in resp:
+                    summary["hierarchy_applied"] = resp.get("hierarchy_applied")
+                if "order_applied" in resp:
+                    summary["order_applied"] = resp.get("order_applied")
+                if resp.get("endpoint_used") is not None:
+                    summary["neuronic_endpoint"] = resp.get("endpoint_used")
+                summary["neuronic_fallback"] = bool(resp.get("fallback_used", False))
+                if resp.get("warning_messages"):
+                    summary["neuronic_warnings"] = resp.get("warning_messages")
+                if resp.get("error") or int(resp.get("error_count", 0) or 0) > 0:
+                    summary["neuronic_errors"] += 1
+                    summary["last_neuronic_error"] = resp.get("detail") or resp.get("error")
     else:
         summary["dry_run"] = True
 
