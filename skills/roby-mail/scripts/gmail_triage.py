@@ -125,6 +125,17 @@ RELATED_DOMAINS = {
     "notion.so": "notion",
 }
 
+PROMO_SENDER_DOMAINS = [
+    "toridori.co.jp",
+    "diggle.team",
+    "innovation.co.jp",
+    "sales-skygroup.jp",
+    "billage.space",
+    "one-stream.jp",
+    "mapbox.com",
+    "necfru.com",
+]
+
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
@@ -362,6 +373,7 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
         "メルマガ",
         "運営事務局",
     ])
+    is_promo_sender_domain = any(dom in sender_lower for dom in PROMO_SENDER_DOMAINS)
 
     # Tool-specific operational notifications we still want to see.
     if ("support@crmstyle.com" in sender_lower or "synergy" in text) and "アカウント発行" in (subject or ""):
@@ -383,7 +395,7 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
             return "archive", tags, needs_reply
 
     # Strong promotional signals override reply heuristics to reduce false positives.
-    if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
+    if (is_promo_subject or is_promo_sender_domain or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
         return "archive", tags, False
 
     reply_text = re.sub(r"reply-to", " ", text)
