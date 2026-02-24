@@ -94,6 +94,8 @@ PROMO_SUBJECT_HINTS = [
     "今すぐ直せる",
     "成果にまだ間に合う",
     "アンケート",
+    "お知らせが",
+    "実践を語る",
 ]
 
 ACTIONABLE_NOTICE_HINTS = [
@@ -134,6 +136,8 @@ PROMO_SENDER_DOMAINS = [
     "one-stream.jp",
     "mapbox.com",
     "necfru.com",
+    "facebookmail.com",
+    "stream.co.jp",
 ]
 
 
