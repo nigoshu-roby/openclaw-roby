@@ -150,6 +150,12 @@
   padding: 12px 4px 4px;
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
+  transition: box-shadow 120ms ease-out, border-color 120ms ease-out;
+}
+
+.chat-compose--dragover {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+  border-radius: 10px;
 }
 
 /* Image attachments preview */
@@ -309,6 +315,10 @@
   display: flex;
   align-items: stretch;
   gap: 8px;
+}
+
+.chat-compose__file-input {
+  display: none;
 }
 
 .chat-compose .chat-compose__actions .btn {
