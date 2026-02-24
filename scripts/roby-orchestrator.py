@@ -154,6 +154,17 @@ def shell_run(cmd: str, env: Dict[str, str], cwd: Optional[Path] = None, timeout
         return {"ok": False, "error": str(e)}
 
 
+def _drop_agent_flag(cmd: str) -> str:
+    # Fallback for environments without a configured named agent (e.g. roby-dev).
+    return re.sub(r"\s+--agent\s+\S+", "", cmd).strip()
+
+
+def _replace_agent_flag(cmd: str, agent_id: str) -> str:
+    if re.search(r"\s+--agent\s+\S+", cmd):
+        return re.sub(r"(\s+--agent\s+)\S+", rf"\1{agent_id}", cmd, count=1)
+    return cmd
+
+
 def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, verbose: bool) -> Dict[str, Any]:
     select_match = re.search(r"--select\s+\"([^\"]+)\"|--select\s+'([^']+)'|--select\s+(\S+)", message)
     select_val = None
@@ -216,12 +227,41 @@ def handle_coding_codex(message: str, env: Dict[str, str], execute: bool) -> Dic
         result["mode"] = "handoff_only"
         result["note"] = "Set ROBY_ORCH_CODEX_CMD to enable automatic Codex execution."
         return result
+    result["command"] = codex_cmd
+    if not execute:
+        result["mode"] = "ready"
+        return result
 
     child_env = dict(env)
     child_env["ROBY_ORCH_MESSAGE"] = message
     child_env["ROBY_ORCH_REQUIREMENTS_JSON"] = json.dumps(result["requirements"], ensure_ascii=False)
     run = shell_run(codex_cmd, child_env, cwd=OPENCLAW_REPO, timeout=int(env.get("ROBY_ORCH_CODEX_TIMEOUT_SEC", "3600")))
+    fallback_used = False
+    if not run.get("ok", False) and "Unknown agent id" in str(run.get("output", "")) and "--agent" in codex_cmd:
+        fallback_cmd = _replace_agent_flag(codex_cmd, env.get("ROBY_ORCH_CODEX_FALLBACK_AGENT", "main"))
+        fallback_run = shell_run(
+            fallback_cmd,
+            child_env,
+            cwd=OPENCLAW_REPO,
+            timeout=int(env.get("ROBY_ORCH_CODEX_TIMEOUT_SEC", "3600")),
+        )
+        fallback_used = True
+        result["fallback_command"] = fallback_cmd
+        run = fallback_run
+        if not run.get("ok", False) and "Unknown agent id" in str(run.get("output", "")):
+            # Final fallback to no agent flag (may still fail, but keeps the error explicit)
+            fallback_cmd2 = _drop_agent_flag(codex_cmd)
+            fallback_run2 = shell_run(
+                fallback_cmd2,
+                child_env,
+                cwd=OPENCLAW_REPO,
+                timeout=int(env.get("ROBY_ORCH_CODEX_TIMEOUT_SEC", "3600")),
+            )
+            result["fallback_command_2"] = fallback_cmd2
+            run = fallback_run2
     result.update({"executed": True, **run, "command": codex_cmd})
+    if fallback_used:
+        result["fallback_used"] = True
     return result
 
 
