@@ -88,6 +88,8 @@ PROMO_SUBJECT_HINTS = [
     "新着情報",
     "ads update",
     "not sure where to start",
+    "アップデート",
+    "連携できる",
     "無料で試せる",
     "今すぐ直せる",
     "成果にまだ間に合う",
@@ -322,6 +324,7 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
 
 def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[str], bool]:
     text = f"{subject} {sender} {body}".lower()
+    header_text = f"{subject} {sender}".lower()
     tags = []
     needs_reply = False
     sender_lower = (sender or "").lower()
@@ -332,8 +335,8 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
         t = tool.lower()
         if re.fullmatch(r"[a-z0-9!+._-]+", t):
             # Avoid substring false-positives like "line" in "pipeline".
-            return re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", text) is not None
-        return t in text
+            return re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", header_text) is not None
+        return t in header_text
 
     related = [tool for tool in RELATED_TOOLS if _tool_match(tool)]
     if not related:
@@ -383,7 +386,10 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
     if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
         return "archive", tags, False
 
-    if (not is_noreply) and any(k in text for k in ["返信", "reply", "ご返信", "ご回答", "ご対応"]):
+    reply_text = re.sub(r"reply-to", " ", text)
+    has_reply_phrase = any(k in reply_text for k in ["返信", "ご返信", "ご回答", "ご対応"])
+    has_reply_en = any(k in reply_text for k in ["please reply", "reply requested", "reply by"])
+    if (not is_noreply) and (has_reply_phrase or has_reply_en):
         needs_reply = True
 
     if related:
