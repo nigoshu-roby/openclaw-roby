@@ -394,12 +394,13 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
     return out
 
 
-def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any] | None = None) -> Tuple[str, List[str], bool, str | None]:
-    text = f"{subject} {sender} {body}".lower()
-    header_text = f"{subject} {sender}".lower()
+def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any] | None = None, cc: str = "") -> Tuple[str, List[str], bool, str | None]:
+    text = f"{subject} {sender} {cc} {body}".lower()
+    header_text = f"{subject} {sender} {cc}".lower()
     tags = []
     needs_reply = False
     sender_lower = (sender or "").lower()
+    cc_lower = (cc or "").lower()
     subject_lower = (subject or "").lower()
     is_noreply = "no-reply" in sender_lower or "noreply" in sender_lower
 
@@ -422,6 +423,10 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
     override_category, override_rule = match_user_override(subject, sender, rules or {})
     if override_category:
         return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule
+
+    # Internal company domain in sender/CC should always be reviewed.
+    if "tokiwa-gi.com" in sender_lower or "tokiwa-gi.com" in cc_lower:
+        return "needs_review", _dedupe_tags(tags + ["rule:internal_domain_review"]), needs_reply, "internal_domain_review"
 
     urgent = any(k in text for k in IMPORTANT_KEYWORDS)
     is_alert = any(k in text for k in ALERT_HINTS)
@@ -578,7 +583,8 @@ def main() -> int:
         subject = msg.get("subject", "")
         sender = msg.get("from", "")
 
-        category, tags, needs_reply, rule_applied = classify_message(subject, sender, body, rules=rules)
+        cc = msg.get("cc", "") or msg.get("ccs", "") or ""
+        category, tags, needs_reply, rule_applied = classify_message(subject, sender, body, rules=rules, cc=cc)
         category_counts[category] = category_counts.get(category, 0) + 1
         summary["new"] += 1
 
@@ -639,6 +645,7 @@ def main() -> int:
                 "category": category,
                 "subject": subject,
                 "from": sender,
+                "cc": cc,
                 "tags": tags,
             }
             if rule_applied:
