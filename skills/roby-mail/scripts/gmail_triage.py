@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Tuple
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
+RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 
 DEFAULT_QUERY = "newer_than:2d in:inbox"
 DEFAULT_MAX = 50
@@ -179,6 +180,62 @@ def log_run(entry: Dict[str, Any]) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def ensure_rules_file(path: Path) -> None:
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    template = {
+        "force_archive": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+        "force_review": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+        "force_reply": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+    }
+    path.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_rules(path: Path) -> Dict[str, Any]:
+    ensure_rules_file(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _match_rule_bucket(bucket: Dict[str, Any], subject_lower: str, sender_lower: str) -> bool:
+    if not isinstance(bucket, dict):
+        return False
+    for dom in bucket.get("sender_domains", []) or []:
+        if dom and str(dom).lower() in sender_lower:
+            return True
+    for s in bucket.get("sender_contains", []) or []:
+        if s and str(s).lower() in sender_lower:
+            return True
+    for s in bucket.get("subject_contains", []) or []:
+        if s and str(s).lower() in subject_lower:
+            return True
+    for pat in bucket.get("subject_regex", []) or []:
+        try:
+            if pat and re.search(str(pat), subject_lower, flags=re.IGNORECASE):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+def match_user_override(subject: str, sender: str, rules: Dict[str, Any]) -> Tuple[str | None, str | None]:
+    subject_lower = (subject or "").lower()
+    sender_lower = (sender or "").lower()
+    category_map = {
+        "force_archive": "archive",
+        "force_review": "needs_review",
+        "force_reply": "needs_reply",
+    }
+    for category in ("force_reply", "force_review", "force_archive"):
+        if _match_rule_bucket(rules.get(category, {}), subject_lower, sender_lower):
+            return category_map[category], category
+    return None, None
+
+
 def strip_html(html: str) -> str:
     if not html:
         return ""
@@ -337,7 +394,7 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
     return out
 
 
-def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[str], bool]:
+def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any] | None = None) -> Tuple[str, List[str], bool, str | None]:
     text = f"{subject} {sender} {body}".lower()
     header_text = f"{subject} {sender}".lower()
     tags = []
@@ -362,6 +419,10 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
     if related:
         tags.extend([f"tool:{t}" for t in related])
 
+    override_category, override_rule = match_user_override(subject, sender, rules or {})
+    if override_category:
+        return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule
+
     urgent = any(k in text for k in IMPORTANT_KEYWORDS)
     is_alert = any(k in text for k in ALERT_HINTS)
     is_ad_hint = any(h in text for h in AD_HINTS)
@@ -382,30 +443,30 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
     # Sender-domain blacklist is authoritative for known promotional sources.
     # Their bodies often contain words like "更新", "確認", "reply-to" that trigger false positives.
     if is_promo_sender_domain:
-        return "archive", tags, False
+        return "archive", tags, False, None
 
     # Tool-specific operational notifications we still want to see.
     if ("support@crmstyle.com" in sender_lower or "synergy" in text) and "アカウント発行" in (subject or ""):
-        return "needs_review", tags, needs_reply
+        return "needs_review", tags, needs_reply, None
 
     # AWS / batch job notifications are operationally important even on success.
     if "aws" in text and ("pipeline" in text or "etl" in text):
-        return "needs_review", tags, needs_reply
+        return "needs_review", tags, needs_reply, None
 
     # Meeting / coordination mails should remain visible.
     if any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"]):
-        return "needs_reply" if needs_reply else "needs_review", tags, needs_reply
+        return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None
 
     # Frequent ad-platform auto notices (approval/budget consumed/news) are noisy by default.
     if ("line.me" in sender_lower or "mail.yahoo.co.jp" in sender_lower) and is_noreply:
         if any(k in (subject or "") for k in ["広告が承認されました", "広告アカウントが承認されました", "予算が消化されました"]):
-            return "archive", tags, needs_reply
+            return "archive", tags, needs_reply, None
         if "ads update" in subject_lower or "新着情報" in (subject or ""):
-            return "archive", tags, needs_reply
+            return "archive", tags, needs_reply, None
 
     # Strong promotional signals override reply heuristics to reduce false positives.
     if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
-        return "archive", tags, False
+        return "archive", tags, False, None
 
     reply_text = re.sub(r"reply-to", " ", text)
     has_reply_phrase = any(k in reply_text for k in ["返信", "ご返信", "ご回答", "ご対応"])
@@ -416,19 +477,19 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
     if related:
         if is_noreply:
             if is_alert:
-                return "needs_review", tags, needs_reply
-            return "later_check", tags, needs_reply
+                return "needs_review", tags, needs_reply, None
+            return "later_check", tags, needs_reply, None
         if urgent:
-            return "needs_reply" if needs_reply else "needs_review", tags, needs_reply
-        return ("needs_reply" if needs_reply else "later_check"), tags, needs_reply
+            return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None
+        return ("needs_reply" if needs_reply else "later_check"), tags, needs_reply, None
 
     if urgent:
-        return "needs_reply" if needs_reply else "needs_review", tags, needs_reply
+        return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None
 
     if is_ad_hint and is_noreply:
-        return "archive", tags, needs_reply
+        return "archive", tags, needs_reply, None
 
-    return "needs_review", tags, needs_reply
+    return "needs_review", tags, needs_reply, None
 
 
 def build_tasks(
@@ -480,12 +541,15 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-tasks", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--rules-path", default="")
     parser.add_argument("--archive-ads", dest="archive_ads", action="store_true")
     parser.add_argument("--no-archive-ads", dest="archive_ads", action="store_false")
     parser.set_defaults(archive_ads=True)
     args = parser.parse_args()
 
     env = load_env()
+    rules_path = Path(args.rules_path).expanduser() if args.rules_path else Path(env.get("ROBY_GMAIL_TRIAGE_RULES_PATH", str(RULES_PATH))).expanduser()
+    rules = load_rules(rules_path)
     state = ensure_state()
     processed = state.get("processed", {})
 
@@ -514,7 +578,7 @@ def main() -> int:
         subject = msg.get("subject", "")
         sender = msg.get("from", "")
 
-        category, tags, needs_reply = classify_message(subject, sender, body)
+        category, tags, needs_reply, rule_applied = classify_message(subject, sender, body, rules=rules)
         category_counts[category] = category_counts.get(category, 0) + 1
         summary["new"] += 1
 
@@ -570,13 +634,16 @@ def main() -> int:
                 pass
 
         if args.verbose:
-            print(json.dumps({
+            row = {
                 "id": msg_id,
                 "category": category,
                 "subject": subject,
                 "from": sender,
                 "tags": tags,
-            }, ensure_ascii=False))
+            }
+            if rule_applied:
+                row["rule"] = rule_applied
+            print(json.dumps(row, ensure_ascii=False))
 
         if not args.dry_run:
             processed[msg_id] = int(time.time())
@@ -592,6 +659,7 @@ def main() -> int:
     })
 
     summary["categories"] = category_counts
+    summary["rules_path"] = str(rules_path)
     if args.verbose and last_neuronic_error:
         summary["last_neuronic_error"] = last_neuronic_error
         summary["neuronic_config"] = {
