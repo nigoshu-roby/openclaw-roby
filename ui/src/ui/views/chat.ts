@@ -267,7 +267,10 @@ export function renderChat(props: ChatProps) {
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
   };
 
-  const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const attachmentCount = props.attachments?.length ?? 0;
+  const hasAttachments = attachmentCount > 0;
+  const hasDraft = props.draft.trim().length > 0;
+  const canSubmit = props.connected && (hasDraft || hasAttachments || isBusy);
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "メッセージを追加するか、画像を貼り付け/ドラッグしてください…"
@@ -515,10 +518,10 @@ export function renderChat(props: ChatProps) {
               }}
             />
             <button
-              class="btn btn--icon"
+              class="btn btn--icon chat-compose__attach-btn"
               type="button"
-              aria-label="画像を添付"
-              title="画像を添付"
+              aria-label=${hasAttachments ? `画像を添付（${attachmentCount}件選択中）` : "画像を添付"}
+              title=${hasAttachments ? `画像を添付（${attachmentCount}件選択中）` : "画像を添付"}
               ?disabled=${!props.connected || !props.onAttachmentsChange}
               @click=${(e: Event) => {
                 const root = (e.currentTarget as HTMLElement).closest(".chat-compose");
@@ -527,6 +530,11 @@ export function renderChat(props: ChatProps) {
               }}
             >
               ${icons.paperclip}
+              ${
+                hasAttachments
+                  ? html`<span class="chat-compose__attach-count" aria-hidden="true">${attachmentCount}</span>`
+                  : nothing
+              }
             </button>
             <button
               class="btn"
@@ -537,7 +545,7 @@ export function renderChat(props: ChatProps) {
             </button>
             <button
               class="btn primary"
-              ?disabled=${!props.connected}
+              ?disabled=${!canSubmit}
               @click=${props.onSend}
             >
               ${isBusy ? "キュー" : "送信"}<kbd class="btn-kbd">↵</kbd>
