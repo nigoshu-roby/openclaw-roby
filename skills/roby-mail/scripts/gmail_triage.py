@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Tuple
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
+RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 
 DEFAULT_QUERY = "newer_than:2d in:inbox"
 DEFAULT_MAX = 50
@@ -76,6 +77,7 @@ AD_HINTS = [
     "marketing",
     "広告",
     "unsubscribe",
+    "セール",
 ]
 
 PROMO_SUBJECT_HINTS = [
@@ -139,6 +141,7 @@ PROMO_SENDER_DOMAINS = [
     "necfru.com",
     "facebookmail.com",
     "stream.co.jp",
+    "shein.com",
 ]
 
 
@@ -178,6 +181,64 @@ def log_run(entry: Dict[str, Any]) -> None:
     RUN_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with RUN_LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def ensure_rules_file(path: Path) -> None:
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    template = {
+        "force_archive": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+        "force_review": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+        "force_reply": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+    }
+    path.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_rules(path: Path) -> Dict[str, Any]:
+    ensure_rules_file(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _match_rule_bucket(bucket: Dict[str, Any], subject_lower: str, sender_lower: str) -> bool:
+    if not isinstance(bucket, dict):
+        return False
+    for dom in bucket.get("sender_domains", []) or []:
+        if dom and str(dom).lower() in sender_lower:
+            return True
+    for token in bucket.get("sender_contains", []) or []:
+        if token and str(token).lower() in sender_lower:
+            return True
+    for token in bucket.get("subject_contains", []) or []:
+        if token and str(token).lower() in subject_lower:
+            return True
+    for pat in bucket.get("subject_regex", []) or []:
+        if not pat:
+            continue
+        try:
+            if re.search(str(pat), subject_lower, flags=re.IGNORECASE):
+                return True
+        except re.error:
+            continue
+    return False
+
+
+def match_user_override(subject: str, sender: str, rules: Dict[str, Any]) -> Tuple[str | None, str | None]:
+    subject_lower = (subject or "").lower()
+    sender_lower = (sender or "").lower()
+    category_map = {
+        "force_reply": "needs_reply",
+        "force_review": "needs_review",
+        "force_archive": "archive",
+    }
+    for key in ("force_reply", "force_review", "force_archive"):
+        if _match_rule_bucket(rules.get(key, {}), subject_lower, sender_lower):
+            return category_map[key], key
+    return None, None
 
 
 def ensure_rules_file(path: Path) -> None:
@@ -590,7 +651,7 @@ def main() -> int:
 
         # Slack notify
         slack_url = env.get("SLACK_WEBHOOK_URL")
-        if slack_url and not args.dry_run:
+        if slack_url and not args.dry_run and category in ("needs_reply", "needs_review", "later_check"):
             msg_url = f"https://mail.google.com/mail/u/0/#inbox/{msg.get('threadId','')}"
             text = (
                 f"[Gmail:{category}] {subject}\n"

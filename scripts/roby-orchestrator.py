@@ -277,6 +277,22 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
         cmd.append("--list")
     if select_val:
         cmd.extend(["--select", select_val])
+    elif run_mode == "run":
+        policy = env.get("ROBY_ORCH_MINUTES_POLICY", "").strip()
+        if policy:
+            cmd.extend(["--policy", policy])
+        if env.get("ROBY_ORCH_MINUTES_FORCE", "0") == "1":
+            cmd.append("--force")
+        if env.get("ROBY_ORCH_MINUTES_REFRESH", "0") == "1":
+            cmd.append("--refresh")
+        if env.get("ROBY_ORCH_MINUTES_SKIP_NOTION", "0") == "1":
+            cmd.append("--skip-notion")
+        if env.get("ROBY_ORCH_MINUTES_SKIP_GDOCS", "0") == "1":
+            cmd.append("--skip-gdocs")
+        if env.get("ROBY_ORCH_MINUTES_DAYS", "").strip():
+            cmd.extend(["--days", env["ROBY_ORCH_MINUTES_DAYS"].strip()])
+        if env.get("ROBY_ORCH_MINUTES_MAX", "").strip():
+            cmd.extend(["--max", env["ROBY_ORCH_MINUTES_MAX"].strip()])
     if verbose:
         cmd.append("--debug")
 
@@ -360,8 +376,9 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
             "ROBY_ORCH_GEMINI_QA_PROMPT",
             (
                 "あなたはRobyです。日本語で実務的に回答してください。"
-                "ユーザーの目的を先に要約し、次に実行可能な提案を優先順で示してください。"
+                "ユーザーの目的を先に1-2文で要約し、次に実行可能な提案を優先順で示してください。"
                 "相談内容なら、判断基準・推奨案・代替案・次の一手を明示してください。"
+                "出力は簡潔に、見出し付きで『結論』『理由』『次のアクション』を基本形としてください。"
                 "コーディング実装が必要な相談の場合は、この段階では要件整理と進め方に留めてください。"
             ),
         )

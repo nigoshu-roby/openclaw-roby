@@ -520,7 +520,9 @@ def review_minutes_with_gemini(
         "You are reviewing Japanese meeting minutes for task extraction. "
         "Return ONLY JSON object with keys: summary, project_sections, cross_project_actions, noise_notes. "
         "project_sections is an array of {project, key_points, action_candidates}. "
-        "action_candidates is an array of short actionable statements only (no status-only notes). "
+        "action_candidates is an array of short actionable statements only (no status-only notes, no opinions, no background-only memos). "
+        "Treat progress updates, reflections, criticism, and contextual explanations as noise unless they contain a concrete next action / request / deadline. "
+        "Preserve project names explicitly and prefer known project names when text indicates them. "
         "cross_project_actions is an array of short actionable statements. "
         "noise_notes is an array of non-action memo lines that should not become tasks. "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
@@ -550,6 +552,9 @@ def extract_tasks_with_gemini_from_review(
         "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note, subtasks(optional). "
         "Use parent+subtasks when multiple actions belong to one project or theme. "
         "Ignore items listed in noise_notes. "
+        "Do NOT emit status summaries as tasks (e.g., '進捗', '現状', '備考', '要確認' by themselves). "
+        "Prefer concrete verb-led tasks. If a line is ambiguous, keep it in note under a parent task rather than creating many vague subtasks. "
+        "Project must be one of Known projects when applicable; for internal MTG items, infer the specific project from project_sections instead of using a generic label. "
         "due_date must be YYYY-MM-DD or empty string. "
         "If due date is relative, infer date using Today(JST). "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
@@ -585,7 +590,7 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     # Fallback: one-stage extraction (existing behavior) if two-stage fails/truncates.
     prompt = (
         "Extract actionable tasks from the meeting minutes. "
-        "Ignore pure status notes or commentary. "
+        "Ignore pure status notes, commentary, criticism, retrospective feedback, and context-only memo lines. "
         "If tasks are related, group them under a parent task with a `subtasks` array. "
         "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note, subtasks (optional). "
         "Each subtask uses the same schema (title, due_date, project, assignee, note). "
@@ -593,7 +598,8 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         f"Today is {today} (JST). "
         f"Default project: {default_project}. "
         f"Known projects: {known}. "
-        "Use the most appropriate project name if indicated. If not sure, use the default project."
+        "Use the most appropriate project name if indicated. If not sure, use the default project. "
+        "Prefer fewer high-quality actionable tasks over many vague bullets."
     )
     parsed, raw = _run_gemini_json_prompt(
         text,
@@ -1083,6 +1089,28 @@ def send_slack(webhook_url: str, text: str) -> None:
         resp.read()
 
 
+def apply_candidate_policy(candidates: List[Dict[str, Any]], policy: str) -> List[Dict[str, Any]]:
+    p = (policy or "").strip().lower()
+    if not p:
+        return candidates
+    if p in {"ops_default", "tokiwagi_master_plus_gdocs", "master+gdocs"}:
+        filtered: List[Dict[str, Any]] = []
+        for c in candidates:
+            src = c.get("source")
+            if src == "gdocs":
+                filtered.append(c)
+                continue
+            if src != "notion":
+                continue
+            project = (c.get("project") or "").strip()
+            db_title = (c.get("db_title") or "").strip()
+            title = (c.get("title") or "").strip()
+            if project == "TOKIWAGI_MASTER" or "TOKIWAGI_MASTER" in db_title or "社内定例" in title:
+                filtered.append(c)
+        return filtered
+    return candidates
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--notion-root", default="")
@@ -1099,6 +1127,7 @@ def main() -> int:
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--policy", default="")
     args = parser.parse_args()
 
     env = load_env()
@@ -1179,6 +1208,7 @@ def main() -> int:
 
     # sort by updated desc
     candidates.sort(key=lambda x: x.get("updated", ""), reverse=True)
+    candidates = apply_candidate_policy(candidates, args.policy)
 
     if args.list or not args.run:
         for idx, item in enumerate(candidates, 1):
@@ -1316,6 +1346,9 @@ def main() -> int:
             send_slack(slack_url, f"Roby Minutes Sync\n{json.dumps(summary, ensure_ascii=False)}")
         except Exception:
             pass
+
+    if args.policy:
+        summary["policy"] = args.policy
 
     print(json.dumps(summary, ensure_ascii=False))
     return 0
