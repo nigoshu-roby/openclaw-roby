@@ -16,16 +16,21 @@ RUN_LOG_PATH = STATE_DIR / "orchestrator_runs.jsonl"
 JST = timezone(timedelta(hours=9))
 OPENCLAW_REPO = Path("/Users/<user>/OpenClaw")
 MINUTES_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-minutes.py"
+SELF_GROWTH_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-self-growth.py"
 
 ROUTE_QA = "qa_gemini"
 ROUTE_CODING = "coding_codex"
 ROUTE_MINUTES = "minutes_pipeline"
+ROUTE_SELF_GROWTH = "self_growth"
 
 CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
 ]
 MINUTES_HINTS = [
     "議事録", "notion", "gdocs", "google docs", "googlemeet", "google meet", "タスク抽出", "細分化", "neuronic", "tokiwagi"
+]
+SELF_GROWTH_HINTS = [
+    "自己成長", "self-growth", "self growth", "自己改修", "自己修正", "自動パッチ", "毎時改善", "roby-self-growth"
 ]
 MINUTES_EXEC_HINTS = [
     "実行", "取り込み", "連携", "同期", "抽出して", "タスク化して", "一覧", "list", "--select", "--run"
@@ -59,6 +64,8 @@ def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
 
 def classify_intent_heuristic(message: str) -> str:
     lower = message.lower()
+    if any(k in lower for k in SELF_GROWTH_HINTS):
+        return ROUTE_SELF_GROWTH
     has_minutes = any(k in lower for k in MINUTES_HINTS)
     has_minutes_exec = any(k in lower for k in MINUTES_EXEC_HINTS)
     has_consult = any(k in lower for k in CONSULT_HINTS)
@@ -113,10 +120,10 @@ def run_summarize_json(prompt: str, text: str, env: Dict[str, str], max_tokens: 
 def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
-        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}."
+        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}."
     )
     parsed, raw = run_summarize_json(prompt, message, env, max_tokens="300", timeout_sec=45)
-    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES}:
+    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH}:
         parsed["raw"] = raw
         return parsed
     return None
@@ -124,24 +131,62 @@ def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[s
 
 def build_coding_requirements(message: str, env: Dict[str, str]) -> Dict[str, Any]:
     prompt = (
-        "You are a product/engineering requirements organizer. "
-        "Convert the user's request into implementation-ready requirements. "
+        "You are a product/engineering requirements organizer for an autonomous coding agent. "
+        "Convert the user's request into implementation-ready requirements in Japanese. "
         "Return ONLY JSON object with keys: objective, scope, constraints, acceptance_criteria, implementation_notes, open_questions. "
-        "Keep acceptance_criteria concrete and testable. If no open questions, return an empty array."
+        "Rules: "
+        "scope must be an array of concrete changed areas/files/components (>=2 items when inferable). "
+        "acceptance_criteria must be testable bullet-like strings (>=3 items when inferable). "
+        "implementation_notes should include tradeoffs/risks and rollout notes. "
+        "If information is missing, infer practical defaults and list assumptions in constraints or implementation_notes instead of leaving arrays empty. "
+        "open_questions should only contain blocking decisions."
     )
     parsed, raw = run_summarize_json(prompt, message, env, max_tokens="1400", timeout_sec=90)
     if isinstance(parsed, dict):
+        parsed = normalize_coding_requirements(parsed, message)
         parsed["_raw"] = raw
         return parsed
-    return {
+    return normalize_coding_requirements({
         "objective": message.strip(),
         "scope": [],
         "constraints": [],
         "acceptance_criteria": [],
         "implementation_notes": [],
         "open_questions": [],
-        "_raw": raw,
+    }, message) | {"_raw": raw}
+
+
+def normalize_coding_requirements(req: Dict[str, Any], message: str) -> Dict[str, Any]:
+    out = {
+        "objective": (req.get("objective") or message).strip(),
+        "scope": req.get("scope") if isinstance(req.get("scope"), list) else [],
+        "constraints": req.get("constraints") if isinstance(req.get("constraints"), list) else [],
+        "acceptance_criteria": req.get("acceptance_criteria") if isinstance(req.get("acceptance_criteria"), list) else [],
+        "implementation_notes": req.get("implementation_notes") if isinstance(req.get("implementation_notes"), list) else [],
+        "open_questions": req.get("open_questions") if isinstance(req.get("open_questions"), list) else [],
     }
+    if not out["scope"]:
+        inferred_scope = []
+        lower = message.lower()
+        if "チャット" in message or "chat" in lower:
+            inferred_scope.extend(["チャット画面UI", "入力欄/送信導線"])
+        if "ux" in lower or "ui" in lower or "画面" in message:
+            inferred_scope.extend(["文言/視認性", "操作フロー"])
+        if "api" in lower or "連携" in message:
+            inferred_scope.extend(["連携処理", "エラーハンドリング"])
+        out["scope"] = list(dict.fromkeys(inferred_scope)) or ["対象機能の既存実装", "関連UI/処理フロー"]
+    if not out["acceptance_criteria"]:
+        out["acceptance_criteria"] = [
+            "ユーザー要求の挙動が再現できること",
+            "既存の主要フローを壊さないこと",
+            "変更内容と確認結果を実行ログで報告できること",
+        ]
+    if not out["implementation_notes"]:
+        out["implementation_notes"] = [
+            "既存実装を確認し、最小差分で変更する",
+            "必要ならテスト/ビルドを実行して結果を記録する",
+        ]
+    return out
 
 
 def shell_run(cmd: str, env: Dict[str, str], cwd: Optional[Path] = None, timeout: int = 1800) -> Dict[str, Any]:
@@ -201,7 +246,52 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
     return result
 
 
+def handle_self_growth(env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+    cmd = ["python3", str(SELF_GROWTH_SCRIPT)]
+    result = {
+        "route": ROUTE_SELF_GROWTH,
+        "command": " ".join(shlex.quote(x) for x in cmd),
+        "executed": False,
+    }
+    if execute:
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        result["executed"] = True
+        result["ok"] = proc.returncode == 0
+        result["stdout"] = proc.stdout
+        result["stderr"] = proc.stderr
+        result["returncode"] = proc.returncode
+    return result
+
+
 def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+    if env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
+        qa_prompt = env.get(
+            "ROBY_ORCH_GEMINI_QA_PROMPT",
+            (
+                "あなたはRobyです。日本語で実務的に回答してください。"
+                "ユーザーの目的を先に要約し、次に実行可能な提案を優先順で示してください。"
+                "相談内容なら、判断基準・推奨案・代替案・次の一手を明示してください。"
+                "コーディング実装が必要な相談の場合は、この段階では要件整理と進め方に留めてください。"
+            ),
+        )
+        parsed, raw = run_summarize_json(
+            qa_prompt,
+            message,
+            env,
+            max_tokens=env.get("ROBY_ORCH_QA_MAX_TOKENS", "1400"),
+            timeout_sec=int(env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")),
+        )
+        text = raw
+        if isinstance(parsed, (dict, list)):
+            text = json.dumps(parsed, ensure_ascii=False)
+        return {
+            "route": ROUTE_QA,
+            "executed": True,
+            "ok": True,
+            "mode": "native_gemini",
+            "output": text,
+        }
+
     qa_cmd = env.get("ROBY_ORCH_GEMINI_QA_CMD", "").strip()
     result = {"route": ROUTE_QA, "executed": False}
     if not qa_cmd:
@@ -267,8 +357,9 @@ def handle_coding_codex(message: str, env: Dict[str, str], execute: bool) -> Dic
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--message", required=True)
-    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES], default="auto")
+    parser.add_argument("--message", default="")
+    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH], default="auto")
+    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -279,7 +370,25 @@ def main() -> int:
     route = args.route
     classify_meta: Dict[str, Any] = {"method": "manual" if route != "auto" else "heuristic"}
 
+    if args.cron_task != "none":
+        args.execute = True
+        if args.cron_task == "self_growth":
+            route = ROUTE_SELF_GROWTH
+            args.message = args.message or "[cron] self-growth"
+            classify_meta = {"method": "cron_task", "cron_task": "self_growth"}
+        elif args.cron_task == "minutes_sync":
+            route = ROUTE_MINUTES
+            if not args.message:
+                args.message = env.get(
+                    "ROBY_ORCH_MINUTES_CRON_MESSAGE",
+                    "TOKIWAGIの議事録からタスク抽出してNeuronic連携を実行",
+                )
+            classify_meta = {"method": "cron_task", "cron_task": "minutes_sync"}
+
     if route == "auto":
+        if not args.message.strip():
+            print("ERROR: --message is required when --route auto is used.")
+            return 2
         route = classify_intent_heuristic(args.message)
         if env.get("ROBY_ORCH_GEMINI_CLASSIFIER", "0") == "1":
             gemini_cls = classify_intent_gemini(args.message, env)
@@ -293,6 +402,8 @@ def main() -> int:
 
     if route == ROUTE_MINUTES:
         action = handle_minutes_pipeline(args.message, env, args.execute, args.verbose)
+    elif route == ROUTE_SELF_GROWTH:
+        action = handle_self_growth(env, args.execute)
     elif route == ROUTE_CODING:
         action = handle_coding_codex(args.message, env, args.execute)
     else:
@@ -323,6 +434,8 @@ def main() -> int:
             print(f"[orchestrator] acceptance_criteria={len(req['acceptance_criteria'])}")
         if req.get("open_questions"):
             print(f"[orchestrator] open_questions={len(req['open_questions'])}")
+    if route == ROUTE_SELF_GROWTH:
+        print("[orchestrator] self-growth route selected")
     if action.get("command"):
         print(f"[orchestrator] command={action['command']}")
     if action.get("note"):
