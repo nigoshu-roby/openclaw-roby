@@ -27,6 +27,12 @@ CODING_HINTS = [
 MINUTES_HINTS = [
     "議事録", "notion", "gdocs", "google docs", "googlemeet", "google meet", "タスク抽出", "細分化", "neuronic", "tokiwagi"
 ]
+MINUTES_EXEC_HINTS = [
+    "実行", "取り込み", "連携", "同期", "抽出して", "タスク化して", "一覧", "list", "--select", "--run"
+]
+CONSULT_HINTS = [
+    "どう", "改善", "方針", "相談", "設計", "考え", "おすすめ", "べき", "案"
+]
 
 
 def load_env() -> Dict[str, str]:
@@ -53,8 +59,13 @@ def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
 
 def classify_intent_heuristic(message: str) -> str:
     lower = message.lower()
-    if any(k in lower for k in MINUTES_HINTS):
-        return ROUTE_MINUTES
+    has_minutes = any(k in lower for k in MINUTES_HINTS)
+    has_minutes_exec = any(k in lower for k in MINUTES_EXEC_HINTS)
+    has_consult = any(k in lower for k in CONSULT_HINTS)
+    if has_minutes:
+        if has_minutes_exec and not has_consult:
+            return ROUTE_MINUTES
+        return ROUTE_QA
     if any(k in lower for k in CODING_HINTS):
         return ROUTE_CODING
     return ROUTE_QA
