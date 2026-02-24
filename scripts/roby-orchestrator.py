@@ -214,6 +214,41 @@ def shell_run(cmd: str, env: Dict[str, str], cwd: Optional[Path] = None, timeout
         return {"ok": False, "error": str(e)}
 
 
+def git_status_short(repo: Path, env: Dict[str, str]) -> str:
+    res = shell_run("git status --short", env, cwd=repo, timeout=30)
+    if not res.get("ok"):
+        return ""
+    return (res.get("output") or "").strip()
+
+
+def auto_commit_if_dirty(repo: Path, env: Dict[str, str], objective: str) -> Dict[str, Any]:
+    status_before = git_status_short(repo, env)
+    if not status_before:
+        return {"committed": False, "dirty": False}
+
+    add_res = shell_run("git add -A", env, cwd=repo, timeout=60)
+    if not add_res.get("ok"):
+        return {"committed": False, "dirty": True, "error": "git add failed", "detail": add_res.get("output", "")}
+
+    safe_obj = re.sub(r"\\s+", " ", (objective or "").strip())
+    safe_obj = re.sub(r"[^0-9A-Za-zぁ-んァ-ヶ一-龥ー\\-_: /]", "", safe_obj)[:60]
+    msg = f"roby orchestrator: {safe_obj or 'auto commit'}"
+    commit_res = shell_run(f"git commit -m {shlex.quote(msg)}", env, cwd=repo, timeout=120)
+    if not commit_res.get("ok"):
+        out = commit_res.get("output", "")
+        if "nothing to commit" in out.lower():
+            return {"committed": False, "dirty": False, "note": "nothing_to_commit"}
+        return {"committed": False, "dirty": True, "error": "git commit failed", "detail": out}
+
+    sha_res = shell_run("git rev-parse --short HEAD", env, cwd=repo, timeout=30)
+    return {
+        "committed": True,
+        "dirty": False,
+        "commit": (sha_res.get("output") or "").strip() if sha_res.get("ok") else "",
+        "message": msg,
+    }
+
+
 def _drop_agent_flag(cmd: str) -> str:
     # Fallback for environments without a configured named agent (e.g. roby-dev).
     return re.sub(r"\s+--agent\s+\S+", "", cmd).strip()
@@ -408,6 +443,9 @@ def handle_coding_codex(message: str, env: Dict[str, str], execute: bool) -> Dic
     result.update({"executed": True, **run, "command": codex_cmd})
     if fallback_used:
         result["fallback_used"] = True
+    if run.get("ok", False) and env.get("ROBY_ORCH_AUTO_COMMIT", "1") == "1":
+        commit_info = auto_commit_if_dirty(OPENCLAW_REPO, env, result["requirements"].get("objective", message))
+        result["auto_commit"] = commit_info
     return result
 
 
