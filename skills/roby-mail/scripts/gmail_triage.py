@@ -379,6 +379,11 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
     ])
     is_promo_sender_domain = any(dom in sender_lower for dom in PROMO_SENDER_DOMAINS)
 
+    # Sender-domain blacklist is authoritative for known promotional sources.
+    # Their bodies often contain words like "更新", "確認", "reply-to" that trigger false positives.
+    if is_promo_sender_domain:
+        return "archive", tags, False
+
     # Tool-specific operational notifications we still want to see.
     if ("support@crmstyle.com" in sender_lower or "synergy" in text) and "アカウント発行" in (subject or ""):
         return "needs_review", tags, needs_reply
@@ -399,7 +404,7 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
             return "archive", tags, needs_reply
 
     # Strong promotional signals override reply heuristics to reduce false positives.
-    if (is_promo_subject or is_promo_sender_domain or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
+    if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
         return "archive", tags, False
 
     reply_text = re.sub(r"reply-to", " ", text)
