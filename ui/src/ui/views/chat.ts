@@ -271,6 +271,14 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = attachmentCount > 0;
   const hasDraft = props.draft.trim().length > 0;
   const canSubmit = props.connected && (hasDraft || hasAttachments || isBusy);
+  const submitDisabledReason = !props.connected
+    ? "ゲートウェイ未接続"
+    : !canSubmit
+      ? "メッセージまたは画像を追加してください"
+      : "";
+  const composeHint = hasAttachments
+    ? `画像 ${attachmentCount} 件を添付中。Enterで送信できます。`
+    : "画像は貼り付け/ドラッグ&ドロップ/📎で添付できます。";
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "メッセージを追加するか、画像を貼り付け/ドラッグしてください…"
@@ -546,12 +554,14 @@ export function renderChat(props: ChatProps) {
             <button
               class="btn primary"
               ?disabled=${!canSubmit}
+              title=${submitDisabledReason}
               @click=${props.onSend}
             >
               ${isBusy ? "キュー" : "送信"}<kbd class="btn-kbd">↵</kbd>
             </button>
           </div>
         </div>
+        <div class="chat-compose__hint" aria-live="polite">${composeHint}</div>
       </div>
     </section>
   `;
