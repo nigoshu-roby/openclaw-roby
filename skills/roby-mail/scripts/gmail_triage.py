@@ -77,6 +77,33 @@ AD_HINTS = [
     "unsubscribe",
 ]
 
+PROMO_SUBJECT_HINTS = [
+    "開催",
+    "申込受付中",
+    "主催",
+    "セミナー",
+    "ウェビナー",
+    "webinar",
+    "メルマガ",
+    "新着情報",
+    "ads update",
+    "not sure where to start",
+    "無料で試せる",
+    "今すぐ直せる",
+    "成果にまだ間に合う",
+    "アンケート",
+]
+
+ACTIONABLE_NOTICE_HINTS = [
+    "アカウント発行",
+    "アカウント発行のお知らせ",
+    "スケジュールエラー通知",
+    "pipeline",
+    "etl結果",
+    "定例ミーティング",
+    "ミーティングの件",
+]
+
 ALERT_HINTS = [
     "エラー",
     "障害",
@@ -298,9 +325,17 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
     tags = []
     needs_reply = False
     sender_lower = (sender or "").lower()
+    subject_lower = (subject or "").lower()
     is_noreply = "no-reply" in sender_lower or "noreply" in sender_lower
 
-    related = [tool for tool in RELATED_TOOLS if tool.lower() in text]
+    def _tool_match(tool: str) -> bool:
+        t = tool.lower()
+        if re.fullmatch(r"[a-z0-9!+._-]+", t):
+            # Avoid substring false-positives like "line" in "pipeline".
+            return re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", text) is not None
+        return t in text
+
+    related = [tool for tool in RELATED_TOOLS if _tool_match(tool)]
     if not related:
         for dom, label in RELATED_DOMAINS.items():
             if dom in sender_lower:
@@ -312,6 +347,41 @@ def classify_message(subject: str, sender: str, body: str) -> Tuple[str, List[st
     urgent = any(k in text for k in IMPORTANT_KEYWORDS)
     is_alert = any(k in text for k in ALERT_HINTS)
     is_ad_hint = any(h in text for h in AD_HINTS)
+    is_promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
+    is_actionable_notice = any(h.lower() in text for h in ACTIONABLE_NOTICE_HINTS)
+
+    is_marketing_sender = any(x in sender_lower for x in [
+        "seminar",
+        "event",
+        "marketing",
+        "news",
+        "mailmag",
+        "メルマガ",
+        "運営事務局",
+    ])
+
+    # Tool-specific operational notifications we still want to see.
+    if ("support@crmstyle.com" in sender_lower or "synergy" in text) and "アカウント発行" in (subject or ""):
+        return "needs_review", tags, needs_reply
+
+    # AWS / batch job notifications are operationally important even on success.
+    if "aws" in text and ("pipeline" in text or "etl" in text):
+        return "needs_review", tags, needs_reply
+
+    # Meeting / coordination mails should remain visible.
+    if any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"]):
+        return "needs_reply" if needs_reply else "needs_review", tags, needs_reply
+
+    # Frequent ad-platform auto notices (approval/budget consumed/news) are noisy by default.
+    if ("line.me" in sender_lower or "mail.yahoo.co.jp" in sender_lower) and is_noreply:
+        if any(k in (subject or "") for k in ["広告が承認されました", "広告アカウントが承認されました", "予算が消化されました"]):
+            return "archive", tags, needs_reply
+        if "ads update" in subject_lower or "新着情報" in (subject or ""):
+            return "archive", tags, needs_reply
+
+    # Strong promotional signals override reply heuristics to reduce false positives.
+    if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
+        return "archive", tags, False
 
     if (not is_noreply) and any(k in text for k in ["返信", "reply", "ご返信", "ご回答", "ご対応"]):
         needs_reply = True
