@@ -17,17 +17,25 @@ JST = timezone(timedelta(hours=9))
 OPENCLAW_REPO = Path("/Users/<user>/OpenClaw")
 MINUTES_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-minutes.py"
 SELF_GROWTH_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-self-growth.py"
+GMAIL_TRIAGE_SCRIPT = OPENCLAW_REPO / "skills" / "roby-mail" / "scripts" / "gmail_triage.py"
 
 ROUTE_QA = "qa_gemini"
 ROUTE_CODING = "coding_codex"
 ROUTE_MINUTES = "minutes_pipeline"
 ROUTE_SELF_GROWTH = "self_growth"
+ROUTE_GMAIL = "gmail_pipeline"
 
 CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
 ]
 MINUTES_HINTS = [
     "議事録", "notion", "gdocs", "google docs", "googlemeet", "google meet", "タスク抽出", "細分化", "neuronic", "tokiwagi"
+]
+GMAIL_HINTS = [
+    "gmail", "メール", "受信箱", "inbox", "返信リマインド", "返信が必要", "triage", "アーカイブ", "広告メール"
+]
+GMAIL_EXEC_HINTS = [
+    "整理", "仕分け", "実行", "triage", "アーカイブ", "通知", "確認して", "走らせて"
 ]
 SELF_GROWTH_HINTS = [
     "自己成長", "self-growth", "self growth", "自己改修", "自己修正", "自動パッチ", "毎時改善", "roby-self-growth"
@@ -66,6 +74,13 @@ def classify_intent_heuristic(message: str) -> str:
     lower = message.lower()
     if any(k in lower for k in SELF_GROWTH_HINTS):
         return ROUTE_SELF_GROWTH
+    has_gmail = any(k in lower for k in GMAIL_HINTS)
+    has_gmail_exec = any(k in lower for k in GMAIL_EXEC_HINTS)
+    has_consult = any(k in lower for k in CONSULT_HINTS)
+    if has_gmail:
+        if has_gmail_exec and not has_consult:
+            return ROUTE_GMAIL
+        return ROUTE_QA
     has_minutes = any(k in lower for k in MINUTES_HINTS)
     has_minutes_exec = any(k in lower for k in MINUTES_EXEC_HINTS)
     has_consult = any(k in lower for k in CONSULT_HINTS)
@@ -120,10 +135,10 @@ def run_summarize_json(prompt: str, text: str, env: Dict[str, str], max_tokens: 
 def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
-        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}."
+        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}."
     )
     parsed, raw = run_summarize_json(prompt, message, env, max_tokens="300", timeout_sec=45)
-    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH}:
+    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL}:
         parsed["raw"] = raw
         return parsed
     return None
@@ -263,6 +278,47 @@ def handle_self_growth(env: Dict[str, str], execute: bool) -> Dict[str, Any]:
     return result
 
 
+def handle_gmail_pipeline(message: str, env: Dict[str, str], execute: bool, verbose: bool) -> Dict[str, Any]:
+    account = env.get("ROBY_GMAIL_ACCOUNT") or env.get("GOG_ACCOUNT") or ""
+    query = env.get("ROBY_GMAIL_QUERY", "newer_than:1d in:inbox")
+    max_items = env.get("ROBY_GMAIL_MAX", "20")
+
+    m_query = re.search(r"(newer_than:\S+.*|in:inbox.*)$", message, flags=re.IGNORECASE)
+    if m_query:
+        query = m_query.group(1).strip()
+    m_max = re.search(r"--max\s+(\d+)|(\d+)\s*件", message)
+    if m_max:
+        max_items = next((g for g in m_max.groups() if g), max_items)
+
+    cmd = [
+        "python3", str(GMAIL_TRIAGE_SCRIPT),
+        "--account", account,
+        "--query", query,
+        "--max", str(max_items),
+    ]
+    if verbose:
+        cmd.append("--verbose")
+    if any(k in message for k in ["dry-run", "ドライラン", "確認だけ", "一覧だけ"]):
+        cmd.append("--dry-run")
+
+    result = {
+        "route": ROUTE_GMAIL,
+        "command": " ".join(shlex.quote(x) for x in cmd),
+        "executed": False,
+        "account": account,
+        "query": query,
+        "max": int(max_items),
+    }
+    if execute:
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        result["executed"] = True
+        result["ok"] = proc.returncode == 0
+        result["stdout"] = proc.stdout
+        result["stderr"] = proc.stderr
+        result["returncode"] = proc.returncode
+    return result
+
+
 def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
     if env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
         qa_prompt = env.get(
@@ -358,8 +414,8 @@ def handle_coding_codex(message: str, env: Dict[str, str], execute: bool) -> Dic
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", default="")
-    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH], default="auto")
-    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "none"], default="none")
+    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL], default="auto")
+    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -384,6 +440,14 @@ def main() -> int:
                     "TOKIWAGIの議事録からタスク抽出してNeuronic連携を実行",
                 )
             classify_meta = {"method": "cron_task", "cron_task": "minutes_sync"}
+        elif args.cron_task == "gmail_triage":
+            route = ROUTE_GMAIL
+            if not args.message:
+                args.message = env.get(
+                    "ROBY_ORCH_GMAIL_CRON_MESSAGE",
+                    "Gmailを整理して返信リマインドとNeuronic連携を実行",
+                )
+            classify_meta = {"method": "cron_task", "cron_task": "gmail_triage"}
 
     if route == "auto":
         if not args.message.strip():
@@ -402,6 +466,8 @@ def main() -> int:
 
     if route == ROUTE_MINUTES:
         action = handle_minutes_pipeline(args.message, env, args.execute, args.verbose)
+    elif route == ROUTE_GMAIL:
+        action = handle_gmail_pipeline(args.message, env, args.execute, args.verbose)
     elif route == ROUTE_SELF_GROWTH:
         action = handle_self_growth(env, args.execute)
     elif route == ROUTE_CODING:
@@ -436,6 +502,8 @@ def main() -> int:
             print(f"[orchestrator] open_questions={len(req['open_questions'])}")
     if route == ROUTE_SELF_GROWTH:
         print("[orchestrator] self-growth route selected")
+    if route == ROUTE_GMAIL:
+        print("[orchestrator] gmail triage route selected")
     if action.get("command"):
         print(f"[orchestrator] command={action['command']}")
     if action.get("note"):
