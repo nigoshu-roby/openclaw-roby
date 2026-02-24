@@ -450,8 +450,139 @@ def export_doc_text(doc_id: str, env: Dict[str, str], account: str) -> str:
     return text.strip()
 
 
+def _extract_json_value(data: Dict[str, Any]) -> str:
+    for key in ("summary", "output", "text", "result"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
+
+
+def _parse_jsonish_text(raw: str) -> Any:
+    if not raw:
+        return None
+    cleaned = raw.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        m = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            return None
+
+
+def _run_gemini_json_prompt(
+    text: str,
+    prompt: str,
+    env: Dict[str, str],
+    *,
+    max_output_tokens: str,
+    length: str,
+    timeout_sec: int,
+) -> Tuple[Any, str]:
+    cmd = [
+        "summarize",
+        "-",
+        "--json",
+        "--plain",
+        "--metrics",
+        "off",
+        "--model",
+        env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+        "--length",
+        length,
+        "--force-summary",
+        "--prompt",
+        prompt,
+        "--max-output-tokens",
+        max_output_tokens,
+    ]
+    out = subprocess.check_output(cmd, input=text.encode("utf-8"), env=env, timeout=timeout_sec)
+    data = json.loads(out)
+    raw = _extract_json_value(data)
+    return _parse_jsonish_text(raw), raw
+
+
+def review_minutes_with_gemini(
+    text: str,
+    env: Dict[str, str],
+    default_project: str,
+    known_projects: List[str],
+    today: str,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    known = ", ".join(sorted(set([p for p in known_projects if p]))[:30])
+    prompt = (
+        "You are reviewing Japanese meeting minutes for task extraction. "
+        "Return ONLY JSON object with keys: summary, project_sections, cross_project_actions, noise_notes. "
+        "project_sections is an array of {project, key_points, action_candidates}. "
+        "action_candidates is an array of short actionable statements only (no status-only notes). "
+        "cross_project_actions is an array of short actionable statements. "
+        "noise_notes is an array of non-action memo lines that should not become tasks. "
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
+    )
+    parsed, raw = _run_gemini_json_prompt(
+        text,
+        prompt,
+        env,
+        max_output_tokens=env.get("MINUTES_REVIEW_MAX_TOKENS", "2200"),
+        length=env.get("MINUTES_REVIEW_LENGTH", "xl"),
+        timeout_sec=int(env.get("MINUTES_REVIEW_TIMEOUT_SEC", "150")),
+    )
+    return (parsed if isinstance(parsed, dict) else None), raw
+
+
+def extract_tasks_with_gemini_from_review(
+    review: Dict[str, Any],
+    env: Dict[str, str],
+    default_project: str,
+    known_projects: List[str],
+    today: str,
+) -> Tuple[List[Dict[str, Any]], str]:
+    known = ", ".join(sorted(set([p for p in known_projects if p]))[:30])
+    review_text = json.dumps(review, ensure_ascii=False)
+    prompt = (
+        "Convert the reviewed meeting summary into actionable tasks. "
+        "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note, subtasks(optional). "
+        "Use parent+subtasks when multiple actions belong to one project or theme. "
+        "Ignore items listed in noise_notes. "
+        "due_date must be YYYY-MM-DD or empty string. "
+        "If due date is relative, infer date using Today(JST). "
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
+    )
+    parsed, raw = _run_gemini_json_prompt(
+        review_text,
+        prompt,
+        env,
+        max_output_tokens=env.get("MINUTES_TASKS_MAX_TOKENS", "2600"),
+        length=env.get("MINUTES_TASKS_LENGTH", "xxl"),
+        timeout_sec=int(env.get("MINUTES_TASKS_TIMEOUT_SEC", "180")),
+    )
+    if isinstance(parsed, list):
+        return parsed, raw
+    return [], raw
+
+
 def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_projects: List[str], today: str) -> Tuple[List[Dict[str, Any]], str]:
     known = ", ".join(sorted(set([p for p in known_projects if p]))[:25])
+    review, review_raw = review_minutes_with_gemini(text, env, default_project, known_projects, today)
+    if review:
+        tasks, task_raw = extract_tasks_with_gemini_from_review(review, env, default_project, known_projects, today)
+        if tasks:
+            return tasks, json.dumps(
+                {
+                    "pipeline": "gemini_two_stage",
+                    "review_raw": review_raw[:1200],
+                    "task_raw": task_raw[:1200],
+                },
+                ensure_ascii=False,
+            )
+
+    # Fallback: one-stage extraction (existing behavior) if two-stage fails/truncates.
     prompt = (
         "Extract actionable tasks from the meeting minutes. "
         "Ignore pure status notes or commentary. "
@@ -464,39 +595,17 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         f"Known projects: {known}. "
         "Use the most appropriate project name if indicated. If not sure, use the default project."
     )
-    cmd = [
-        "summarize",
-        "-",
-        "--json",
-        "--plain",
-        "--metrics",
-        "off",
-        "--length",
-        env.get("MINUTES_SUMMARIZE_LENGTH", "xxl"),
-        "--force-summary",
-        "--prompt",
+    parsed, raw = _run_gemini_json_prompt(
+        text,
         prompt,
-        "--max-output-tokens",
-        env.get("MINUTES_SUMMARIZE_MAX_TOKENS", "1600"),
-    ]
-    out = subprocess.check_output(cmd, input=text.encode("utf-8"), env=env, timeout=120)
-    data = json.loads(out)
-    summary = data.get("summary", "")
-    if not summary:
-        return [], ""
-    cleaned = summary.strip()
-    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-    try:
-        return json.loads(cleaned), summary
-    except Exception:
-        m = re.search(r"\[.*\]", cleaned, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0)), summary
-            except Exception:
-                return [], summary
-        return [], summary
+        env,
+        max_output_tokens=env.get("MINUTES_SUMMARIZE_MAX_TOKENS", "1600"),
+        length=env.get("MINUTES_SUMMARIZE_LENGTH", "xxl"),
+        timeout_sec=int(env.get("MINUTES_SUMMARIZE_TIMEOUT_SEC", "120")),
+    )
+    if isinstance(parsed, list):
+        return parsed, raw
+    return [], raw
 
 
 def _stable_origin_id(task: Dict[str, Any], source_id: str) -> str:
