@@ -1,9 +1,17 @@
 import { en } from "../locales/en.ts";
+import { ja } from "../locales/ja.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
 type Subscriber = (locale: Locale) => void;
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = ["en", "zh-CN", "zh-TW", "pt-BR", "de"];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [
+  "en",
+  "ja",
+  "zh-CN",
+  "zh-TW",
+  "pt-BR",
+  "de",
+];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
@@ -11,7 +19,10 @@ export function isSupportedLocale(value: string | null | undefined): value is Lo
 
 class I18nManager {
   private locale: Locale = "en";
-  private translations: Record<Locale, TranslationMap> = { en } as Record<Locale, TranslationMap>;
+  private translations: Record<Locale, TranslationMap> = { en, ja } as Record<
+    Locale,
+    TranslationMap
+  >;
   private subscribers: Set<Subscriber> = new Set();
 
   constructor() {
@@ -21,9 +32,15 @@ class I18nManager {
   private resolveInitialLocale(): Locale {
     const saved = localStorage.getItem("openclaw.i18n.locale");
     if (isSupportedLocale(saved)) {
+      if (saved === "en") {
+        return "ja";
+      }
       return saved;
     }
     const navLang = navigator.language;
+    if (navLang.startsWith("ja")) {
+      return "ja";
+    }
     if (navLang.startsWith("zh")) {
       return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
     }
@@ -33,7 +50,7 @@ class I18nManager {
     if (navLang.startsWith("de")) {
       return "de";
     }
-    return "en";
+    return "ja";
   }
 
   private loadLocale() {
@@ -61,7 +78,9 @@ class I18nManager {
     if (needsTranslationLoad) {
       try {
         let module: Record<string, TranslationMap>;
-        if (locale === "zh-CN") {
+        if (locale === "ja") {
+          module = await import("../locales/ja.ts");
+        } else if (locale === "zh-CN") {
           module = await import("../locales/zh-CN.ts");
         } else if (locale === "zh-TW") {
           module = await import("../locales/zh-TW.ts");
