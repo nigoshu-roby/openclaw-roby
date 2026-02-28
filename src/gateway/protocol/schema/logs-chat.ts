@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Static, Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
 export const LogsTailParamsSchema = Type.Object(
@@ -79,3 +79,38 @@ export const ChatEventSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const OrchestratorRunParamsSchema = Type.Object(
+  {
+    sessionKey: Type.Optional(NonEmptyString),
+    message: Type.String(),
+    route: Type.Optional(
+      Type.Union([
+        Type.Literal("auto"),
+        Type.Literal("qa_gemini"),
+        Type.Literal("coding_codex"),
+        Type.Literal("minutes_pipeline"),
+        Type.Literal("self_growth"),
+        Type.Literal("gmail_pipeline"),
+      ]),
+    ),
+    execute: Type.Optional(Type.Boolean()),
+    verbose: Type.Optional(Type.Boolean()),
+    attachments: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            type: Type.Optional(Type.String()),
+            mimeType: Type.Optional(Type.String()),
+            fileName: Type.Optional(Type.String()),
+            content: Type.Optional(Type.String()),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export type OrchestratorRunParams = Static<typeof OrchestratorRunParamsSchema>;

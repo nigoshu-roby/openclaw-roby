@@ -96,6 +96,7 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  "orchestrator.run",
 ];
 
 export function listGatewayMethods(): string[] {

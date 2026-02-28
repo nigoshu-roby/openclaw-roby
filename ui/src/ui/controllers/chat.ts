@@ -27,6 +27,24 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type OrchestratorAttachmentMeta = {
+  index?: number;
+  path?: string;
+  mimeType?: string;
+  bytes?: number;
+};
+
+type OrchestratorRunResponse = {
+  ok?: boolean;
+  route?: string;
+  result?: Record<string, unknown> | null;
+  returnCode?: number | null;
+  termination?: string | null;
+  stdout?: string;
+  stderr?: string;
+  attachments?: { count?: number; files?: OrchestratorAttachmentMeta[] };
+};
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
@@ -171,14 +189,42 @@ export async function sendChatMessage(
         .filter((a): a is NonNullable<typeof a> => a !== null)
     : undefined;
 
+  const nativeChatMode = shouldUseNativeChatMode(msg);
+  if (!nativeChatMode) {
+    // Native chat runId is not created for orchestrator RPC calls.
+    state.chatRunId = null;
+  }
+
   try {
-    await state.client.request("chat.send", {
+    if (nativeChatMode) {
+      await state.client.request("chat.send", {
+        sessionKey: state.sessionKey,
+        message: msg,
+        deliver: false,
+        idempotencyKey: runId,
+        attachments: apiAttachments,
+      });
+      return runId;
+    }
+
+    state.chatStream = "オーケストレーション実行中…";
+    const response = await state.client.request<OrchestratorRunResponse>("orchestrator.run", {
       sessionKey: state.sessionKey,
-      message: msg,
-      deliver: false,
-      idempotencyKey: runId,
+      message: msg || "添付画像を確認して対応してください。",
+      execute: true,
       attachments: apiAttachments,
     });
+    state.chatStream = null;
+    state.chatRunId = null;
+    state.chatStreamStartedAt = null;
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: formatOrchestratorResult(response) }],
+        timestamp: Date.now(),
+      },
+    ];
     return runId;
   } catch (err) {
     const error = String(err);
@@ -200,6 +246,92 @@ export async function sendChatMessage(
   }
 }
 
+function shouldUseNativeChatMode(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return trimmed.startsWith("/") || trimmed.startsWith("!") || trimmed.startsWith("@");
+}
+
+function truncateForDisplay(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}\n...(省略)...`;
+}
+
+function parseOrchestratorAction(result: Record<string, unknown> | null | undefined): {
+  route: string;
+  elapsedMs: number | null;
+  action: Record<string, unknown>;
+} {
+  if (!result || typeof result !== "object") {
+    return { route: "unknown", elapsedMs: null, action: {} };
+  }
+  const route = typeof result.route === "string" ? result.route : "unknown";
+  const elapsedMs = typeof result.elapsed_ms === "number" ? result.elapsed_ms : null;
+  const action =
+    result.action && typeof result.action === "object"
+      ? (result.action as Record<string, unknown>)
+      : {};
+  return { route, elapsedMs, action };
+}
+
+function formatOrchestratorResult(response: OrchestratorRunResponse): string {
+  const payload = response.result;
+  const { route, elapsedMs, action } = parseOrchestratorAction(payload);
+  const actionRoute = typeof action.route === "string" ? action.route : route;
+  const actionOk = action.ok === true;
+  const executed = action.executed === true;
+  const returnCode = typeof response.returnCode === "number" ? response.returnCode : null;
+  const attachmentsCount = Number(response.attachments?.count ?? 0);
+  const lines = [
+    "### オーケストレーション実行結果",
+    `- ルート: \`${actionRoute}\``,
+    `- 実行: ${executed ? "実行済み" : "未実行"}`,
+    `- 結果: ${actionOk ? "成功" : "要確認"}`,
+  ];
+  if (elapsedMs != null) {
+    lines.push(`- 経過時間: ${Math.max(0, Math.round(elapsedMs / 1000))}秒`);
+  }
+  if (returnCode != null) {
+    lines.push(`- 終了コード: ${returnCode}`);
+  }
+  if (attachmentsCount > 0) {
+    lines.push(`- 添付画像: ${attachmentsCount}件`);
+  }
+
+  const command = typeof action.command === "string" ? action.command.trim() : "";
+  if (command) {
+    lines.push("", "**実行コマンド**", "```bash", command, "```");
+  }
+
+  const qaOutput = typeof action.output === "string" ? action.output.trim() : "";
+  if (qaOutput) {
+    lines.push("", "**回答**", truncateForDisplay(qaOutput, 6000));
+  }
+
+  const stdout = typeof action.stdout === "string" ? action.stdout.trim() : "";
+  const stderr = typeof action.stderr === "string" ? action.stderr.trim() : "";
+  const fallbackStdout = typeof response.stdout === "string" ? response.stdout.trim() : "";
+  const fallbackStderr = typeof response.stderr === "string" ? response.stderr.trim() : "";
+
+  const shownStdout = stdout || fallbackStdout;
+  const shownStderr = stderr || fallbackStderr;
+
+  if (shownStdout) {
+    lines.push("", "**標準出力**", "```text", truncateForDisplay(shownStdout, 6000), "```");
+  }
+  if (shownStderr) {
+    lines.push("", "**標準エラー**", "```text", truncateForDisplay(shownStderr, 3000), "```");
+  }
+
+  if (!shownStdout && !shownStderr && !qaOutput) {
+    lines.push("", "詳細ログはありません。");
+  }
+  return lines.join("\n");
+}
 export async function abortChatRun(state: ChatState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
