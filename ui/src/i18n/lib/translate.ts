@@ -25,18 +25,6 @@ class I18nManager {
   private resolveInitialLocale(): Locale {
     const saved = localStorage.getItem("openclaw.i18n.locale");
     if (isSupportedLocale(saved)) {
-      this.locale = saved;
-    } else {
-      const navLang = navigator.language;
-      if (navLang.startsWith("ja")) {
-        this.locale = "ja";
-      } else if (navLang.startsWith("zh")) {
-        this.locale = navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
-      } else if (navLang.startsWith("pt")) {
-        this.locale = "pt-BR";
-      } else {
-        this.locale = "en";
-      }
       return saved;
     }
     const navLang = navigator.language;
@@ -48,9 +36,6 @@ class I18nManager {
     }
     if (navLang.startsWith("pt")) {
       return "pt-BR";
-    }
-    if (navLang.startsWith("de")) {
-      return "de";
     }
     return "ja";
   }
@@ -88,8 +73,6 @@ class I18nManager {
           module = await import("../locales/zh-TW.ts");
         } else if (locale === "pt-BR") {
           module = await import("../locales/pt-BR.ts");
-        } else if (locale === "de") {
-          module = await import("../locales/de.ts");
         } else {
           return;
         }
