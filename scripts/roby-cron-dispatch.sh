@@ -44,6 +44,14 @@ LOCK_DIR="/tmp/roby-cron-${TASK}.lock"
 
 mkdir -p "$LOG_DIR"
 
+# Cron-safe runtime paths (ensure gog/python3 from Homebrew are available)
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || true)}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] FAIL: python3 not found in PATH=${PATH}" >>"$LOG_FILE"
+  exit 127
+fi
+
 now() { date '+%Y-%m-%d %H:%M:%S %Z'; }
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -56,7 +64,7 @@ cd "$ROOT_DIR"
 echo "[$(now)] START: task=${TASK} timeout=${TIMEOUT_SEC}s" >>"$LOG_FILE"
 
 (
-  python3 scripts/roby-orchestrator.py --cron-task "$TASK" --execute --json
+  "$PYTHON_BIN" scripts/roby-orchestrator.py --cron-task "$TASK" --execute --json
 ) >>"$LOG_FILE" 2>&1 &
 pid=$!
 
@@ -82,4 +90,3 @@ else
   echo "[$(now)] FAIL: task=${TASK} rc=${rc}" >>"$LOG_FILE"
   exit "$rc"
 fi
-
