@@ -439,6 +439,7 @@ def sanitize_extracted_tasks(
     known_projects: List[str],
     source_title: str,
     max_tasks_per_doc: int = 30,
+    max_subtasks_per_parent: int = 8,
 ) -> List[Dict[str, Any]]:
     cleaned: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -493,6 +494,8 @@ def sanitize_extracted_tasks(
                 if sub_fp in seen:
                     continue
                 seen.add(sub_fp)
+                if max_subtasks_per_parent > 0 and len(subtasks) >= max_subtasks_per_parent:
+                    continue
                 subtasks.append({
                     "title": st,
                     "project": sp,
@@ -511,7 +514,7 @@ def sanitize_extracted_tasks(
                 "due_date": due_date,
                 "assignee": assignee,
                 "note": note,
-                "subtasks": subtasks[:25],
+                "subtasks": subtasks[:max_subtasks_per_parent] if max_subtasks_per_parent > 0 else subtasks,
             })
             continue
 
@@ -1434,8 +1437,8 @@ def main() -> int:
                     text,
                     item.get("project") or "TOKIWAGI",
                     known_projects,
-                    max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "8")),
-                    max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "8")),
+                    max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "6")),
+                    max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "6")),
                 )
                 fallback_used = bool(extracted)
             if fallback_used:
@@ -1445,7 +1448,8 @@ def main() -> int:
                 item.get("project") or "TOKIWAGI",
                 known_projects,
                 item.get("title", ""),
-                max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "30")),
+                max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                max_subtasks_per_parent=int(env.get("MINUTES_MAX_SUBTASKS_PER_PARENT", "8")),
             )
             if args.debug:
                 debug_records.append({
@@ -1483,8 +1487,8 @@ def main() -> int:
                     text,
                     "GDocs",
                     known_projects,
-                    max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "8")),
-                    max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "8")),
+                    max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "6")),
+                    max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "6")),
                 )
                 fallback_used = bool(extracted)
             if fallback_used:
@@ -1494,7 +1498,8 @@ def main() -> int:
                 "GDocs",
                 known_projects,
                 item.get("title", ""),
-                max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "30")),
+                max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                max_subtasks_per_parent=int(env.get("MINUTES_MAX_SUBTASKS_PER_PARENT", "8")),
             )
             if args.debug:
                 debug_records.append({
