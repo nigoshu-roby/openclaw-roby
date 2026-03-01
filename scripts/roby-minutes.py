@@ -325,7 +325,21 @@ STATUS_ONLY_HINTS = [
     "報告",
     "完了",
     "問題なし",
+    "備考",
+    "要確認",
+    "背景",
+    "所感",
+    "振り返り",
 ]
+
+GENERIC_PROJECT_NAMES = {
+    "",
+    "TOKIWAGI",
+    "TOKIWAGI_MASTER",
+    "TOKIWAGIインナー議事録",
+    "基礎情報",
+    "GDocs",
+}
 
 
 def _clean_line(line: str) -> str:
@@ -359,6 +373,148 @@ def _line_looks_actionable(line: str) -> bool:
     if re.search(r"(今週|来週|今月|来月|まで|予定|必要|すべき|したい)", s):
         return True
     return False
+
+
+def _has_action_signal(text: str) -> bool:
+    s = _clean_line(text)
+    if not s:
+        return False
+    if any(a in s for a in ACTION_HINTS):
+        return True
+    if re.search(r"(まで|期限|予定|必要|依頼|確認|対応|実施|作成|調整|共有|連携|設定|修正|実装|準備|追跡|ヒアリング|検討)", s):
+        return True
+    if re.search(r"\d{4}[/-]\d{1,2}[/-]\d{1,2}", s):
+        return True
+    return False
+
+
+def _looks_noise_task_title(title: str) -> bool:
+    s = _clean_line(title)
+    if not s:
+        return True
+    if len(s) < 4:
+        return True
+    if re.fullmatch(r"[0-9０-９.,:：\- ]+", s):
+        return True
+    if any(k in s for k in STATUS_ONLY_HINTS) and not _has_action_signal(s):
+        return True
+    if re.match(r"^(現状|進捗|報告|備考|要確認|背景|所感|振り返り)([:：].*)?$", s) and not _has_action_signal(s):
+        return True
+    if s.endswith("について") and not _has_action_signal(s):
+        return True
+    return False
+
+
+def _infer_project_from_text(text: str, known_projects: List[str]) -> Optional[str]:
+    if not text:
+        return None
+    for p in sorted(set([x for x in known_projects if x and x not in GENERIC_PROJECT_NAMES]), key=len, reverse=True):
+        if p in text:
+            return p
+    return None
+
+
+def _resolve_project_name(
+    project: str,
+    title: str,
+    note: str,
+    source_title: str,
+    default_project: str,
+    known_projects: List[str],
+) -> str:
+    p = (project or "").strip()
+    if p and p not in GENERIC_PROJECT_NAMES:
+        return p
+    inferred = _infer_project_from_text(" ".join([title or "", note or "", source_title or ""]), known_projects)
+    if inferred:
+        return inferred
+    if default_project and default_project not in GENERIC_PROJECT_NAMES:
+        return default_project
+    return p or default_project or "TOKIWAGI"
+
+
+def sanitize_extracted_tasks(
+    extracted: List[Dict[str, Any]],
+    default_project: str,
+    known_projects: List[str],
+    source_title: str,
+) -> List[Dict[str, Any]]:
+    cleaned: List[Dict[str, Any]] = []
+
+    for item in extracted:
+        if not isinstance(item, dict):
+            continue
+        title = _clean_line(str(item.get("title") or ""))
+        note = (item.get("note") or "").strip()
+        due_date = (item.get("due_date") or "").strip()
+        assignee = (item.get("assignee") or "").strip() or "私"
+        project = _resolve_project_name(
+            str(item.get("project") or ""),
+            title,
+            note,
+            source_title,
+            default_project,
+            known_projects,
+        )
+
+        raw_subtasks = item.get("subtasks") or item.get("children") or []
+        subtasks: List[Dict[str, Any]] = []
+        if isinstance(raw_subtasks, list):
+            for sub in raw_subtasks:
+                if not isinstance(sub, dict):
+                    continue
+                st = _clean_line(str(sub.get("title") or ""))
+                sn = (sub.get("note") or "").strip()
+                sd = (sub.get("due_date") or "").strip()
+                sa = (sub.get("assignee") or "").strip() or assignee
+                sp = _resolve_project_name(
+                    str(sub.get("project") or project),
+                    st,
+                    sn,
+                    source_title,
+                    project,
+                    known_projects,
+                )
+                if _looks_noise_task_title(st) and not _has_action_signal(st) and not sd:
+                    continue
+                if not st:
+                    continue
+                subtasks.append({
+                    "title": st,
+                    "project": sp,
+                    "due_date": sd,
+                    "assignee": sa,
+                    "note": sn,
+                })
+
+        if subtasks:
+            parent_title = title
+            if (not parent_title) or (_looks_noise_task_title(parent_title) and not _has_action_signal(parent_title)):
+                parent_title = f"{project} 対応タスク"
+            cleaned.append({
+                "title": parent_title[:120],
+                "project": project,
+                "due_date": due_date,
+                "assignee": assignee,
+                "note": note,
+                "subtasks": subtasks[:25],
+            })
+            continue
+
+        # Leaf task
+        if not title:
+            continue
+        if _looks_noise_task_title(title) and not _has_action_signal(title) and not due_date:
+            continue
+        cleaned.append({
+            "title": title[:120],
+            "project": project,
+            "due_date": due_date,
+            "assignee": assignee,
+            "note": note,
+        })
+
+    return cleaned
 
 
 def heuristic_tasks_from_text(text: str, default_project: str, known_projects: List[str]) -> List[Dict[str, Any]]:
@@ -1249,6 +1405,12 @@ def main() -> int:
             if not extracted:
                 extracted = heuristic_tasks_from_text(text, item.get("project") or "TOKIWAGI", known_projects)
                 fallback_used = bool(extracted)
+            sanitized = sanitize_extracted_tasks(
+                extracted,
+                item.get("project") or "TOKIWAGI",
+                known_projects,
+                item.get("title", ""),
+            )
             if args.debug:
                 debug_records.append({
                     "source": "notion",
@@ -1258,10 +1420,11 @@ def main() -> int:
                     "summary_len": len(raw_summary or ""),
                     "summary_snippet": (raw_summary or "")[:800],
                     "tasks": len(extracted),
+                    "tasks_sanitized": len(sanitized),
                     "fallback": "heuristic" if fallback_used else "",
                 })
             tasks = build_neuronic_tasks(
-                extracted,
+                sanitized,
                 "notion",
                 item.get("title", ""),
                 item.get("url", ""),
@@ -1282,6 +1445,12 @@ def main() -> int:
             if not extracted:
                 extracted = heuristic_tasks_from_text(text, "GDocs", known_projects)
                 fallback_used = bool(extracted)
+            sanitized = sanitize_extracted_tasks(
+                extracted,
+                "GDocs",
+                known_projects,
+                item.get("title", ""),
+            )
             if args.debug:
                 debug_records.append({
                     "source": "gdocs",
@@ -1291,10 +1460,11 @@ def main() -> int:
                     "summary_len": len(raw_summary or ""),
                     "summary_snippet": (raw_summary or "")[:800],
                     "tasks": len(extracted),
+                    "tasks_sanitized": len(sanitized),
                     "fallback": "heuristic" if fallback_used else "",
                 })
             tasks = build_neuronic_tasks(
-                extracted,
+                sanitized,
                 "gdocs",
                 item.get("title", ""),
                 item.get("url", ""),
