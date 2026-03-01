@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -86,10 +87,22 @@ def gh_project_items(owner: str, number: int, limit: int = 500) -> List[Dict[str
 
 def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
     content = it.get("content") or {}
+    labels = it.get("labels") or []
+    phase = (it.get("phase") or "").strip()
+    if not phase:
+        for lb in labels:
+            m = re.match(r"(?i)^phase[:\-/ ]*([Pp]?[0-5])$", str(lb).strip())
+            if m:
+                raw = m.group(1).upper()
+                phase = raw if raw.startswith("P") else f"P{raw}"
+                break
+    priority = (it.get("priority") or "").strip()
     return {
         "title": content.get("title", "(no title)"),
         "url": content.get("url", ""),
         "status": (it.get("status") or "").strip(),
+        "phase": phase,
+        "priority": priority,
         "number": content.get("number"),
     }
 
@@ -122,13 +135,19 @@ def heading(text: str, level: int = 2) -> Dict[str, Any]:
     }
 
 
-def bullet(title: str, url: str, status: str) -> Dict[str, Any]:
+def bullet(title: str, url: str, status: str, phase: str, priority: str) -> Dict[str, Any]:
+    prefix_parts: List[str] = [status or "-"]
+    if phase:
+        prefix_parts.append(phase)
+    if priority:
+        prefix_parts.append(priority)
+    prefix = " / ".join(prefix_parts)
     return {
         "object": "block",
         "type": "bulleted_list_item",
         "bulleted_list_item": {
             "rich_text": [
-                {"type": "text", "text": {"content": f"[{status}] "}},
+                {"type": "text", "text": {"content": f"[{prefix}] "}},
                 {"type": "text", "text": {"content": title, "link": {"url": url}}},
             ]
         },
@@ -173,20 +192,47 @@ def append_blocks(token: str, page_id: str, children: List[Dict[str, Any]]) -> L
 
 def build_snapshot_blocks(weekly: List[Dict[str, Any]], done: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
+    phase_counts: Dict[str, int] = {}
+    for item in weekly + done:
+        ph = (item.get("phase") or "").strip()
+        if not ph:
+            continue
+        phase_counts[ph] = phase_counts.get(ph, 0) + 1
+
     blocks: List[Dict[str, Any]] = []
     blocks.append(heading("PBS Snapshot", 2))
     blocks.append(paragraph(f"auto-generated at {now}"))
     blocks.append(paragraph(f"Weekly Focus: {len(weekly)} items / Done: {len(done)} items"))
+    if phase_counts:
+        ordered = sorted(phase_counts.items(), key=lambda kv: kv[0])
+        blocks.append(paragraph("Phase counts: " + ", ".join(f"{k}={v}" for k, v in ordered)))
+    blocks.append(paragraph("表示形式: [Status / Phase / Priority] タイトル"))
     blocks.append(heading("Weekly Focus", 3))
     if not weekly:
         blocks.append(paragraph("No items."))
     for it in weekly:
-        blocks.append(bullet(it["title"], it["url"], it["status"]))
+        blocks.append(
+            bullet(
+                it["title"],
+                it["url"],
+                it["status"],
+                (it.get("phase") or ""),
+                (it.get("priority") or ""),
+            )
+        )
     blocks.append(heading("Done", 3))
     if not done:
         blocks.append(paragraph("No items."))
     for it in done:
-        blocks.append(bullet(it["title"], it["url"], it["status"]))
+        blocks.append(
+            bullet(
+                it["title"],
+                it["url"],
+                it["status"],
+                (it.get("phase") or ""),
+                (it.get("priority") or ""),
+            )
+        )
     return blocks
 
 
