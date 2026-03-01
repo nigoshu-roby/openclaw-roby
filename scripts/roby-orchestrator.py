@@ -18,12 +18,14 @@ OPENCLAW_REPO = Path("/Users/<user>/OpenClaw")
 MINUTES_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-minutes.py"
 SELF_GROWTH_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-self-growth.py"
 GMAIL_TRIAGE_SCRIPT = OPENCLAW_REPO / "skills" / "roby-mail" / "scripts" / "gmail_triage.py"
+NOTION_SYNC_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-notion-sync.py"
 
 ROUTE_QA = "qa_gemini"
 ROUTE_CODING = "coding_codex"
 ROUTE_MINUTES = "minutes_pipeline"
 ROUTE_SELF_GROWTH = "self_growth"
 ROUTE_GMAIL = "gmail_pipeline"
+ROUTE_NOTION_SYNC = "notion_sync"
 
 CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
@@ -33,6 +35,9 @@ MINUTES_HINTS = [
 ]
 GMAIL_HINTS = [
     "gmail", "メール", "受信箱", "inbox", "返信リマインド", "返信が必要", "triage", "アーカイブ", "広告メール"
+]
+NOTION_SYNC_HINTS = [
+    "notion同期", "notion sync", "notion更新", "weekly focusをnotion", "done this weekをnotion", "githubからnotion"
 ]
 GMAIL_EXEC_HINTS = [
     "整理", "仕分け", "実行", "triage", "アーカイブ", "通知", "確認して", "走らせて"
@@ -74,6 +79,8 @@ def classify_intent_heuristic(message: str) -> str:
     lower = message.lower()
     if any(k in lower for k in SELF_GROWTH_HINTS):
         return ROUTE_SELF_GROWTH
+    if any(k in lower for k in NOTION_SYNC_HINTS):
+        return ROUTE_NOTION_SYNC
     has_gmail = any(k in lower for k in GMAIL_HINTS)
     has_gmail_exec = any(k in lower for k in GMAIL_EXEC_HINTS)
     has_consult = any(k in lower for k in CONSULT_HINTS)
@@ -135,10 +142,10 @@ def run_summarize_json(prompt: str, text: str, env: Dict[str, str], max_tokens: 
 def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
-        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}."
+        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}."
     )
     parsed, raw = run_summarize_json(prompt, message, env, max_tokens="300", timeout_sec=45)
-    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL}:
+    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC}:
         parsed["raw"] = raw
         return parsed
     return None
@@ -370,6 +377,35 @@ def handle_gmail_pipeline(message: str, env: Dict[str, str], execute: bool, verb
     return result
 
 
+def handle_notion_sync(env: Dict[str, str], execute: bool, dry_run: bool = False) -> Dict[str, Any]:
+    owner = env.get("ROBY_GH_OWNER", "nigoshu-roby")
+    project_number = env.get("ROBY_GH_PROJECT_NUMBER", "1")
+    page_id = env.get("ROBY_NOTION_SYNC_PAGE_ID", "")
+    cmd = [
+        "python3", str(NOTION_SYNC_SCRIPT),
+        "--owner", owner,
+        "--project-number", str(project_number),
+    ]
+    if page_id:
+        cmd.extend(["--page-id", page_id])
+    if dry_run:
+        cmd.append("--dry-run")
+
+    result: Dict[str, Any] = {
+        "route": ROUTE_NOTION_SYNC,
+        "command": " ".join(shlex.quote(x) for x in cmd),
+        "executed": False,
+    }
+    if execute:
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        result["executed"] = True
+        result["ok"] = proc.returncode == 0
+        result["stdout"] = proc.stdout
+        result["stderr"] = proc.stderr
+        result["returncode"] = proc.returncode
+    return result
+
+
 def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
     if env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
         qa_prompt = env.get(
@@ -469,8 +505,8 @@ def handle_coding_codex(message: str, env: Dict[str, str], execute: bool) -> Dic
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", default="")
-    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL], default="auto")
-    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "none"], default="none")
+    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC], default="auto")
+    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -503,6 +539,14 @@ def main() -> int:
                     "Gmailを整理して返信リマインドとNeuronic連携を実行",
                 )
             classify_meta = {"method": "cron_task", "cron_task": "gmail_triage"}
+        elif args.cron_task == "notion_sync":
+            route = ROUTE_NOTION_SYNC
+            if not args.message:
+                args.message = env.get(
+                    "ROBY_ORCH_NOTION_SYNC_CRON_MESSAGE",
+                    "GitHub Weekly Focus/DoneをNotionへ同期",
+                )
+            classify_meta = {"method": "cron_task", "cron_task": "notion_sync"}
 
     if route == "auto":
         if not args.message.strip():
@@ -523,6 +567,10 @@ def main() -> int:
         action = handle_minutes_pipeline(args.message, env, args.execute, args.verbose)
     elif route == ROUTE_GMAIL:
         action = handle_gmail_pipeline(args.message, env, args.execute, args.verbose)
+    elif route == ROUTE_NOTION_SYNC:
+        msg_low = args.message.lower()
+        dry = ("--dry-run" in msg_low) or ("dry-run" in msg_low) or ("ドライラン" in args.message)
+        action = handle_notion_sync(env, args.execute, dry_run=dry)
     elif route == ROUTE_SELF_GROWTH:
         action = handle_self_growth(env, args.execute)
     elif route == ROUTE_CODING:

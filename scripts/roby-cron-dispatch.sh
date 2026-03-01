@@ -7,7 +7,7 @@ set -euo pipefail
 # - structured logging
 #
 # Usage:
-#   scripts/roby-cron-dispatch.sh <self_growth|minutes_sync|gmail_triage> [timeout_sec]
+#   scripts/roby-cron-dispatch.sh <self_growth|minutes_sync|gmail_triage|notion_sync> [timeout_sec]
 
 TASK="${1:-}"
 TIMEOUT_SEC="${2:-}"
@@ -26,6 +26,9 @@ case "$TASK" in
     ;;
   gmail_triage)
     DEFAULT_TIMEOUT=900
+    ;;
+  notion_sync)
+    DEFAULT_TIMEOUT=600
     ;;
   *)
     echo "Unknown task: $TASK" >&2

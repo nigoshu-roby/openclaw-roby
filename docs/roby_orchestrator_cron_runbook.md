@@ -7,6 +7,7 @@ Unify scheduled jobs into a single entrypoint:
 - `self_growth`
 - `minutes_sync`
 - `gmail_triage`
+- `notion_sync` (optional)
 
 All jobs run via:
 `scripts/roby-cron-dispatch.sh -> scripts/roby-orchestrator.py --cron-task ...`
@@ -24,6 +25,25 @@ chmod +x scripts/roby-cron-dispatch.sh scripts/install_roby_orchestrator_cron.sh
 - self_growth: `5 * * * *`
 - minutes_sync: `15 */2 * * *`
 - gmail_triage: `*/30 * * * *`
+- notion_sync: disabled (enable via env)
+
+## Enable Notion sync job
+
+Set these in `~/.openclaw/.env`:
+
+```bash
+ROBY_ORCH_ENABLE_NOTION_SYNC=1
+ROBY_NOTION_SYNC_PAGE_ID=<your notion page id>
+ROBY_GH_OWNER=nigoshu-roby
+ROBY_GH_PROJECT_NUMBER=1
+```
+
+Reinstall cron:
+
+```bash
+cd /Users/<user>/OpenClaw
+./scripts/install_roby_orchestrator_cron.sh
+```
 
 ## Custom schedule
 
@@ -40,6 +60,7 @@ GMAIL_TRIAGE_CRON="*/20 * * * *" \
 - `~/.openclaw/roby/cron_self_growth.log`
 - `~/.openclaw/roby/cron_minutes_sync.log`
 - `~/.openclaw/roby/cron_gmail_triage.log`
+- `~/.openclaw/roby/cron_notion_sync.log` (if enabled)
 
 ## Safety controls
 
@@ -54,6 +75,7 @@ cd /Users/<user>/OpenClaw
 ./scripts/roby-cron-dispatch.sh self_growth 900
 ./scripts/roby-cron-dispatch.sh minutes_sync 1800
 ./scripts/roby-cron-dispatch.sh gmail_triage 900
+./scripts/roby-cron-dispatch.sh notion_sync 600
 ```
 
 ## Uninstall
