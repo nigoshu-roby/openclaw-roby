@@ -666,6 +666,7 @@ def _run_gemini_json_prompt(
     prompt: str,
     env: Dict[str, str],
     *,
+    model: str,
     max_output_tokens: str,
     length: str,
     timeout_sec: int,
@@ -678,7 +679,7 @@ def _run_gemini_json_prompt(
         "--metrics",
         "off",
         "--model",
-        env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+        model,
         "--length",
         length,
         "--force-summary",
@@ -691,6 +692,58 @@ def _run_gemini_json_prompt(
     data = json.loads(out)
     raw = _extract_json_value(data)
     return _parse_jsonish_text(raw), raw
+
+
+def _candidate_models(env: Dict[str, str], list_key: str, fallback: List[str]) -> List[str]:
+    raw = (env.get(list_key) or "").strip()
+    models = [x.strip() for x in raw.split(",") if x.strip()]
+    if not models:
+        models = [x for x in fallback if x]
+    # dedupe while preserving order
+    uniq: List[str] = []
+    seen = set()
+    for m in models:
+        if m in seen:
+            continue
+        seen.add(m)
+        uniq.append(m)
+    return uniq
+
+
+def _run_gemini_json_prompt_with_retry(
+    text: str,
+    prompt: str,
+    env: Dict[str, str],
+    *,
+    model_list_key: str,
+    fallback_models: List[str],
+    max_output_tokens: str,
+    retry_max_output_tokens: str,
+    length: str,
+    timeout_sec: int,
+    retry_timeout_sec: int,
+) -> Tuple[Any, str]:
+    models = _candidate_models(env, model_list_key, fallback_models)
+    last_raw = ""
+    for idx, model in enumerate(models):
+        tokens = max_output_tokens if idx == 0 else retry_max_output_tokens
+        timeout = timeout_sec if idx == 0 else retry_timeout_sec
+        try:
+            parsed, raw = _run_gemini_json_prompt(
+                text,
+                prompt,
+                env,
+                model=model,
+                max_output_tokens=tokens,
+                length=length,
+                timeout_sec=timeout,
+            )
+            last_raw = raw or ""
+            if parsed is not None:
+                return parsed, raw
+        except Exception:
+            continue
+    return None, last_raw
 
 
 def review_minutes_with_gemini(
@@ -712,13 +765,20 @@ def review_minutes_with_gemini(
         "noise_notes is an array of non-action memo lines that should not become tasks. "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
     )
-    parsed, raw = _run_gemini_json_prompt(
+    parsed, raw = _run_gemini_json_prompt_with_retry(
         text,
         prompt,
         env,
+        model_list_key="MINUTES_REVIEW_MODELS",
+        fallback_models=[
+            env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+            "google/gemini-2.5-pro",
+        ],
         max_output_tokens=env.get("MINUTES_REVIEW_MAX_TOKENS", "2200"),
+        retry_max_output_tokens=env.get("MINUTES_REVIEW_RETRY_MAX_TOKENS", "3200"),
         length=env.get("MINUTES_REVIEW_LENGTH", "xl"),
         timeout_sec=int(env.get("MINUTES_REVIEW_TIMEOUT_SEC", "150")),
+        retry_timeout_sec=int(env.get("MINUTES_REVIEW_RETRY_TIMEOUT_SEC", "220")),
     )
     return (parsed if isinstance(parsed, dict) else None), raw
 
@@ -744,13 +804,20 @@ def extract_tasks_with_gemini_from_review(
         "If due date is relative, infer date using Today(JST). "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
     )
-    parsed, raw = _run_gemini_json_prompt(
+    parsed, raw = _run_gemini_json_prompt_with_retry(
         review_text,
         prompt,
         env,
+        model_list_key="MINUTES_TASKS_MODELS",
+        fallback_models=[
+            env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+            "google/gemini-2.5-pro",
+        ],
         max_output_tokens=env.get("MINUTES_TASKS_MAX_TOKENS", "2600"),
+        retry_max_output_tokens=env.get("MINUTES_TASKS_RETRY_MAX_TOKENS", "3600"),
         length=env.get("MINUTES_TASKS_LENGTH", "xxl"),
         timeout_sec=int(env.get("MINUTES_TASKS_TIMEOUT_SEC", "180")),
+        retry_timeout_sec=int(env.get("MINUTES_TASKS_RETRY_TIMEOUT_SEC", "240")),
     )
     if isinstance(parsed, list):
         return parsed, raw
@@ -786,13 +853,20 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         "Use the most appropriate project name if indicated. If not sure, use the default project. "
         "Prefer fewer high-quality actionable tasks over many vague bullets."
     )
-    parsed, raw = _run_gemini_json_prompt(
+    parsed, raw = _run_gemini_json_prompt_with_retry(
         text,
         prompt,
         env,
+        model_list_key="MINUTES_SUMMARY_MODELS",
+        fallback_models=[
+            env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+            "google/gemini-2.5-pro",
+        ],
         max_output_tokens=env.get("MINUTES_SUMMARIZE_MAX_TOKENS", "1600"),
+        retry_max_output_tokens=env.get("MINUTES_SUMMARIZE_RETRY_MAX_TOKENS", "2600"),
         length=env.get("MINUTES_SUMMARIZE_LENGTH", "xxl"),
         timeout_sec=int(env.get("MINUTES_SUMMARIZE_TIMEOUT_SEC", "120")),
+        retry_timeout_sec=int(env.get("MINUTES_SUMMARIZE_RETRY_TIMEOUT_SEC", "200")),
     )
     if isinstance(parsed, list):
         return parsed, raw
