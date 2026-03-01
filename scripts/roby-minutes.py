@@ -438,8 +438,18 @@ def sanitize_extracted_tasks(
     default_project: str,
     known_projects: List[str],
     source_title: str,
+    max_tasks_per_doc: int = 30,
 ) -> List[Dict[str, Any]]:
     cleaned: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _fingerprint(title: str, project: str, due_date: str, note: str) -> str:
+        return "|".join([
+            _clean_line(title).lower(),
+            (project or "").strip().lower(),
+            (due_date or "").strip(),
+            _clean_line((note or "")[:120]).lower(),
+        ])
 
     for item in extracted:
         if not isinstance(item, dict):
@@ -479,6 +489,10 @@ def sanitize_extracted_tasks(
                     continue
                 if not st:
                     continue
+                sub_fp = _fingerprint(st, sp, sd, sn)
+                if sub_fp in seen:
+                    continue
+                seen.add(sub_fp)
                 subtasks.append({
                     "title": st,
                     "project": sp,
@@ -506,6 +520,10 @@ def sanitize_extracted_tasks(
             continue
         if _looks_noise_task_title(title) and not _has_action_signal(title) and not due_date:
             continue
+        fp = _fingerprint(title, project, due_date, note)
+        if fp in seen:
+            continue
+        seen.add(fp)
         cleaned.append({
             "title": title[:120],
             "project": project,
@@ -514,10 +532,18 @@ def sanitize_extracted_tasks(
             "note": note,
         })
 
+    if max_tasks_per_doc > 0:
+        return cleaned[:max_tasks_per_doc]
     return cleaned
 
 
-def heuristic_tasks_from_text(text: str, default_project: str, known_projects: List[str]) -> List[Dict[str, Any]]:
+def heuristic_tasks_from_text(
+    text: str,
+    default_project: str,
+    known_projects: List[str],
+    max_projects: int = 8,
+    max_items_per_project: int = 8,
+) -> List[Dict[str, Any]]:
     groups: Dict[str, List[str]] = {}
     current_project = default_project
     for raw in text.splitlines():
@@ -536,7 +562,7 @@ def heuristic_tasks_from_text(text: str, default_project: str, known_projects: L
                 groups[current_project].append(cleaned)
 
     tasks: List[Dict[str, Any]] = []
-    for project, items in groups.items():
+    for project, items in list(groups.items())[:max_projects]:
         if not items:
             continue
         if len(items) == 1:
@@ -549,7 +575,7 @@ def heuristic_tasks_from_text(text: str, default_project: str, known_projects: L
             })
             continue
         subtasks = []
-        for item in items[:20]:
+        for item in items[:max_items_per_project]:
             subtasks.append({
                 "title": item[:120],
                 "due_date": "",
@@ -1315,6 +1341,7 @@ def main() -> int:
 
     candidates: List[Dict[str, Any]] = []
     known_projects: List[str] = []
+    heuristic_used_docs = 0
 
     # Notion structure
     if not args.skip_notion and notion_root:
@@ -1403,13 +1430,22 @@ def main() -> int:
             )
             fallback_used = False
             if not extracted:
-                extracted = heuristic_tasks_from_text(text, item.get("project") or "TOKIWAGI", known_projects)
+                extracted = heuristic_tasks_from_text(
+                    text,
+                    item.get("project") or "TOKIWAGI",
+                    known_projects,
+                    max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "8")),
+                    max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "8")),
+                )
                 fallback_used = bool(extracted)
+            if fallback_used:
+                heuristic_used_docs += 1
             sanitized = sanitize_extracted_tasks(
                 extracted,
                 item.get("project") or "TOKIWAGI",
                 known_projects,
                 item.get("title", ""),
+                max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "30")),
             )
             if args.debug:
                 debug_records.append({
@@ -1443,13 +1479,22 @@ def main() -> int:
             extracted, raw_summary = summarize_tasks(text, env, "GDocs", known_projects, today_str)
             fallback_used = False
             if not extracted:
-                extracted = heuristic_tasks_from_text(text, "GDocs", known_projects)
+                extracted = heuristic_tasks_from_text(
+                    text,
+                    "GDocs",
+                    known_projects,
+                    max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "8")),
+                    max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "8")),
+                )
                 fallback_used = bool(extracted)
+            if fallback_used:
+                heuristic_used_docs += 1
             sanitized = sanitize_extracted_tasks(
                 extracted,
                 "GDocs",
                 known_projects,
                 item.get("title", ""),
+                max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "30")),
             )
             if args.debug:
                 debug_records.append({
@@ -1476,6 +1521,7 @@ def main() -> int:
             summary["gdocs"] += 1
 
     summary["tasks"] = len(all_tasks)
+    summary["heuristic_used_docs"] = heuristic_used_docs
 
     if not args.dry_run:
         if all_tasks:
