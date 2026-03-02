@@ -743,6 +743,31 @@ def _extract_tasks_from_partial_json_text(raw: str, default_project: str) -> Lis
     return tasks
 
 
+def _task_key_for_merge(item: Dict[str, Any]) -> str:
+    return "|".join([
+        _clean_line(str(item.get("title") or "")).lower(),
+        _clean_line(str(item.get("project") or "")).lower(),
+        _clean_line(str(item.get("due_date") or "")).lower(),
+    ])
+
+
+def _merge_tasks(base: List[Dict[str, Any]], extra: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for src in (base, extra):
+        for item in src:
+            if not isinstance(item, dict):
+                continue
+            key = _task_key_for_merge(item)
+            if not key.strip("|") or key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+            if limit > 0 and len(out) >= limit:
+                return out
+    return out
+
+
 def _run_gemini_json_prompt(
     text: str,
     prompt: str,
@@ -907,13 +932,106 @@ def extract_tasks_with_gemini_from_review(
     return [], raw
 
 
+def tasks_from_review_object(
+    review: Dict[str, Any],
+    default_project: str,
+    known_projects: List[str],
+    max_per_project: int = 8,
+    max_cross_project: int = 8,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    sections = review.get("project_sections") or []
+    if isinstance(sections, list):
+        for sec in sections:
+            if not isinstance(sec, dict):
+                continue
+            project = _resolve_project_name(
+                str(sec.get("project") or ""),
+                "",
+                "",
+                "",
+                default_project,
+                known_projects,
+            )
+            candidates = sec.get("action_candidates") or []
+            if not isinstance(candidates, list):
+                continue
+            count = 0
+            for cand in candidates:
+                if count >= max_per_project:
+                    break
+                title = _clean_line(str(cand or ""))
+                if not title or _looks_noise_task_title(title):
+                    continue
+                out.append({
+                    "title": title[:120],
+                    "due_date": "",
+                    "project": project,
+                    "assignee": "私",
+                    "note": "review.project_sections.action_candidates",
+                })
+                count += 1
+
+    cross = review.get("cross_project_actions") or []
+    if isinstance(cross, list):
+        count = 0
+        for cand in cross:
+            if count >= max_cross_project:
+                break
+            title = _clean_line(str(cand or ""))
+            if not title or _looks_noise_task_title(title):
+                continue
+            out.append({
+                "title": title[:120],
+                "due_date": "",
+                "project": default_project,
+                "assignee": "私",
+                "note": "review.cross_project_actions",
+            })
+            count += 1
+    return out
+
+
+def local_recall_boost_tasks(
+    text: str,
+    default_project: str,
+    known_projects: List[str],
+    max_projects: int = 4,
+    max_items_per_project: int = 5,
+) -> List[Dict[str, Any]]:
+    boosted = heuristic_tasks_from_text(
+        text,
+        default_project,
+        known_projects,
+        max_projects=max_projects,
+        max_items_per_project=max_items_per_project,
+    )
+    for item in boosted:
+        if isinstance(item, dict):
+            note = (item.get("note") or "").strip()
+            item["note"] = (note + "\n" if note else "") + "local_recall_boost"
+    return boosted
+
+
 def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_projects: List[str], today: str) -> Tuple[List[Dict[str, Any]], str]:
     known = ", ".join(sorted(set([p for p in known_projects if p]))[:25])
     review, review_raw = review_minutes_with_gemini(text, env, default_project, known_projects, today)
     if review:
-        tasks, task_raw = extract_tasks_with_gemini_from_review(review, env, default_project, known_projects, today)
-        if tasks:
-            return tasks, json.dumps(
+        llm_tasks, task_raw = extract_tasks_with_gemini_from_review(review, env, default_project, known_projects, today)
+        review_tasks = tasks_from_review_object(
+            review,
+            default_project,
+            known_projects,
+            max_per_project=int(env.get("MINUTES_REVIEW_MAX_PER_PROJECT", "8")),
+            max_cross_project=int(env.get("MINUTES_REVIEW_MAX_CROSS_PROJECT", "8")),
+        )
+        merged_review_tasks = _merge_tasks(
+            llm_tasks,
+            review_tasks,
+            int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+        )
+        if merged_review_tasks:
+            return merged_review_tasks, json.dumps(
                 {
                     "pipeline": "gemini_two_stage",
                     "review_raw": review_raw[:1200],
@@ -953,7 +1071,9 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     )
     coerced = _coerce_task_array(parsed)
     if coerced:
-        return coerced, raw
+        tasks = coerced
+    else:
+        tasks = []
 
     compact_prompt = (
         "Extract only high-confidence actionable tasks from the meeting minutes. "
@@ -981,10 +1101,15 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     )
     coerced_compact = _coerce_task_array(parsed_compact)
     if coerced_compact:
-        return coerced_compact, raw_compact
+        tasks = _merge_tasks(
+            tasks,
+            coerced_compact,
+            int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+        )
 
     # Repair pass: when model output is non-empty but malformed JSON, try converting once.
     malformed_source = (raw_compact or raw or "").strip()
+    repair_raw = ""
     if malformed_source and (not _is_explicit_empty_tasks(malformed_source)):
         repair_prompt = (
             "Convert the following extraction output into valid JSON array only. "
@@ -1009,13 +1134,78 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         )
         coerced_repair = _coerce_task_array(parsed_repair)
         if coerced_repair:
-            return coerced_repair, raw_repair
-        partial_tasks = _extract_tasks_from_partial_json_text(raw_repair or malformed_source, default_project)
-        if partial_tasks:
-            return partial_tasks, raw_repair or malformed_source
-        return [], raw_repair or malformed_source
+            tasks = _merge_tasks(
+                tasks,
+                coerced_repair,
+                int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+            )
+        else:
+            partial_tasks = _extract_tasks_from_partial_json_text(raw_repair or malformed_source, default_project)
+            if partial_tasks:
+                tasks = _merge_tasks(
+                    tasks,
+                    partial_tasks,
+                    int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                )
+        repair_raw = raw_repair or malformed_source
 
-    return [], raw_compact or raw
+    # Recall補強: 長文なのに抽出件数が少ない場合、追加抽出を一回だけ実施
+    min_tasks_if_long = int(env.get("MINUTES_MIN_TASKS_IF_LONG", "4"))
+    long_doc_chars = int(env.get("MINUTES_LONG_DOC_CHARS", "1200"))
+    final_raw = repair_raw or raw_compact or raw
+    if len(text) >= long_doc_chars and len(tasks) < min_tasks_if_long:
+        existing_titles = ", ".join([str(x.get("title") or "") for x in tasks][:20])
+        enrich_prompt = (
+            "Extract additional high-confidence actionable tasks that are missing from current extraction. "
+            "Return ONLY JSON array. Each item: title, due_date, project, assignee, note. "
+            "Avoid duplicates against existing titles. "
+            f"Existing titles: {existing_titles}. "
+            f"Today is {today} (JST). Default project: {default_project}. Known projects: {known}."
+        )
+        parsed_enrich, raw_enrich = _run_gemini_json_prompt_with_retry(
+            text,
+            enrich_prompt,
+            env,
+            model_list_key="MINUTES_ENRICH_MODELS",
+            fallback_models=[
+                env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+                "google/gemini-2.5-pro",
+            ],
+            max_output_tokens=env.get("MINUTES_ENRICH_MAX_TOKENS", "1800"),
+            retry_max_output_tokens=env.get("MINUTES_ENRICH_RETRY_MAX_TOKENS", "2600"),
+            length=env.get("MINUTES_ENRICH_LENGTH", "m"),
+            timeout_sec=int(env.get("MINUTES_ENRICH_TIMEOUT_SEC", "120")),
+            retry_timeout_sec=int(env.get("MINUTES_ENRICH_RETRY_TIMEOUT_SEC", "180")),
+        )
+        enrich_tasks = _coerce_task_array(parsed_enrich)
+        if enrich_tasks:
+            tasks = _merge_tasks(
+                tasks,
+                enrich_tasks,
+                int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+            )
+            final_raw = raw_enrich or final_raw
+
+    # 最後のRecall補強: ローカルの保守的抽出を低上限でマージ
+    if len(text) >= long_doc_chars and len(tasks) < min_tasks_if_long:
+        boost = local_recall_boost_tasks(
+            text,
+            default_project,
+            known_projects,
+            max_projects=int(env.get("MINUTES_RECALL_BOOST_MAX_PROJECTS", "4")),
+            max_items_per_project=int(env.get("MINUTES_RECALL_BOOST_MAX_ITEMS_PER_PROJECT", "5")),
+        )
+        if boost:
+            tasks = _merge_tasks(
+                tasks,
+                boost,
+                int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+            )
+            return tasks, final_raw
+
+    if tasks:
+        return tasks, final_raw
+    return [], final_raw
 
 
 def _stable_origin_id(task: Dict[str, Any], source_id: str) -> str:
