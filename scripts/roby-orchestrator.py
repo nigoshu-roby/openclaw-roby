@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -505,6 +506,7 @@ def handle_coding_codex(message: str, env: Dict[str, str], execute: bool) -> Dic
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", default="")
+    parser.add_argument("--message-stdin", action="store_true")
     parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC], default="auto")
     parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
@@ -513,6 +515,10 @@ def main() -> int:
     args = parser.parse_args()
 
     env = load_env()
+    if args.message_stdin:
+        stdin_text = sys.stdin.read()
+        if stdin_text:
+            args.message = stdin_text.strip()
     started = time.time()
     route = args.route
     classify_meta: Dict[str, Any] = {"method": "manual" if route != "auto" else "heuristic"}
