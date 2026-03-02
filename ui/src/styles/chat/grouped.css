@@ -301,3 +301,158 @@ img.chat-avatar {
     transform: translateY(0);
   }
 }
+
+.chat-bubble--orchestrator {
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-orch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-left: 2px solid var(--border);
+}
+
+.chat-orch-card--ok {
+  border-left-color: var(--ok);
+}
+
+.chat-orch-card--warn {
+  border-left-color: var(--warn);
+}
+
+.chat-orch-card--error {
+  border-left-color: var(--danger);
+}
+
+.chat-orch-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-orch-card__icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.chat-orch-card__icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-orch-card__title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chat-orch-card__title {
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.chat-orch-card__status {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.chat-orch-card__status--ok {
+  color: var(--ok);
+  border-color: var(--ok-subtle);
+  background: var(--ok-subtle);
+}
+
+.chat-orch-card__status--warn {
+  color: var(--warn);
+  border-color: var(--warn-subtle);
+  background: var(--warn-subtle);
+}
+
+.chat-orch-card__status--error {
+  color: var(--danger);
+  border-color: var(--danger-subtle);
+  background: var(--danger-subtle);
+}
+
+.chat-orch-card__meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.chat-orch-card__meta > div {
+  min-width: 0;
+}
+
+.chat-orch-card__meta dt {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-orch-card__meta dd {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-orch-card__line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.chat-orch-card__line span {
+  color: var(--muted);
+}
+
+.chat-orch-card__line code {
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--panel-strong);
+  border-radius: 5px;
+  padding: 1px 4px;
+}
+
+.chat-orch-card__summary,
+.chat-orch-card__error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.chat-orch-card__summary {
+  color: var(--text);
+}
+
+.chat-orch-card__error {
+  color: var(--danger);
+}
+
+@media (max-width: 880px) {
+  .chat-orch-card__meta {
+    grid-template-columns: 1fr;
+  }
+}

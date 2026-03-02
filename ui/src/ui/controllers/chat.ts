@@ -45,6 +45,22 @@ type OrchestratorRunResponse = {
   attachments?: { count?: number; files?: OrchestratorAttachmentMeta[] };
 };
 
+type OrchestratorResultMeta = {
+  kind: "orchestrator_result";
+  route: string;
+  executed: boolean;
+  ok: boolean;
+  actionOk: boolean;
+  elapsedMs: number | null;
+  returnCode: number | null;
+  attachmentsCount: number;
+  command?: string;
+  summary?: string;
+  errorReason?: string;
+  stdout?: string;
+  stderr?: string;
+};
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
@@ -217,12 +233,14 @@ export async function sendChatMessage(
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    const orchestratorMeta = buildOrchestratorResultMeta(response);
     state.chatMessages = [
       ...state.chatMessages,
       {
         role: "assistant",
         content: [{ type: "text", text: formatOrchestratorResult(response) }],
         timestamp: Date.now(),
+        __openclaw: orchestratorMeta,
       },
     ];
     return runId;
@@ -261,6 +279,19 @@ function truncateForDisplay(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n...(省略)...`;
 }
 
+function firstNonEmptyText(values: Array<unknown>): string {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const normalized = value.trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
 function parseOrchestratorAction(result: Record<string, unknown> | null | undefined): {
   route: string;
   elapsedMs: number | null;
@@ -278,7 +309,7 @@ function parseOrchestratorAction(result: Record<string, unknown> | null | undefi
   return { route, elapsedMs, action };
 }
 
-function formatOrchestratorResult(response: OrchestratorRunResponse): string {
+function buildOrchestratorResultMeta(response: OrchestratorRunResponse): OrchestratorResultMeta {
   const payload = response.result;
   const { route, elapsedMs, action } = parseOrchestratorAction(payload);
   const actionRoute = typeof action.route === "string" ? action.route : route;
@@ -286,39 +317,63 @@ function formatOrchestratorResult(response: OrchestratorRunResponse): string {
   const executed = action.executed === true;
   const returnCode = typeof response.returnCode === "number" ? response.returnCode : null;
   const attachmentsCount = Number(response.attachments?.count ?? 0);
+  const command = typeof action.command === "string" ? action.command.trim() : "";
+  const output = typeof action.output === "string" ? action.output.trim() : "";
+  const stdout = firstNonEmptyText([action.stdout, response.stdout]);
+  const stderr = firstNonEmptyText([action.stderr, response.stderr]);
+  const errorReason = firstNonEmptyText([
+    action.error,
+    action.detail,
+    response.termination,
+    stderr,
+  ]);
+  const summary = firstNonEmptyText([output, stdout]);
+
+  return {
+    kind: "orchestrator_result",
+    route: actionRoute,
+    executed,
+    ok: actionOk,
+    actionOk,
+    elapsedMs,
+    returnCode,
+    attachmentsCount,
+    command: command || undefined,
+    summary: summary || undefined,
+    errorReason: errorReason || undefined,
+    stdout: stdout || undefined,
+    stderr: stderr || undefined,
+  };
+}
+
+function formatOrchestratorResult(response: OrchestratorRunResponse): string {
+  const meta = buildOrchestratorResultMeta(response);
   const lines = [
     "### オーケストレーション実行結果",
-    `- ルート: \`${actionRoute}\``,
-    `- 実行: ${executed ? "実行済み" : "未実行"}`,
-    `- 結果: ${actionOk ? "成功" : "要確認"}`,
+    `- ルート: \`${meta.route}\``,
+    `- 実行: ${meta.executed ? "実行済み" : "未実行"}`,
+    `- 結果: ${meta.actionOk ? "成功" : "要確認"}`,
   ];
-  if (elapsedMs != null) {
-    lines.push(`- 経過時間: ${Math.max(0, Math.round(elapsedMs / 1000))}秒`);
+  if (meta.elapsedMs != null) {
+    lines.push(`- 経過時間: ${Math.max(0, Math.round(meta.elapsedMs / 1000))}秒`);
   }
-  if (returnCode != null) {
-    lines.push(`- 終了コード: ${returnCode}`);
+  if (meta.returnCode != null) {
+    lines.push(`- 終了コード: ${meta.returnCode}`);
   }
-  if (attachmentsCount > 0) {
-    lines.push(`- 添付画像: ${attachmentsCount}件`);
-  }
-
-  const command = typeof action.command === "string" ? action.command.trim() : "";
-  if (command) {
-    lines.push("", "**実行コマンド**", "```bash", command, "```");
+  if (meta.attachmentsCount > 0) {
+    lines.push(`- 添付画像: ${meta.attachmentsCount}件`);
   }
 
-  const qaOutput = typeof action.output === "string" ? action.output.trim() : "";
-  if (qaOutput) {
-    lines.push("", "**回答**", truncateForDisplay(qaOutput, 6000));
+  if (meta.command) {
+    lines.push("", "**実行コマンド**", "```bash", meta.command, "```");
   }
 
-  const stdout = typeof action.stdout === "string" ? action.stdout.trim() : "";
-  const stderr = typeof action.stderr === "string" ? action.stderr.trim() : "";
-  const fallbackStdout = typeof response.stdout === "string" ? response.stdout.trim() : "";
-  const fallbackStderr = typeof response.stderr === "string" ? response.stderr.trim() : "";
+  if (meta.summary) {
+    lines.push("", "**要約**", truncateForDisplay(meta.summary, 6000));
+  }
 
-  const shownStdout = stdout || fallbackStdout;
-  const shownStderr = stderr || fallbackStderr;
+  const shownStdout = meta.stdout ?? "";
+  const shownStderr = meta.stderr ?? "";
 
   if (shownStdout) {
     lines.push("", "**標準出力**", "```text", truncateForDisplay(shownStdout, 6000), "```");
@@ -327,7 +382,7 @@ function formatOrchestratorResult(response: OrchestratorRunResponse): string {
     lines.push("", "**標準エラー**", "```text", truncateForDisplay(shownStderr, 3000), "```");
   }
 
-  if (!shownStdout && !shownStderr && !qaOutput) {
+  if (!shownStdout && !shownStderr && !meta.summary) {
     lines.push("", "詳細ログはありません。");
   }
   return lines.join("\n");

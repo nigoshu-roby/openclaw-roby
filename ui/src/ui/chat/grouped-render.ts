@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
+import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -18,6 +19,95 @@ type ImageBlock = {
   url: string;
   alt?: string;
 };
+
+type OrchestratorResultMeta = {
+  kind: "orchestrator_result";
+  route?: string;
+  executed?: boolean;
+  ok?: boolean;
+  actionOk?: boolean;
+  elapsedMs?: number | null;
+  returnCode?: number | null;
+  attachmentsCount?: number;
+  command?: string;
+  summary?: string;
+  errorReason?: string;
+  stdout?: string;
+  stderr?: string;
+};
+
+function parseOrchestratorResultMeta(message: unknown): OrchestratorResultMeta | null {
+  if (typeof message !== "object" || message === null) {
+    return null;
+  }
+  const raw = (message as Record<string, unknown>).__openclaw;
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+  const meta = raw as Record<string, unknown>;
+  if (meta.kind !== "orchestrator_result") {
+    return null;
+  }
+  return raw as OrchestratorResultMeta;
+}
+
+function formatElapsedSeconds(elapsedMs: number | null | undefined): string {
+  if (typeof elapsedMs !== "number" || Number.isNaN(elapsedMs) || elapsedMs < 0) {
+    return "-";
+  }
+  return `${Math.round(elapsedMs / 1000)}秒`;
+}
+
+function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
+  const executed = meta.executed === true;
+  const success = meta.actionOk === true;
+  const statusClass = !executed ? "warn" : success ? "ok" : "error";
+  const statusLabel = !executed ? "未実行" : success ? "成功" : "失敗";
+  const statusIcon = !executed ? icons.loader : success ? icons.check : icons.x;
+  const routeLabel = (meta.route ?? "").trim() || "-";
+  const resultSummary = (meta.summary ?? "").trim();
+  const errorReason = (meta.errorReason ?? "").trim();
+  const command = (meta.command ?? "").trim();
+  const returnCodeText = typeof meta.returnCode === "number" ? String(meta.returnCode) : "-";
+  const attachmentsCount =
+    typeof meta.attachmentsCount === "number" && meta.attachmentsCount > 0
+      ? meta.attachmentsCount
+      : 0;
+
+  return html`
+    <section class="chat-orch-card chat-orch-card--${statusClass}">
+      <header class="chat-orch-card__header">
+        <span class="chat-orch-card__icon" aria-hidden="true">${statusIcon}</span>
+        <div class="chat-orch-card__title-wrap">
+          <strong class="chat-orch-card__title">オーケストレーター</strong>
+          <span class="chat-orch-card__status chat-orch-card__status--${statusClass}">${statusLabel}</span>
+        </div>
+      </header>
+      <dl class="chat-orch-card__meta">
+        <div>
+          <dt>ルート</dt>
+          <dd>${routeLabel}</dd>
+        </div>
+        <div>
+          <dt>経過</dt>
+          <dd>${formatElapsedSeconds(meta.elapsedMs)}</dd>
+        </div>
+        <div>
+          <dt>終了コード</dt>
+          <dd>${returnCodeText}</dd>
+        </div>
+      </dl>
+      ${
+        attachmentsCount > 0
+          ? html`<p class="chat-orch-card__line">添付画像: ${attachmentsCount}件</p>`
+          : nothing
+      }
+      ${command ? html`<p class="chat-orch-card__line"><span>実行:</span> <code>${command}</code></p>` : nothing}
+      ${resultSummary ? html`<p class="chat-orch-card__summary">${resultSummary}</p>` : nothing}
+      ${!resultSummary && errorReason ? html`<p class="chat-orch-card__error">${errorReason}</p>` : nothing}
+    </section>
+  `;
+}
 
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
@@ -247,6 +337,7 @@ function renderGroupedMessage(
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
+  const orchestratorMeta = parseOrchestratorResultMeta(message);
 
   const extractedText = extractTextCached(message);
   const extractedThinking =
@@ -254,7 +345,7 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
+  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim()) && !orchestratorMeta;
 
   const bubbleClasses = [
     "chat-bubble",
@@ -271,6 +362,16 @@ function renderGroupedMessage(
 
   if (!markdown && !hasToolCards && !hasImages) {
     return nothing;
+  }
+
+  if (orchestratorMeta) {
+    return html`
+      <div class="${bubbleClasses} chat-bubble--orchestrator">
+        ${renderOrchestratorResultCard(orchestratorMeta)}
+        ${renderMessageImages(images)}
+        ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
+      </div>
+    `;
   }
 
   return html`
