@@ -686,6 +686,63 @@ def _is_explicit_empty_tasks(raw: str) -> bool:
     return False
 
 
+def _coerce_task_array(parsed: Any) -> List[Dict[str, Any]]:
+    if isinstance(parsed, list):
+        return [x for x in parsed if isinstance(x, dict)]
+    if isinstance(parsed, dict):
+        for key in ("tasks", "items", "result"):
+            val = parsed.get(key)
+            if isinstance(val, list):
+                return [x for x in val if isinstance(x, dict)]
+    return []
+
+
+def _extract_tasks_from_partial_json_text(raw: str, default_project: str) -> List[Dict[str, Any]]:
+    s = _strip_code_fence(raw)
+    if not s:
+        return []
+    title_iter = list(re.finditer(r'"title"\s*:\s*"([^"]+)"', s))
+    tasks: List[Dict[str, Any]] = []
+    for i, m in enumerate(title_iter):
+        title = (m.group(1) or "").strip()
+        if not title:
+            continue
+        start = m.start()
+        end = title_iter[i + 1].start() if i + 1 < len(title_iter) else min(len(s), start + 400)
+        chunk = s[start:end]
+
+        due = ""
+        due_m = re.search(r'"due_date"\s*:\s*(?:"([^"]*)"|null)', chunk)
+        if due_m:
+            due = (due_m.group(1) or "").strip()
+            if due and not re.match(r"^\d{4}-\d{2}-\d{2}$", due):
+                due = ""
+
+        project = default_project
+        proj_m = re.search(r'"project"\s*:\s*(?:"([^"]*)"|null)', chunk)
+        if proj_m and (proj_m.group(1) or "").strip():
+            project = (proj_m.group(1) or "").strip()
+
+        assignee = "私"
+        assignee_m = re.search(r'"assignee"\s*:\s*(?:"([^"]*)"|null)', chunk)
+        if assignee_m and (assignee_m.group(1) or "").strip():
+            assignee = (assignee_m.group(1) or "").strip()
+
+        note = ""
+        note_m = re.search(r'"note"\s*:\s*(?:"([^"]*)"|null)', chunk)
+        if note_m and (note_m.group(1) or "").strip():
+            note = (note_m.group(1) or "").strip()
+
+        tasks.append({
+            "title": title,
+            "due_date": due,
+            "project": project,
+            "assignee": assignee,
+            "note": note,
+        })
+    return tasks
+
+
 def _run_gemini_json_prompt(
     text: str,
     prompt: str,
@@ -844,8 +901,9 @@ def extract_tasks_with_gemini_from_review(
         timeout_sec=int(env.get("MINUTES_TASKS_TIMEOUT_SEC", "180")),
         retry_timeout_sec=int(env.get("MINUTES_TASKS_RETRY_TIMEOUT_SEC", "240")),
     )
-    if isinstance(parsed, list):
-        return parsed, raw
+    coerced = _coerce_task_array(parsed)
+    if coerced:
+        return coerced, raw
     return [], raw
 
 
@@ -893,8 +951,9 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         timeout_sec=int(env.get("MINUTES_SUMMARIZE_TIMEOUT_SEC", "120")),
         retry_timeout_sec=int(env.get("MINUTES_SUMMARIZE_RETRY_TIMEOUT_SEC", "200")),
     )
-    if isinstance(parsed, list):
-        return parsed, raw
+    coerced = _coerce_task_array(parsed)
+    if coerced:
+        return coerced, raw
 
     compact_prompt = (
         "Extract only high-confidence actionable tasks from the meeting minutes. "
@@ -920,8 +979,9 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         timeout_sec=int(env.get("MINUTES_COMPACT_TIMEOUT_SEC", "120")),
         retry_timeout_sec=int(env.get("MINUTES_COMPACT_RETRY_TIMEOUT_SEC", "180")),
     )
-    if isinstance(parsed_compact, list):
-        return parsed_compact, raw_compact
+    coerced_compact = _coerce_task_array(parsed_compact)
+    if coerced_compact:
+        return coerced_compact, raw_compact
 
     # Repair pass: when model output is non-empty but malformed JSON, try converting once.
     malformed_source = (raw_compact or raw or "").strip()
@@ -947,8 +1007,12 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
             timeout_sec=int(env.get("MINUTES_REPAIR_TIMEOUT_SEC", "120")),
             retry_timeout_sec=int(env.get("MINUTES_REPAIR_RETRY_TIMEOUT_SEC", "180")),
         )
-        if isinstance(parsed_repair, list):
-            return parsed_repair, raw_repair
+        coerced_repair = _coerce_task_array(parsed_repair)
+        if coerced_repair:
+            return coerced_repair, raw_repair
+        partial_tasks = _extract_tasks_from_partial_json_text(raw_repair or malformed_source, default_project)
+        if partial_tasks:
+            return partial_tasks, raw_repair or malformed_source
         return [], raw_repair or malformed_source
 
     return [], raw_compact or raw
