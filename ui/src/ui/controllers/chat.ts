@@ -61,9 +61,110 @@ type OrchestratorResultMeta = {
   stderr?: string;
 };
 
+const CHAT_LOCAL_CACHE_PREFIX = "openclaw.control.chat.cache.v1:";
+const CHAT_LOCAL_CACHE_LIMIT = 400;
+
+function chatLocalCacheKey(sessionKey: string): string {
+  return `${CHAT_LOCAL_CACHE_PREFIX}${sessionKey || "main"}`;
+}
+
+function canUseLocalStorage(): boolean {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
+function messageSignature(message: unknown): string {
+  try {
+    return JSON.stringify(message);
+  } catch {
+    return String(message);
+  }
+}
+
+function mergeChatMessages(remoteMessages: unknown[], localMessages: unknown[]): unknown[] {
+  if (!remoteMessages.length) {
+    return localMessages.slice(-CHAT_LOCAL_CACHE_LIMIT);
+  }
+  if (!localMessages.length) {
+    return remoteMessages.slice(-CHAT_LOCAL_CACHE_LIMIT);
+  }
+
+  const merged: unknown[] = [];
+  const seen = new Set<string>();
+  for (const item of [...remoteMessages, ...localMessages]) {
+    const sig = messageSignature(item);
+    if (seen.has(sig)) {
+      continue;
+    }
+    seen.add(sig);
+    merged.push(item);
+  }
+
+  const hasTimestamps = merged.some((item) => {
+    const msg = item as Record<string, unknown> | null;
+    return !!msg && typeof msg === "object" && typeof msg.timestamp === "number";
+  });
+  if (hasTimestamps) {
+    merged.sort((a, b) => {
+      const ta =
+        typeof (a as Record<string, unknown> | null)?.timestamp === "number"
+          ? Number((a as Record<string, unknown>).timestamp)
+          : 0;
+      const tb =
+        typeof (b as Record<string, unknown> | null)?.timestamp === "number"
+          ? Number((b as Record<string, unknown>).timestamp)
+          : 0;
+      return ta - tb;
+    });
+  }
+
+  return merged.slice(-CHAT_LOCAL_CACHE_LIMIT);
+}
+
+function loadLocalChatMessages(sessionKey: string): unknown[] {
+  if (!canUseLocalStorage()) {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(chatLocalCacheKey(sessionKey));
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as { messages?: unknown[] } | unknown[];
+    if (Array.isArray(parsed)) {
+      return parsed.slice(-CHAT_LOCAL_CACHE_LIMIT);
+    }
+    if (Array.isArray((parsed as { messages?: unknown[] }).messages)) {
+      return (parsed as { messages: unknown[] }).messages.slice(-CHAT_LOCAL_CACHE_LIMIT);
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function persistLocalChatMessages(state: ChatState) {
+  if (!canUseLocalStorage()) {
+    return;
+  }
+  try {
+    const payload = {
+      sessionKey: state.sessionKey,
+      updatedAt: Date.now(),
+      messages: state.chatMessages.slice(-CHAT_LOCAL_CACHE_LIMIT),
+    };
+    window.localStorage.setItem(chatLocalCacheKey(state.sessionKey), JSON.stringify(payload));
+  } catch {
+    // Ignore local persistence failures.
+  }
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
+  }
+  const localMessages = loadLocalChatMessages(state.sessionKey);
+  if (localMessages.length > 0 && state.chatMessages.length === 0) {
+    state.chatMessages = localMessages;
   }
   state.chatLoading = true;
   state.lastError = null;
@@ -75,10 +176,16 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+    const remoteMessages = Array.isArray(res.messages) ? res.messages : [];
+    const mergedMessages = mergeChatMessages(remoteMessages, localMessages);
+    state.chatMessages = mergedMessages;
+    persistLocalChatMessages(state);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
+    if (state.chatMessages.length === 0 && localMessages.length > 0) {
+      state.chatMessages = localMessages;
+    }
   } finally {
     state.chatLoading = false;
   }
@@ -180,6 +287,7 @@ export async function sendChatMessage(
       timestamp: now,
     },
   ];
+  persistLocalChatMessages(state);
 
   state.chatSending = true;
   state.lastError = null;
@@ -243,6 +351,7 @@ export async function sendChatMessage(
         __openclaw: orchestratorMeta,
       },
     ];
+    persistLocalChatMessages(state);
     return runId;
   } catch (err) {
     const error = String(err);
@@ -258,6 +367,7 @@ export async function sendChatMessage(
         timestamp: Date.now(),
       },
     ];
+    persistLocalChatMessages(state);
     return null;
   } finally {
     state.chatSending = false;
@@ -419,6 +529,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage) {
         state.chatMessages = [...state.chatMessages, finalMessage];
+        persistLocalChatMessages(state);
         return null;
       }
       return "final";
@@ -438,6 +549,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage) {
       state.chatMessages = [...state.chatMessages, finalMessage];
+      persistLocalChatMessages(state);
     }
     state.chatStream = null;
     state.chatRunId = null;
@@ -446,6 +558,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
+      persistLocalChatMessages(state);
     } else {
       const streamedText = state.chatStream ?? "";
       if (streamedText.trim()) {
@@ -457,6 +570,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
             timestamp: Date.now(),
           },
         ];
+        persistLocalChatMessages(state);
       }
     }
     state.chatStream = null;
