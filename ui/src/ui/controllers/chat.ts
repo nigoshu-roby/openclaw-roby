@@ -263,34 +263,6 @@ function prepareOrchestratorAttachments(attachments: ChatAttachment[]): Array<{
   });
 }
 
-function isLikelyFollowUpMessage(message: string): boolean {
-  const normalized = message.trim();
-  if (!normalized) {
-    return false;
-  }
-  const lower = normalized.toLowerCase();
-  const followUpHints = [
-    "もっと",
-    "詳しく",
-    "それ",
-    "その件",
-    "この件",
-    "さっき",
-    "前の",
-    "続き",
-    "補足",
-    "同じ",
-    "again",
-    "more",
-    "details",
-    "continue",
-  ];
-  if (followUpHints.some((hint) => lower.includes(hint) || normalized.includes(hint))) {
-    return true;
-  }
-  return normalized.length <= 18;
-}
-
 function buildOrchestratorContext(
   messages: unknown[],
   maxMessages = ORCHESTRATOR_CONTEXT_MAX_MESSAGES,
@@ -326,7 +298,7 @@ function buildOrchestratorContext(
 
 function buildOrchestratorMessage(message: string, history: unknown[]): string {
   const trimmed = message.trim();
-  if (!isLikelyFollowUpMessage(trimmed)) {
+  if (!trimmed) {
     return trimmed;
   }
   const contextText = buildOrchestratorContext(history);
@@ -340,7 +312,7 @@ function buildOrchestratorMessage(message: string, history: unknown[]): string {
     "[ユーザーの最新依頼]",
     trimmed,
     "",
-    "上記コンテキストを踏まえて回答してください。",
+    "上記コンテキストを前提に回答してください。不要な文脈は無視して構いません。",
   ].join("\n");
 }
 
