@@ -57,6 +57,10 @@ FEATURE_LIST_HINTS = [
     "機能", "一覧", "リスト", "何ができる", "現状", "実装済み", "対応済み"
 ]
 
+IMAGE_TEXT_HINTS = [
+    "画像", "添付", "ocr", "文字", "テキスト", "読み取", "読取", "抽出", "写っている内容"
+]
+
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
@@ -318,6 +322,160 @@ def shell_run(cmd: str, env: Dict[str, str], cwd: Optional[Path] = None, timeout
         return {"ok": False, "error": str(e)}
 
 
+def parse_attachment_files(env: Dict[str, str]) -> List[Dict[str, Any]]:
+    raw = (env.get("ROBY_ORCH_ATTACHMENT_FILES") or "").strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    files: List[Dict[str, Any]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        p = str(item.get("path") or "").strip()
+        if not p:
+            continue
+        files.append(
+            {
+                "index": int(item.get("index") or (len(files) + 1)),
+                "path": p,
+                "mimeType": str(item.get("mimeType") or "").strip(),
+                "bytes": int(item.get("bytes") or 0),
+            }
+        )
+    return files
+
+
+def is_image_text_request(message: str) -> bool:
+    lower = (message or "").lower()
+    return any(token in lower or token in message for token in IMAGE_TEXT_HINTS)
+
+
+def run_macos_ocr(image_path: str, timeout_sec: int = 45) -> Dict[str, Any]:
+    swift_script = r"""
+import Foundation
+import Vision
+import AppKit
+
+func printJson(_ obj: [String: Any]) {
+  guard let data = try? JSONSerialization.data(withJSONObject: obj, options: []),
+        let s = String(data: data, encoding: .utf8) else {
+    print("{\"ok\":false,\"error\":\"json_encode_failed\"}")
+    return
+  }
+  print(s)
+}
+
+let args = CommandLine.arguments
+guard args.count >= 2 else {
+  printJson(["ok": false, "error": "missing_path"])
+  exit(0)
+}
+let path = args[1]
+let url = URL(fileURLWithPath: path)
+guard let image = NSImage(contentsOf: url) else {
+  printJson(["ok": false, "error": "image_load_failed"])
+  exit(0)
+}
+guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+  printJson(["ok": false, "error": "cgimage_failed"])
+  exit(0)
+}
+
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.usesLanguageCorrection = true
+request.recognitionLanguages = ["ja-JP", "en-US"]
+
+let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+do {
+  try handler.perform([request])
+  let observations = (request.results as? [VNRecognizedTextObservation]) ?? []
+  var lines: [String] = []
+  for ob in observations {
+    if let best = ob.topCandidates(1).first {
+      let t = best.string.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !t.isEmpty {
+        lines.append(t)
+      }
+    }
+  }
+  let text = lines.joined(separator: "\n")
+  printJson([
+    "ok": true,
+    "text": text,
+    "line_count": lines.count
+  ])
+} catch {
+  printJson(["ok": false, "error": "vision_failed: \(error.localizedDescription)"])
+}
+"""
+    try:
+        proc = subprocess.run(
+            ["swift", "-", image_path],
+            input=swift_script.encode("utf-8"),
+            capture_output=True,
+            timeout=timeout_sec,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"swift_runtime_failed: {e}"}
+
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": (proc.stderr.decode("utf-8", "ignore") or "").strip() or f"swift_exit_{proc.returncode}",
+        }
+
+    stdout = (proc.stdout.decode("utf-8", "ignore") or "").strip()
+    parsed = parse_jsonish(stdout)
+    if isinstance(parsed, dict):
+        return parsed
+    return {"ok": False, "error": "swift_output_parse_failed"}
+
+
+def read_attachment_texts(env: Dict[str, str]) -> List[Dict[str, Any]]:
+    files = parse_attachment_files(env)
+    outputs: List[Dict[str, Any]] = []
+    for item in files:
+        path = item.get("path")
+        mime = (item.get("mimeType") or "").lower()
+        if not path or (mime and not mime.startswith("image/")):
+            continue
+        ocr = run_macos_ocr(str(path), timeout_sec=int(env.get("ROBY_OCR_TIMEOUT_SEC", "45")))
+        text = str(ocr.get("text") or "").strip() if isinstance(ocr, dict) else ""
+        outputs.append(
+            {
+                "index": item.get("index"),
+                "path": path,
+                "mimeType": item.get("mimeType"),
+                "bytes": item.get("bytes"),
+                "ok": bool(isinstance(ocr, dict) and ocr.get("ok")),
+                "text": text,
+                "error": str(ocr.get("error") or "").strip() if isinstance(ocr, dict) else "",
+                "line_count": int(ocr.get("line_count") or 0) if isinstance(ocr, dict) else 0,
+            }
+        )
+    return outputs
+
+
+def format_attachment_text_result(ocr_items: List[Dict[str, Any]]) -> str:
+    lines = ["添付画像から抽出したテキストです。"]
+    for item in ocr_items:
+        idx = item.get("index")
+        if item.get("ok") and item.get("text"):
+            lines.append(f"\n## 画像{idx}")
+            lines.append(str(item["text"]))
+        else:
+            err = str(item.get("error") or "テキストを抽出できませんでした")
+            lines.append(f"\n## 画像{idx}")
+            lines.append(f"(抽出失敗: {err})")
+    return "\n".join(lines).strip()
+
+
 def git_status_short(repo: Path, env: Dict[str, str]) -> str:
     res = shell_run("git status --short", env, cwd=repo, timeout=30)
     if not res.get("ok"):
@@ -504,6 +662,39 @@ def handle_notion_sync(env: Dict[str, str], execute: bool, dry_run: bool = False
 
 
 def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+    attachment_files = parse_attachment_files(env)
+    has_attachments = len(attachment_files) > 0
+    ocr_items: List[Dict[str, Any]] = []
+    if has_attachments and is_image_text_request(message):
+        ocr_items = read_attachment_texts(env)
+        success_items = [item for item in ocr_items if item.get("ok") and item.get("text")]
+        if success_items:
+            return {
+                "route": ROUTE_QA,
+                "executed": True,
+                "ok": True,
+                "mode": "local_ocr",
+                "attachments_count": len(attachment_files),
+                "ocr_success_count": len(success_items),
+                "output": format_attachment_text_result(ocr_items),
+            }
+        return {
+            "route": ROUTE_QA,
+            "executed": True,
+            "ok": True,
+            "mode": "local_ocr_failed",
+            "attachments_count": len(attachment_files),
+            "ocr_success_count": 0,
+            "output": (
+                "添付画像の文字抽出を試しましたが、テキストを取得できませんでした。\n"
+                "- 画像が小さい/ぼけている\n"
+                "- コントラストが低い\n"
+                "- 手書き/装飾フォント\n"
+                "が主な原因です。解像度の高い画像を再送してください。"
+            ),
+            "ocr_results": ocr_items,
+        }
+
     if is_greeting_request(message):
         return {
             "route": ROUTE_QA,
@@ -523,9 +714,24 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
                 "コーディング実装が必要な相談の場合は、この段階では要件整理と進め方に留めてください。"
             ),
         )
+        qa_input = message
+        if has_attachments:
+            if not ocr_items:
+                ocr_items = read_attachment_texts(env)
+            if ocr_items:
+                ocr_lines = ["\n[添付画像OCR結果]"]
+                for item in ocr_items:
+                    idx = item.get("index")
+                    if item.get("ok") and item.get("text"):
+                        text = str(item.get("text", ""))
+                        ocr_lines.append(f"画像{idx}:")
+                        ocr_lines.append(text[:6000])
+                    else:
+                        ocr_lines.append(f"画像{idx}: 抽出失敗 ({item.get('error') or 'unknown'})")
+                qa_input = f"{message}\n" + "\n".join(ocr_lines)
         parsed, raw = run_summarize_json(
             qa_prompt,
-            message,
+            qa_input,
             env,
             max_tokens=env.get("ROBY_ORCH_QA_MAX_TOKENS", "1400"),
             timeout_sec=int(env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")),
