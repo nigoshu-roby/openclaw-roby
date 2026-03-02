@@ -165,6 +165,20 @@ def is_feature_list_request(message: str) -> bool:
     return sum(1 for k in FEATURE_LIST_HINTS if k in lower or k in message) >= 2
 
 
+def is_greeting_request(message: str) -> bool:
+    normalized = (message or "").strip().lower()
+    greeting_tokens = [
+        "こんにちは", "こんばんは", "おはよう", "やあ", "hello", "hi", "hey"
+    ]
+    return normalized in greeting_tokens
+
+
+def contains_japanese(text: str) -> bool:
+    if not text:
+        return False
+    return re.search(r"[ぁ-んァ-ヶ一-龥]", text) is not None
+
+
 def is_low_detail_output(text: str) -> bool:
     normalized = (text or "").strip()
     if not normalized:
@@ -175,6 +189,35 @@ def is_low_detail_output(text: str) -> bool:
     if len(lines) <= 2 and any("目的" in ln or "案" in ln for ln in lines):
         return True
     return False
+
+
+def is_broken_qa_output(text: str, message: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return True
+    low = normalized.lower()
+    bad_markers = [
+        "extracted content length",
+        "hard limit",
+        "let's look at the prompt",
+        "system constraint",
+    ]
+    if any(marker in low for marker in bad_markers):
+        return True
+    if contains_japanese(message) and not contains_japanese(normalized):
+        return True
+    return False
+
+
+def build_greeting_response() -> str:
+    return (
+        "こんにちは。対応できます。\n"
+        "次のどれを進めますか？\n"
+        "1. 相談/設計の回答（qa_gemini）\n"
+        "2. 実装の着手（coding_codex）\n"
+        "3. 議事録→タスク抽出（minutes_pipeline）\n"
+        "4. Gmail仕分け実行（gmail_pipeline）"
+    )
 
 
 def build_local_capability_summary() -> str:
@@ -461,6 +504,14 @@ def handle_notion_sync(env: Dict[str, str], execute: bool, dry_run: bool = False
 
 
 def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+    if is_greeting_request(message):
+        return {
+            "route": ROUTE_QA,
+            "executed": True,
+            "ok": True,
+            "mode": "local_greeting",
+            "output": build_greeting_response(),
+        }
     if env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
         qa_prompt = env.get(
             "ROBY_ORCH_GEMINI_QA_PROMPT",
@@ -484,6 +535,14 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
             text = json.dumps(parsed, ensure_ascii=False)
         if is_feature_list_request(message) and is_low_detail_output(text):
             text = build_local_capability_summary()
+        elif is_broken_qa_output(text, message):
+            text = (
+                "回答品質が不安定だったため、再質問を推奨します。\n"
+                "必要なら以下の形式で指示してください。\n"
+                "- 目的:\n"
+                "- 前提:\n"
+                "- 期待する出力:"
+            )
         return {
             "route": ROUTE_QA,
             "executed": True,
