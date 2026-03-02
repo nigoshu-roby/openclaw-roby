@@ -277,8 +277,8 @@ export function renderChat(props: ChatProps) {
       ? "メッセージまたは画像を追加してください"
       : "";
   const composeHint = hasAttachments
-    ? `画像 ${attachmentCount} 件を添付中。⌘+Enterで送信できます。`
-    : "画像は貼り付け/ドラッグ&ドロップ/📎で添付できます。";
+    ? `画像 ${attachmentCount} 件を添付中（最大8件 / 1件8MB）。⌘+Enterで送信できます。`
+    : "画像は貼り付け/ドラッグ&ドロップ/📎で添付できます（最大8件 / 1件8MB）。";
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "メッセージを追加するか、画像を貼り付け/ドラッグしてください…"

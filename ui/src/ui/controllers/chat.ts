@@ -61,6 +61,9 @@ type OrchestratorResultMeta = {
   stderr?: string;
 };
 
+const MAX_ORCHESTRATOR_ATTACHMENTS = 8;
+const MAX_ORCHESTRATOR_ATTACHMENT_BYTES = 8_000_000;
+
 const CHAT_LOCAL_CACHE_PREFIX = "openclaw.control.chat.cache.v1:";
 const CHAT_LOCAL_CACHE_LIMIT = 400;
 
@@ -199,6 +202,65 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   return { mimeType: match[1], content: match[2] };
 }
 
+function estimateBase64DecodedBytes(content: string): number | null {
+  const normalized = content.replace(/\s+/g, "");
+  if (!normalized) {
+    return 0;
+  }
+  if (normalized.length % 4 !== 0) {
+    return null;
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+    return null;
+  }
+  let padding = 0;
+  if (normalized.endsWith("==")) {
+    padding = 2;
+  } else if (normalized.endsWith("=")) {
+    padding = 1;
+  }
+  const bytes = (normalized.length / 4) * 3 - padding;
+  return Number.isFinite(bytes) && bytes >= 0 ? bytes : null;
+}
+
+function prepareOrchestratorAttachments(attachments: ChatAttachment[]): Array<{
+  type: "image";
+  mimeType: string;
+  content: string;
+}> {
+  if (attachments.length > MAX_ORCHESTRATOR_ATTACHMENTS) {
+    throw new Error(`添付画像は最大${MAX_ORCHESTRATOR_ATTACHMENTS}件までです。`);
+  }
+
+  return attachments.map((att, index) => {
+    const itemIndex = index + 1;
+    if (!att.mimeType.startsWith("image/")) {
+      throw new Error(`添付画像${itemIndex}の形式が不正です（image/*のみ対応）。`);
+    }
+    const parsed = dataUrlToBase64(att.dataUrl);
+    if (!parsed) {
+      throw new Error(`添付画像${itemIndex}のデータ形式が不正です。`);
+    }
+    const sizeBytes = estimateBase64DecodedBytes(parsed.content);
+    if (sizeBytes == null) {
+      throw new Error(`添付画像${itemIndex}のデータを解析できませんでした。`);
+    }
+    if (sizeBytes <= 0) {
+      throw new Error(`添付画像${itemIndex}が空です。`);
+    }
+    if (sizeBytes > MAX_ORCHESTRATOR_ATTACHMENT_BYTES) {
+      throw new Error(
+        `添付画像${itemIndex}が大きすぎます（最大 ${Math.floor(MAX_ORCHESTRATOR_ATTACHMENT_BYTES / 1_000_000)}MB）。`,
+      );
+    }
+    return {
+      type: "image" as const,
+      mimeType: parsed.mimeType,
+      content: parsed.content,
+    };
+  });
+}
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -262,64 +324,52 @@ export async function sendChatMessage(
     return null;
   }
 
-  const now = Date.now();
-
-  // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
-  if (msg) {
-    contentBlocks.push({ type: "text", text: msg });
-  }
-  // Add image previews to the message for display
-  if (hasAttachments) {
-    for (const att of attachments) {
-      contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
-      });
-    }
-  }
-
-  state.chatMessages = [
-    ...state.chatMessages,
-    {
-      role: "user",
-      content: contentBlocks,
-      timestamp: now,
-    },
-  ];
-  persistLocalChatMessages(state);
-
   state.chatSending = true;
   state.lastError = null;
-  const runId = generateUUID();
-  state.chatRunId = runId;
-  state.chatStream = "";
-  state.chatStreamStartedAt = now;
-
-  // Convert attachments to API format
-  const apiAttachments = hasAttachments
-    ? attachments
-        .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: "image",
-            mimeType: parsed.mimeType,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
-
-  const nativeChatMode = shouldUseNativeChatMode(msg, hasAttachments);
-  if (!nativeChatMode) {
-    // Native chat runId is not created for orchestrator RPC calls.
-    state.chatRunId = null;
-  }
+  state.chatRunId = null;
+  state.chatStream = null;
+  state.chatStreamStartedAt = null;
 
   try {
+    const apiAttachments = hasAttachments
+      ? prepareOrchestratorAttachments(attachments ?? [])
+      : undefined;
+    const now = Date.now();
+
+    // Build user message content blocks
+    const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+    if (msg) {
+      contentBlocks.push({ type: "text", text: msg });
+    }
+    if (hasAttachments) {
+      for (const att of attachments ?? []) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+      }
+    }
+
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "user",
+        content: contentBlocks,
+        timestamp: now,
+      },
+    ];
+    persistLocalChatMessages(state);
+
+    const runId = generateUUID();
+    state.chatRunId = runId;
+    state.chatStream = "";
+    state.chatStreamStartedAt = now;
+    const nativeChatMode = shouldUseNativeChatMode(msg, hasAttachments);
+    if (!nativeChatMode) {
+      // Native chat runId is not created for orchestrator RPC calls.
+      state.chatRunId = null;
+    }
+
     if (nativeChatMode) {
       await state.client.request("chat.send", {
         sessionKey: state.sessionKey,
