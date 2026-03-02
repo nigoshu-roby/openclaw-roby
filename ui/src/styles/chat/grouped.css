@@ -421,6 +421,8 @@ img.chat-avatar {
   font-size: 12px;
   color: var(--muted);
   line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-orch-card__line span {
@@ -433,6 +435,8 @@ img.chat-avatar {
   background: var(--panel-strong);
   border-radius: 5px;
   padding: 1px 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .chat-orch-card__summary,
@@ -449,6 +453,29 @@ img.chat-avatar {
 
 .chat-orch-card__error {
   color: var(--danger);
+}
+
+.chat-orch-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.chat-orch-card__section-title {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.chat-orch-card__log-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 @media (max-width: 880px) {

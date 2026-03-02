@@ -68,11 +68,16 @@ function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
   const resultSummary = (meta.summary ?? "").trim();
   const errorReason = (meta.errorReason ?? "").trim();
   const command = (meta.command ?? "").trim();
+  const stdout = (meta.stdout ?? "").trim();
+  const stderr = (meta.stderr ?? "").trim();
   const returnCodeText = typeof meta.returnCode === "number" ? String(meta.returnCode) : "-";
   const attachmentsCount =
     typeof meta.attachmentsCount === "number" && meta.attachmentsCount > 0
       ? meta.attachmentsCount
       : 0;
+  const hasExecutionLog = Boolean(command || stdout || stderr || returnCodeText !== "-");
+  const conclusionText =
+    resultSummary || (success ? "実行が完了しました。" : "実行結果を確認してください。");
 
   return html`
     <section class="chat-orch-card chat-orch-card--${statusClass}">
@@ -102,11 +107,35 @@ function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
           ? html`<p class="chat-orch-card__line">添付画像: ${attachmentsCount}件</p>`
           : nothing
       }
-      ${command ? html`<p class="chat-orch-card__line"><span>実行:</span> <code>${command}</code></p>` : nothing}
-      ${resultSummary ? html`<p class="chat-orch-card__summary">${resultSummary}</p>` : nothing}
+
+      <section class="chat-orch-card__section">
+        <h4 class="chat-orch-card__section-title">結論</h4>
+        <p class="chat-orch-card__summary">${conclusionText}</p>
+      </section>
+
       ${
-        statusClass === "error" && errorReason
-          ? html`<p class="chat-orch-card__error">${errorReason}</p>`
+        hasExecutionLog
+          ? html`
+              <section class="chat-orch-card__section">
+                <h4 class="chat-orch-card__section-title">実行ログ</h4>
+                <div class="chat-orch-card__log-grid">
+                  ${command ? html`<p class="chat-orch-card__line"><span>実行:</span> <code>${command}</code></p>` : nothing}
+                  ${stdout ? html`<p class="chat-orch-card__line"><span>標準出力:</span> ${stdout}</p>` : nothing}
+                  ${stderr ? html`<p class="chat-orch-card__line"><span>標準エラー:</span> ${stderr}</p>` : nothing}
+                </div>
+              </section>
+            `
+          : nothing
+      }
+
+      ${
+        errorReason
+          ? html`
+              <section class="chat-orch-card__section">
+                <h4 class="chat-orch-card__section-title">エラー理由</h4>
+                <p class="chat-orch-card__error">${errorReason}</p>
+              </section>
+            `
           : nothing
       }
     </section>
