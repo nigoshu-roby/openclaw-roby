@@ -104,7 +104,11 @@ function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
       }
       ${command ? html`<p class="chat-orch-card__line"><span>実行:</span> <code>${command}</code></p>` : nothing}
       ${resultSummary ? html`<p class="chat-orch-card__summary">${resultSummary}</p>` : nothing}
-      ${!resultSummary && errorReason ? html`<p class="chat-orch-card__error">${errorReason}</p>` : nothing}
+      ${
+        statusClass === "error" && errorReason
+          ? html`<p class="chat-orch-card__error">${errorReason}</p>`
+          : nothing
+      }
     </section>
   `;
 }

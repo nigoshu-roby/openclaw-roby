@@ -313,7 +313,7 @@ export async function sendChatMessage(
         .filter((a): a is NonNullable<typeof a> => a !== null)
     : undefined;
 
-  const nativeChatMode = shouldUseNativeChatMode(msg);
+  const nativeChatMode = shouldUseNativeChatMode(msg, hasAttachments);
   if (!nativeChatMode) {
     // Native chat runId is not created for orchestrator RPC calls.
     state.chatRunId = null;
@@ -374,7 +374,12 @@ export async function sendChatMessage(
   }
 }
 
-function shouldUseNativeChatMode(message: string): boolean {
+function shouldUseNativeChatMode(message: string, hasAttachments = false): boolean {
+  // Image/file attachments should go through orchestrator path so the
+  // pipeline can inspect files consistently.
+  if (hasAttachments) {
+    return false;
+  }
   const trimmed = message.trim();
   if (!trimmed) {
     return false;
