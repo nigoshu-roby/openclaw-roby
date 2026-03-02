@@ -53,6 +53,10 @@ CONSULT_HINTS = [
     "どう", "改善", "方針", "相談", "設計", "考え", "おすすめ", "べき", "案"
 ]
 
+FEATURE_LIST_HINTS = [
+    "機能", "一覧", "リスト", "何ができる", "現状", "実装済み", "対応済み"
+]
+
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
@@ -150,6 +154,55 @@ def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[s
         parsed["raw"] = raw
         return parsed
     return None
+
+
+def is_feature_list_request(message: str) -> bool:
+    lower = message.lower()
+    if "機能" in message and ("一覧" in message or "リスト" in message):
+        return True
+    if "何ができる" in message or "実装済み" in message or "現状" in message:
+        return True
+    return sum(1 for k in FEATURE_LIST_HINTS if k in lower or k in message) >= 2
+
+
+def is_low_detail_output(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return True
+    lines = [ln.strip() for ln in normalized.splitlines() if ln.strip()]
+    if len(normalized) < 80:
+        return True
+    if len(lines) <= 2 and any("目的" in ln or "案" in ln for ln in lines):
+        return True
+    return False
+
+
+def build_local_capability_summary() -> str:
+    checks = [
+        ("UIチャット + オーケストレーター表示", OPENCLAW_REPO / "ui" / "src" / "ui" / "controllers" / "chat.ts"),
+        ("オーケストレーター本体", OPENCLAW_REPO / "scripts" / "roby-orchestrator.py"),
+        ("議事録処理（Notion/GDocs）", MINUTES_SCRIPT),
+        ("Gmail仕分け", GMAIL_TRIAGE_SCRIPT),
+        ("自己成長ジョブ", SELF_GROWTH_SCRIPT),
+        ("GitHub→Notion同期", NOTION_SYNC_SCRIPT),
+    ]
+    lines = ["現在の主要機能一覧（ローカル検出）"]
+    for label, path in checks:
+        status = "有効" if path.exists() else "未検出"
+        lines.append(f"- {label}: {status}")
+    lines.extend(
+        [
+            "",
+            "利用可能ルート",
+            f"- {ROUTE_QA}",
+            f"- {ROUTE_CODING}",
+            f"- {ROUTE_MINUTES}",
+            f"- {ROUTE_GMAIL}",
+            f"- {ROUTE_SELF_GROWTH}",
+            f"- {ROUTE_NOTION_SYNC}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def build_coding_requirements(message: str, env: Dict[str, str]) -> Dict[str, Any]:
@@ -429,6 +482,8 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
         text = raw
         if isinstance(parsed, (dict, list)):
             text = json.dumps(parsed, ensure_ascii=False)
+        if is_feature_list_request(message) and is_low_detail_output(text):
+            text = build_local_capability_summary()
         return {
             "route": ROUTE_QA,
             "executed": True,
