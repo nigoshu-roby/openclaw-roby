@@ -162,13 +162,63 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
+const IMAGE_EXTENSION_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  bmp: "image/bmp",
+  heic: "image/heic",
+  heif: "image/heif",
+  tiff: "image/tiff",
+  tif: "image/tiff",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+};
+
+function inferImageMimeType(file: File): string | null {
+  const type = (file.type || "").trim().toLowerCase();
+  if (type.startsWith("image/")) {
+    return type;
+  }
+  const name = (file.name || "").trim().toLowerCase();
+  const match = /\.([a-z0-9]+)$/.exec(name);
+  if (!match) {
+    return null;
+  }
+  return IMAGE_EXTENSION_MIME[match[1]] ?? null;
+}
+
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => resolve(reader.result as string));
     reader.addEventListener("error", () => reject(reader.error));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
+}
+
+function collectDroppedFiles(dataTransfer: DataTransfer | null): File[] {
+  if (!dataTransfer) {
+    return [];
+  }
+  const direct = Array.from(dataTransfer.files ?? []);
+  if (direct.length > 0) {
+    return direct;
+  }
+  const fromItems: File[] = [];
+  const items = Array.from(dataTransfer.items ?? []);
+  for (const item of items) {
+    if (item.kind !== "file") {
+      continue;
+    }
+    const f = item.getAsFile();
+    if (f) {
+      fromItems.push(f);
+    }
+  }
+  return fromItems;
 }
 
 async function addImageAttachments(files: File[], props: ChatProps) {
@@ -176,18 +226,23 @@ async function addImageAttachments(files: File[], props: ChatProps) {
     return;
   }
 
-  const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-  if (imageFiles.length === 0) {
+  const validFiles = files
+    .map((file) => ({ file, mimeType: inferImageMimeType(file) }))
+    .filter((item): item is { file: File; mimeType: string } => Boolean(item.mimeType));
+  if (validFiles.length === 0) {
     return;
   }
 
   const current = props.attachments ?? [];
   const added = await Promise.all(
-    imageFiles.map(async (file) => ({
-      id: generateAttachmentId(),
-      dataUrl: await readFileAsDataUrl(file),
-      mimeType: file.type,
-    })),
+    validFiles.map(async ({ file, mimeType }) => {
+      const blob = file.type ? file : file.slice(0, file.size, mimeType);
+      return {
+        id: generateAttachmentId(),
+        dataUrl: await readBlobAsDataUrl(blob),
+        mimeType,
+      };
+    }),
   );
   props.onAttachmentsChange([...current, ...added]);
 }
@@ -472,7 +527,7 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           const current = e.currentTarget as HTMLElement;
           current.classList.remove("chat-compose--dragover");
-          const files = Array.from(e.dataTransfer?.files ?? []);
+          const files = collectDroppedFiles(e.dataTransfer ?? null);
           void addImageAttachments(files, props);
         }}
       >
