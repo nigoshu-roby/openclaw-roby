@@ -63,6 +63,8 @@ type OrchestratorResultMeta = {
 
 const MAX_ORCHESTRATOR_ATTACHMENTS = 8;
 const MAX_ORCHESTRATOR_ATTACHMENT_BYTES = 8_000_000;
+const ORCHESTRATOR_CONTEXT_MAX_MESSAGES = 8;
+const ORCHESTRATOR_CONTEXT_MAX_CHARS = 2400;
 
 const CHAT_LOCAL_CACHE_PREFIX = "openclaw.control.chat.cache.v1:";
 const CHAT_LOCAL_CACHE_LIMIT = 400;
@@ -261,6 +263,87 @@ function prepareOrchestratorAttachments(attachments: ChatAttachment[]): Array<{
   });
 }
 
+function isLikelyFollowUpMessage(message: string): boolean {
+  const normalized = message.trim();
+  if (!normalized) {
+    return false;
+  }
+  const lower = normalized.toLowerCase();
+  const followUpHints = [
+    "もっと",
+    "詳しく",
+    "それ",
+    "その件",
+    "この件",
+    "さっき",
+    "前の",
+    "続き",
+    "補足",
+    "同じ",
+    "again",
+    "more",
+    "details",
+    "continue",
+  ];
+  if (followUpHints.some((hint) => lower.includes(hint) || normalized.includes(hint))) {
+    return true;
+  }
+  return normalized.length <= 18;
+}
+
+function buildOrchestratorContext(
+  messages: unknown[],
+  maxMessages = ORCHESTRATOR_CONTEXT_MAX_MESSAGES,
+  maxChars = ORCHESTRATOR_CONTEXT_MAX_CHARS,
+): string {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "";
+  }
+  const tail = messages.slice(-Math.max(1, maxMessages));
+  const lines: string[] = [];
+  for (const entry of tail) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const row = entry as Record<string, unknown>;
+    const roleRaw = typeof row.role === "string" ? row.role : "assistant";
+    const role = roleRaw === "user" ? "あなた" : "Roby";
+    const text = (extractText(row) || "").replace(/\s+/g, " ").trim();
+    if (!text) {
+      continue;
+    }
+    lines.push(`${role}: ${text}`);
+  }
+  if (lines.length === 0) {
+    return "";
+  }
+  const joined = lines.join("\n");
+  if (joined.length <= maxChars) {
+    return joined;
+  }
+  return joined.slice(Math.max(0, joined.length - maxChars));
+}
+
+function buildOrchestratorMessage(message: string, history: unknown[]): string {
+  const trimmed = message.trim();
+  if (!isLikelyFollowUpMessage(trimmed)) {
+    return trimmed;
+  }
+  const contextText = buildOrchestratorContext(history);
+  if (!contextText) {
+    return trimmed;
+  }
+  return [
+    "[直近会話コンテキスト]",
+    contextText,
+    "",
+    "[ユーザーの最新依頼]",
+    trimmed,
+    "",
+    "上記コンテキストを踏まえて回答してください。",
+  ].join("\n");
+}
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -381,10 +464,12 @@ export async function sendChatMessage(
       return runId;
     }
 
+    const historyForContext = state.chatMessages.slice(0, -1);
+    const orchestratorMessage = buildOrchestratorMessage(msg, historyForContext);
     state.chatStream = "オーケストレーション実行中…";
     const response = await state.client.request<OrchestratorRunResponse>("orchestrator.run", {
       sessionKey: state.sessionKey,
-      message: msg || "添付画像を確認して対応してください。",
+      message: orchestratorMessage || "添付画像を確認して対応してください。",
       execute: true,
       attachments: apiAttachments,
     });

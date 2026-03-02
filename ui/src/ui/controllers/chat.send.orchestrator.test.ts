@@ -122,4 +122,52 @@ describe("sendChatMessage orchestrator attachment routing", () => {
     expect(request).not.toHaveBeenCalled();
     expect(state.lastError).toContain("大きすぎます");
   });
+
+  it("adds recent context for follow-up messages on orchestrator route", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "orchestrator.run") {
+        return {
+          result: {
+            route: "qa_gemini",
+            elapsed_ms: 20,
+            action: { route: "qa_gemini", executed: true, ok: true, output: "ok" },
+          },
+          returnCode: 0,
+          termination: "exit",
+          attachments: { count: 0 },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const state = createState(client);
+    state.chatMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Aについて教えて" }],
+        timestamp: Date.now() - 1000,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Aの概要は..." }],
+        timestamp: Date.now() - 500,
+      },
+    ];
+
+    await sendChatMessage(state, "もっと詳しく教えて", []);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "orchestrator.run",
+      expect.objectContaining({
+        sessionKey: "main",
+        execute: true,
+        message: expect.stringContaining("[直近会話コンテキスト]"),
+      }),
+    );
+    const [, params] = request.mock.calls[0];
+    expect(String(params.message)).toContain("あなた: Aについて教えて");
+    expect(String(params.message)).toContain("Roby: Aの概要は...");
+    expect(String(params.message)).toContain("[ユーザーの最新依頼]");
+  });
 });
