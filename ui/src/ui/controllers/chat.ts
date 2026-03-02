@@ -543,12 +543,15 @@ function buildOrchestratorResultMeta(response: OrchestratorRunResponse): Orchest
   const output = typeof action.output === "string" ? action.output.trim() : "";
   const stdout = firstNonEmptyText([action.stdout, response.stdout]);
   const stderr = firstNonEmptyText([action.stderr, response.stderr]);
-  const errorReason = firstNonEmptyText([
+  const termination = firstNonEmptyText([response.termination]);
+  const terminationReason = termination && termination.toLowerCase() !== "exit" ? termination : "";
+  const rawErrorReason = firstNonEmptyText([
     action.error,
     action.detail,
-    response.termination,
     stderr,
+    terminationReason,
   ]);
+  const errorReason = actionOk ? "" : rawErrorReason;
   const summary = firstNonEmptyText([output, stdout]);
 
   return {
