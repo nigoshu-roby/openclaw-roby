@@ -127,17 +127,25 @@ def parse_jsonish(raw: str) -> Any:
             return None
 
 
-def run_summarize_json(prompt: str, text: str, env: Dict[str, str], max_tokens: str = "1800", timeout_sec: int = 120) -> Tuple[Any, str]:
+def run_summarize_json(
+    prompt: str,
+    text: str,
+    env: Dict[str, str],
+    max_tokens: str = "1800",
+    timeout_sec: int = 120,
+    force_summary: bool = True,
+) -> Tuple[Any, str]:
     cmd = [
         "summarize", "-",
         "--json", "--plain",
         "--metrics", "off",
         "--model", env.get("ROBY_ORCH_GEMINI_MODEL", env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview")),
         "--length", env.get("ROBY_ORCH_GEMINI_LENGTH", "xl"),
-        "--force-summary",
         "--prompt", prompt,
         "--max-output-tokens", max_tokens,
     ]
+    if force_summary:
+        cmd.insert(-4, "--force-summary")
     out = subprocess.check_output(cmd, input=text.encode("utf-8"), env=env, timeout=timeout_sec)
     data = json.loads(out)
     raw = ""
@@ -211,6 +219,108 @@ def is_broken_qa_output(text: str, message: str) -> bool:
     if contains_japanese(message) and not contains_japanese(normalized):
         return True
     return False
+
+
+def is_truncated_qa_output(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return True
+    tail = normalized[-40:]
+    bad_tail_patterns = [
+        r"##\s*$",
+        r"##\s*[^\n]{0,12}$",
+        r"[：:]\s*$",
+        r"\*\*$",
+        r"[\(\[]\s*$",
+        r"^(?:##\s*目的|##\s*実行)\s*$",
+    ]
+    if any(re.search(pat, tail) for pat in bad_tail_patterns):
+        return True
+    line_count = len([ln for ln in normalized.splitlines() if ln.strip()])
+    if line_count <= 2 and len(normalized) < 120:
+        return True
+    if "## 目的" in normalized:
+        required_sections = ["## 提案", "## 推奨案", "## 次のアクション"]
+        present = sum(1 for section in required_sections if section in normalized)
+        if present <= 1:
+            return True
+    if normalized.endswith(("## 実行", "## 提案", "## 推奨案", "## 次のアクション")):
+        return True
+    return False
+
+
+def compact_qa_message(message: str) -> str:
+    text = (message or "").strip()
+    if not text:
+        return text
+    m_ctx = re.search(
+        r"\[直近会話コンテキスト\]\s*(.*?)\s*\[ユーザーの最新依頼\]\s*(.*?)\s*(?:上記コンテキストを前提に回答してください。不要な文脈は無視して構いません。)?\s*$",
+        text,
+        flags=re.DOTALL,
+    )
+    if not m_ctx:
+        return text
+    ctx_raw = m_ctx.group(1).strip()
+    latest = m_ctx.group(2).strip()
+    user_lines: List[str] = []
+    for line in ctx_raw.splitlines():
+        ln = line.strip()
+        if not ln.startswith("あなた:"):
+            continue
+        content = ln.split(":", 1)[1].strip()
+        if content:
+            user_lines.append(content)
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for item in reversed(user_lines):
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+        if len(deduped) >= 2:
+            break
+    deduped.reverse()
+    if not deduped:
+        return latest
+    points = "\n".join(f"- {item}" for item in deduped)
+    return f"[会話要点]\n{points}\n\n[ユーザーの最新依頼]\n{latest}"
+
+
+def run_qa_generation(qa_prompt: str, qa_input: str, env: Dict[str, str]) -> Tuple[Any, str]:
+    base_max_tokens = max(int(env.get("ROBY_ORCH_QA_MAX_TOKENS", "3200") or 3200), 2200)
+    parsed, raw = run_summarize_json(
+        qa_prompt,
+        qa_input,
+        env,
+        max_tokens=str(base_max_tokens),
+        timeout_sec=int(env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")),
+        force_summary=False,
+    )
+    text = raw
+    if isinstance(parsed, (dict, list)):
+        text = json.dumps(parsed, ensure_ascii=False)
+    if not is_truncated_qa_output(text):
+        return parsed, raw
+    retry_prompt = (
+        qa_prompt
+        + "\n必ず最後まで完結した回答を返してください。途中で切らず、次の見出しをこの順で必ず含めてください: "
+        "『## 目的』『## 実行可能な提案（優先順）』『## 判断基準』『## 推奨案』『## 次のアクション』。"
+    )
+    retry_max_tokens = max(int(env.get("ROBY_ORCH_QA_RETRY_MAX_TOKENS", "4800") or 4800), 4200)
+    retry_parsed, retry_raw = run_summarize_json(
+        retry_prompt,
+        qa_input,
+        env,
+        max_tokens=str(retry_max_tokens),
+        timeout_sec=int(env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")),
+        force_summary=False,
+    )
+    retry_text = retry_raw
+    if isinstance(retry_parsed, (dict, list)):
+        retry_text = json.dumps(retry_parsed, ensure_ascii=False)
+    if retry_text and (not is_truncated_qa_output(retry_text) or len(retry_text) > len(text)):
+        return retry_parsed, retry_raw
+    return parsed, raw
 
 
 def build_greeting_response() -> str:
@@ -821,13 +931,8 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
                     else:
                         ocr_lines.append(f"画像{idx}: 抽出失敗 ({item.get('error') or 'unknown'})")
                 qa_input = f"{message}\n" + "\n".join(ocr_lines)
-        parsed, raw = run_summarize_json(
-            qa_prompt,
-            qa_input,
-            env,
-            max_tokens=env.get("ROBY_ORCH_QA_MAX_TOKENS", "3200"),
-            timeout_sec=int(env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")),
-        )
+        qa_input = compact_qa_message(qa_input)
+        parsed, raw = run_qa_generation(qa_prompt, qa_input, env)
         text = raw
         if isinstance(parsed, (dict, list)):
             text = json.dumps(parsed, ensure_ascii=False)
