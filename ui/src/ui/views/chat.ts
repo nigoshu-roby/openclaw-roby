@@ -221,6 +221,21 @@ function collectDroppedFiles(dataTransfer: DataTransfer | null): File[] {
   return fromItems;
 }
 
+function hasFileDrag(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) {
+    return false;
+  }
+  const types = Array.from(dataTransfer.types ?? []);
+  if (types.some((type) => type.toLowerCase() === "files")) {
+    return true;
+  }
+  if ((dataTransfer.files?.length ?? 0) > 0) {
+    return true;
+  }
+  const items = Array.from(dataTransfer.items ?? []);
+  return items.some((item) => item.kind === "file");
+}
+
 async function addImageAttachments(files: File[], props: ChatProps) {
   if (!props.onAttachmentsChange || files.length === 0) {
     return;
@@ -399,7 +414,23 @@ export function renderChat(props: ChatProps) {
   `;
 
   return html`
-    <section class="card chat">
+    <section
+      class="card chat"
+      @dragover=${(e: DragEvent) => {
+        if (!props.onAttachmentsChange || !hasFileDrag(e.dataTransfer ?? null)) {
+          return;
+        }
+        e.preventDefault();
+      }}
+      @drop=${(e: DragEvent) => {
+        if (!props.onAttachmentsChange || !hasFileDrag(e.dataTransfer ?? null)) {
+          return;
+        }
+        e.preventDefault();
+        const files = collectDroppedFiles(e.dataTransfer ?? null);
+        void addImageAttachments(files, props);
+      }}
+    >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
