@@ -733,7 +733,7 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
             qa_prompt,
             qa_input,
             env,
-            max_tokens=env.get("ROBY_ORCH_QA_MAX_TOKENS", "1400"),
+            max_tokens=env.get("ROBY_ORCH_QA_MAX_TOKENS", "2200"),
             timeout_sec=int(env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")),
         )
         text = raw

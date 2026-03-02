@@ -65,6 +65,9 @@ const MAX_ORCHESTRATOR_ATTACHMENTS = 8;
 const MAX_ORCHESTRATOR_ATTACHMENT_BYTES = 8_000_000;
 const ORCHESTRATOR_CONTEXT_MAX_MESSAGES = 8;
 const ORCHESTRATOR_CONTEXT_MAX_CHARS = 2400;
+const ORCHESTRATOR_SUMMARY_MAX_CHARS = 12_000;
+const ORCHESTRATOR_STDOUT_MAX_CHARS = 12_000;
+const ORCHESTRATOR_STDERR_MAX_CHARS = 6_000;
 
 const CHAT_LOCAL_CACHE_PREFIX = "openclaw.control.chat.cache.v1:";
 const CHAT_LOCAL_CACHE_LIMIT = 400;
@@ -594,17 +597,29 @@ function formatOrchestratorResult(response: OrchestratorRunResponse): string {
   }
 
   if (meta.summary) {
-    lines.push("", "**要約**", truncateForDisplay(meta.summary, 6000));
+    lines.push("", "**要約**", truncateForDisplay(meta.summary, ORCHESTRATOR_SUMMARY_MAX_CHARS));
   }
 
   const shownStdout = meta.stdout ?? "";
   const shownStderr = meta.stderr ?? "";
 
   if (shownStdout) {
-    lines.push("", "**標準出力**", "```text", truncateForDisplay(shownStdout, 6000), "```");
+    lines.push(
+      "",
+      "**標準出力**",
+      "```text",
+      truncateForDisplay(shownStdout, ORCHESTRATOR_STDOUT_MAX_CHARS),
+      "```",
+    );
   }
   if (shownStderr) {
-    lines.push("", "**標準エラー**", "```text", truncateForDisplay(shownStderr, 3000), "```");
+    lines.push(
+      "",
+      "**標準エラー**",
+      "```text",
+      truncateForDisplay(shownStderr, ORCHESTRATOR_STDERR_MAX_CHARS),
+      "```",
+    );
   }
 
   if (!shownStdout && !shownStderr && !meta.summary) {
