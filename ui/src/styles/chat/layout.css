@@ -358,6 +358,25 @@
   padding: 0 2px;
 }
 
+.chat-compose__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent);
+  padding: 0 2px;
+}
+
+.chat-compose__status svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Chat controls - moved to content-header area, left aligned */
 .chat-controls {
   display: flex;

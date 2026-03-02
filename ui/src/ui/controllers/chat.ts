@@ -319,6 +319,40 @@ function buildOrchestratorMessage(message: string, history: unknown[]): string {
   ].join("\n");
 }
 
+function isImageTextIntent(message: string): boolean {
+  const normalized = message.toLowerCase();
+  const hints = ["画像", "添付", "ocr", "文字", "テキスト", "読み取", "読取", "抽出"];
+  return hints.some((hint) => normalized.includes(hint) || message.includes(hint));
+}
+
+function buildOrchestratorProgressPhases(message: string, hasAttachments: boolean): string[] {
+  const phases = ["送信中…", "オーケストレーターでルート判定中…"];
+  if (hasAttachments) {
+    phases.push("添付画像を検証中…");
+    if (isImageTextIntent(message)) {
+      phases.push("OCRを実行中…");
+    }
+  }
+  phases.push("回答を生成中…");
+  return phases;
+}
+
+function startProgressTicker(state: ChatState, phases: string[], intervalMs = 1300): () => void {
+  if (phases.length === 0) {
+    state.chatStream = "送信中…";
+    return () => {};
+  }
+  state.chatStream = phases[0];
+  let index = 0;
+  const timer = setInterval(() => {
+    index = Math.min(index + 1, phases.length - 1);
+    state.chatStream = phases[index];
+  }, intervalMs);
+  return () => {
+    clearInterval(timer);
+  };
+}
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -420,7 +454,7 @@ export async function sendChatMessage(
 
     const runId = generateUUID();
     state.chatRunId = runId;
-    state.chatStream = "";
+    state.chatStream = "送信中…";
     state.chatStreamStartedAt = now;
     const nativeChatMode = shouldUseNativeChatMode(msg, hasAttachments);
     if (!nativeChatMode) {
@@ -441,13 +475,21 @@ export async function sendChatMessage(
 
     const historyForContext = state.chatMessages.slice(0, -1);
     const orchestratorMessage = buildOrchestratorMessage(msg, historyForContext);
-    state.chatStream = "オーケストレーション実行中…";
-    const response = await state.client.request<OrchestratorRunResponse>("orchestrator.run", {
-      sessionKey: state.sessionKey,
-      message: orchestratorMessage || "添付画像を確認して対応してください。",
-      execute: true,
-      attachments: apiAttachments,
-    });
+    const stopTicker = startProgressTicker(
+      state,
+      buildOrchestratorProgressPhases(msg, hasAttachments),
+    );
+    let response: OrchestratorRunResponse;
+    try {
+      response = await state.client.request<OrchestratorRunResponse>("orchestrator.run", {
+        sessionKey: state.sessionKey,
+        message: orchestratorMessage || "添付画像を確認して対応してください。",
+        execute: true,
+        attachments: apiAttachments,
+      });
+    } finally {
+      stopTicker();
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

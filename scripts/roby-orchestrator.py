@@ -355,7 +355,14 @@ def is_image_text_request(message: str) -> bool:
     return any(token in lower or token in message for token in IMAGE_TEXT_HINTS)
 
 
-def run_macos_ocr(image_path: str, timeout_sec: int = 45) -> Dict[str, Any]:
+def run_macos_ocr(
+    image_path: str,
+    timeout_sec: int = 45,
+    *,
+    level: str = "accurate",
+    language_correction: bool = True,
+) -> Dict[str, Any]:
+    level = (level or "accurate").strip().lower()
     swift_script = r"""
 import Foundation
 import Vision
@@ -387,8 +394,15 @@ guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil
 }
 
 let request = VNRecognizeTextRequest()
-request.recognitionLevel = .accurate
-request.usesLanguageCorrection = true
+let env = ProcessInfo.processInfo.environment
+let level = (env["ROBY_OCR_LEVEL"] ?? "accurate").lowercased()
+if level == "fast" {
+  request.recognitionLevel = .fast
+} else {
+  request.recognitionLevel = .accurate
+}
+let langCorrection = (env["ROBY_OCR_LANG_CORRECTION"] ?? "1") == "1"
+request.usesLanguageCorrection = langCorrection
 request.recognitionLanguages = ["ja-JP", "en-US"]
 
 let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -414,12 +428,16 @@ do {
   printJson(["ok": false, "error": "vision_failed: \(error.localizedDescription)"])
 }
 """
+    child_env = dict(os.environ)
+    child_env["ROBY_OCR_LEVEL"] = level
+    child_env["ROBY_OCR_LANG_CORRECTION"] = "1" if language_correction else "0"
     try:
         proc = subprocess.run(
             ["swift", "-", image_path],
             input=swift_script.encode("utf-8"),
             capture_output=True,
             timeout=timeout_sec,
+            env=child_env,
         )
     except Exception as e:
         return {"ok": False, "error": f"swift_runtime_failed: {e}"}
@@ -437,6 +455,71 @@ do {
     return {"ok": False, "error": "swift_output_parse_failed"}
 
 
+def map_ocr_error_ja(error: str, text: str = "") -> str:
+    normalized = (error or "").strip()
+    if not normalized and text:
+        return "文字を検出できませんでした。"
+    low = normalized.lower()
+    if "too small in at least one dimension" in low:
+        return "画像解像度が小さすぎます（最低3px以上が必要です）。"
+    if "image_load_failed" in low:
+        return "画像ファイルを読み込めませんでした。"
+    if "cgimage_failed" in low:
+        return "画像データの変換に失敗しました。"
+    if "swift_runtime_failed" in low:
+        return "OCR実行環境の起動に失敗しました。"
+    if "swift_output_parse_failed" in low:
+        return "OCR結果の解析に失敗しました。"
+    if "vision_failed" in low:
+        return "OCRエンジンの実行に失敗しました。"
+    if "missing_path" in low:
+        return "OCR対象の画像パスが見つかりません。"
+    if "swift_exit_" in low:
+        return "OCR処理が異常終了しました。"
+    return normalized or "OCRに失敗しました。"
+
+
+def should_retry_ocr(first: Dict[str, Any]) -> bool:
+    if first.get("ok") and str(first.get("text") or "").strip():
+        return False
+    err = str(first.get("error") or "").lower()
+    if "too small in at least one dimension" in err:
+        return False
+    if "missing_path" in err:
+        return False
+    return True
+
+
+def run_macos_ocr_with_retry(image_path: str, timeout_sec: int = 45) -> Dict[str, Any]:
+    attempts: List[Dict[str, Any]] = []
+    first = run_macos_ocr(
+        image_path,
+        timeout_sec=timeout_sec,
+        level="accurate",
+        language_correction=True,
+    )
+    attempts.append({"mode": "accurate", "lang_correction": True, "ok": bool(first.get("ok"))})
+    if not should_retry_ocr(first):
+        first["attempts"] = attempts
+        return first
+
+    second = run_macos_ocr(
+        image_path,
+        timeout_sec=timeout_sec,
+        level="fast",
+        language_correction=False,
+    )
+    attempts.append({"mode": "fast", "lang_correction": False, "ok": bool(second.get("ok"))})
+
+    first_text = str(first.get("text") or "").strip()
+    second_text = str(second.get("text") or "").strip()
+    chosen = second if second_text and not first_text else first
+    if second_text and len(second_text) > len(first_text):
+        chosen = second
+    chosen["attempts"] = attempts
+    return chosen
+
+
 def read_attachment_texts(env: Dict[str, str]) -> List[Dict[str, Any]]:
     files = parse_attachment_files(env)
     outputs: List[Dict[str, Any]] = []
@@ -445,18 +528,23 @@ def read_attachment_texts(env: Dict[str, str]) -> List[Dict[str, Any]]:
         mime = (item.get("mimeType") or "").lower()
         if not path or (mime and not mime.startswith("image/")):
             continue
-        ocr = run_macos_ocr(str(path), timeout_sec=int(env.get("ROBY_OCR_TIMEOUT_SEC", "45")))
+        ocr = run_macos_ocr_with_retry(str(path), timeout_sec=int(env.get("ROBY_OCR_TIMEOUT_SEC", "45")))
         text = str(ocr.get("text") or "").strip() if isinstance(ocr, dict) else ""
+        ok = bool(isinstance(ocr, dict) and ocr.get("ok") and text)
+        raw_error = str(ocr.get("error") or "").strip() if isinstance(ocr, dict) else ""
+        error_ja = map_ocr_error_ja(raw_error, text=text if not ok else "")
+        attempts = ocr.get("attempts") if isinstance(ocr, dict) else []
         outputs.append(
             {
                 "index": item.get("index"),
                 "path": path,
                 "mimeType": item.get("mimeType"),
                 "bytes": item.get("bytes"),
-                "ok": bool(isinstance(ocr, dict) and ocr.get("ok")),
+                "ok": ok,
                 "text": text,
-                "error": str(ocr.get("error") or "").strip() if isinstance(ocr, dict) else "",
+                "error": error_ja if not ok else "",
                 "line_count": int(ocr.get("line_count") or 0) if isinstance(ocr, dict) else 0,
+                "attempts": attempts if isinstance(attempts, list) else [],
             }
         )
     return outputs
@@ -464,6 +552,10 @@ def read_attachment_texts(env: Dict[str, str]) -> List[Dict[str, Any]]:
 
 def format_attachment_text_result(ocr_items: List[Dict[str, Any]]) -> str:
     lines = ["添付画像から抽出したテキストです。"]
+    success_items = [item for item in ocr_items if item.get("ok") and item.get("text")]
+    if len(success_items) >= 2:
+        lines.append("\n## 結合テキスト")
+        lines.append("\n\n".join(str(item["text"]) for item in success_items))
     for item in ocr_items:
         idx = item.get("index")
         if item.get("ok") and item.get("text"):

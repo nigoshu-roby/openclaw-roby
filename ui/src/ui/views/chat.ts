@@ -349,6 +349,7 @@ export function renderChat(props: ChatProps) {
   const composeHint = hasAttachments
     ? `画像 ${attachmentCount} 件を添付中（最大8件 / 1件8MB）。⌘+Enterで送信できます。`
     : "画像は貼り付け/ドラッグ&ドロップ/📎で添付できます（最大8件 / 1件8MB）。";
+  const composeStatus = props.sending ? props.stream?.trim() || "送信中…" : "";
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "メッセージを追加するか、画像を貼り付け/ドラッグしてください…"
@@ -647,6 +648,11 @@ export function renderChat(props: ChatProps) {
             </button>
           </div>
         </div>
+        ${
+          composeStatus
+            ? html`<div class="chat-compose__status" role="status" aria-live="polite">${icons.loader} ${composeStatus}</div>`
+            : nothing
+        }
         <div class="chat-compose__hint" aria-live="polite">${composeHint}</div>
       </div>
     </section>
