@@ -661,6 +661,31 @@ def _parse_jsonish_text(raw: str) -> Any:
             return None
 
 
+def _strip_code_fence(raw: str) -> str:
+    if not raw:
+        return ""
+    s = raw.strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+def _is_explicit_empty_tasks(raw: str) -> bool:
+    s = _strip_code_fence(raw)
+    if not s:
+        return False
+    if s == "[]":
+        return True
+    parsed = _parse_jsonish_text(s)
+    if isinstance(parsed, list) and len(parsed) == 0:
+        return True
+    if isinstance(parsed, dict):
+        tasks = parsed.get("tasks")
+        if isinstance(tasks, list) and len(tasks) == 0:
+            return True
+    return False
+
+
 def _run_gemini_json_prompt(
     text: str,
     prompt: str,
@@ -870,7 +895,63 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     )
     if isinstance(parsed, list):
         return parsed, raw
-    return [], raw
+
+    compact_prompt = (
+        "Extract only high-confidence actionable tasks from the meeting minutes. "
+        "Return ONLY a JSON array with at most 8 items. "
+        "Each item must have keys: title, due_date, project, assignee, note. "
+        "Do not include subtasks in this compact mode. "
+        "Ignore pure status notes and background explanations. "
+        "Prefer concise verb-led tasks. "
+        f"Today is {today} (JST). Default project: {default_project}. Known projects: {known}."
+    )
+    parsed_compact, raw_compact = _run_gemini_json_prompt_with_retry(
+        text,
+        compact_prompt,
+        env,
+        model_list_key="MINUTES_COMPACT_MODELS",
+        fallback_models=[
+            env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+            "google/gemini-2.5-pro",
+        ],
+        max_output_tokens=env.get("MINUTES_COMPACT_MAX_TOKENS", "1400"),
+        retry_max_output_tokens=env.get("MINUTES_COMPACT_RETRY_MAX_TOKENS", "2200"),
+        length=env.get("MINUTES_COMPACT_LENGTH", "m"),
+        timeout_sec=int(env.get("MINUTES_COMPACT_TIMEOUT_SEC", "120")),
+        retry_timeout_sec=int(env.get("MINUTES_COMPACT_RETRY_TIMEOUT_SEC", "180")),
+    )
+    if isinstance(parsed_compact, list):
+        return parsed_compact, raw_compact
+
+    # Repair pass: when model output is non-empty but malformed JSON, try converting once.
+    malformed_source = (raw_compact or raw or "").strip()
+    if malformed_source and (not _is_explicit_empty_tasks(malformed_source)):
+        repair_prompt = (
+            "Convert the following extraction output into valid JSON array only. "
+            "Schema for each item: title, due_date, project, assignee, note. "
+            "If subtasks are found, keep them as `subtasks` array with same schema. "
+            "Do not add explanations, markdown, or code fences."
+        )
+        parsed_repair, raw_repair = _run_gemini_json_prompt_with_retry(
+            malformed_source,
+            repair_prompt,
+            env,
+            model_list_key="MINUTES_REPAIR_MODELS",
+            fallback_models=[
+                env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+                "google/gemini-2.5-pro",
+            ],
+            max_output_tokens=env.get("MINUTES_REPAIR_MAX_TOKENS", "2200"),
+            retry_max_output_tokens=env.get("MINUTES_REPAIR_RETRY_MAX_TOKENS", "3200"),
+            length=env.get("MINUTES_REPAIR_LENGTH", "l"),
+            timeout_sec=int(env.get("MINUTES_REPAIR_TIMEOUT_SEC", "120")),
+            retry_timeout_sec=int(env.get("MINUTES_REPAIR_RETRY_TIMEOUT_SEC", "180")),
+        )
+        if isinstance(parsed_repair, list):
+            return parsed_repair, raw_repair
+        return [], raw_repair or malformed_source
+
+    return [], raw_compact or raw
 
 
 def _stable_origin_id(task: Dict[str, Any], source_id: str) -> str:
@@ -1506,7 +1587,7 @@ def main() -> int:
                 text, env, item.get("project") or "TOKIWAGI", known_projects, today_str
             )
             fallback_used = False
-            if not extracted:
+            if (not extracted) and (not _is_explicit_empty_tasks(raw_summary)):
                 extracted = heuristic_tasks_from_text(
                     text,
                     item.get("project") or "TOKIWAGI",
@@ -1556,7 +1637,7 @@ def main() -> int:
                 continue
             extracted, raw_summary = summarize_tasks(text, env, "GDocs", known_projects, today_str)
             fallback_used = False
-            if not extracted:
+            if (not extracted) and (not _is_explicit_empty_tasks(raw_summary)):
                 extracted = heuristic_tasks_from_text(
                     text,
                     "GDocs",
