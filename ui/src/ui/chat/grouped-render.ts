@@ -118,11 +118,14 @@ function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
           ? html`
               <section class="chat-orch-card__section">
                 <h4 class="chat-orch-card__section-title">実行ログ</h4>
-                <div class="chat-orch-card__log-grid">
-                  ${command ? html`<p class="chat-orch-card__line"><span>実行:</span> <code>${command}</code></p>` : nothing}
-                  ${stdout ? html`<p class="chat-orch-card__line"><span>標準出力:</span> ${stdout}</p>` : nothing}
-                  ${stderr ? html`<p class="chat-orch-card__line"><span>標準エラー:</span> ${stderr}</p>` : nothing}
-                </div>
+                <details class="chat-orch-card__details">
+                  <summary class="chat-orch-card__details-summary">実行ログを表示</summary>
+                  <div class="chat-orch-card__log-grid">
+                    ${command ? html`<p class="chat-orch-card__line"><span>実行:</span> <code>${command}</code></p>` : nothing}
+                    ${stdout ? html`<p class="chat-orch-card__line"><span>標準出力:</span> ${stdout}</p>` : nothing}
+                    ${stderr ? html`<p class="chat-orch-card__line"><span>標準エラー:</span> ${stderr}</p>` : nothing}
+                  </div>
+                </details>
               </section>
             `
           : nothing

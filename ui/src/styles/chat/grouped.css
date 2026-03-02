@@ -478,6 +478,28 @@ img.chat-avatar {
   gap: 6px;
 }
 
+.chat-orch-card__details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-orch-card__details-summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.chat-orch-card__details-summary:hover {
+  color: var(--text);
+}
+
+.chat-orch-card__details[open] .chat-orch-card__details-summary {
+  color: var(--text);
+}
+
 @media (max-width: 880px) {
   .chat-orch-card__meta {
     grid-template-columns: 1fr;
