@@ -65,6 +65,7 @@ const MAX_ORCHESTRATOR_ATTACHMENTS = 8;
 const MAX_ORCHESTRATOR_ATTACHMENT_BYTES = 8_000_000;
 const ORCHESTRATOR_CONTEXT_MAX_MESSAGES = 8;
 const ORCHESTRATOR_CONTEXT_MAX_CHARS = 2400;
+const ORCHESTRATOR_CONTEXT_ITEM_MAX_CHARS = 360;
 const ORCHESTRATOR_SUMMARY_MAX_CHARS = 12_000;
 const ORCHESTRATOR_STDOUT_MAX_CHARS = 12_000;
 const ORCHESTRATOR_STDERR_MAX_CHARS = 6_000;
@@ -283,7 +284,7 @@ function buildOrchestratorContext(
     const row = entry as Record<string, unknown>;
     const roleRaw = typeof row.role === "string" ? row.role : "assistant";
     const role = roleRaw === "user" ? "あなた" : "Roby";
-    const text = (extractText(row) || "").replace(/\s+/g, " ").trim();
+    const text = extractContextText(row);
     if (!text) {
       continue;
     }
@@ -297,6 +298,36 @@ function buildOrchestratorContext(
     return joined;
   }
   return joined.slice(Math.max(0, joined.length - maxChars));
+}
+
+function stripContextNoise(input: string): string {
+  if (!input) {
+    return "";
+  }
+  let text = input;
+  text = text.replace(/```[\s\S]*?```/g, " ");
+  text = text.replace(/\*\*標準出力\*\*[\s\S]*/g, " ");
+  text = text.replace(/\*\*標準エラー\*\*[\s\S]*/g, " ");
+  text = text.replace(/\*\*実行ログ\*\*[\s\S]*/g, " ");
+  text = text.replace(/###\s*オーケストレーション実行結果[\s\S]*/g, " ");
+  text = text.replace(/\s+/g, " ").trim();
+  if (text.length > ORCHESTRATOR_CONTEXT_ITEM_MAX_CHARS) {
+    return text.slice(0, ORCHESTRATOR_CONTEXT_ITEM_MAX_CHARS);
+  }
+  return text;
+}
+
+function extractContextText(message: Record<string, unknown>): string {
+  const meta = message.__openclaw as Record<string, unknown> | undefined;
+  if (meta?.kind === "orchestrator_result") {
+    const summary = typeof meta.summary === "string" ? meta.summary : "";
+    const errorReason = typeof meta.errorReason === "string" ? meta.errorReason : "";
+    const fromMeta = (summary || errorReason).trim();
+    if (fromMeta) {
+      return stripContextNoise(fromMeta);
+    }
+  }
+  return stripContextNoise(extractText(message) || "");
 }
 
 function buildOrchestratorMessage(message: string, history: unknown[]): string {
