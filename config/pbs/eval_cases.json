@@ -1,0 +1,55 @@
+[
+  {
+    "id": "qa_greeting_local",
+    "description": "ローカル挨拶応答が動くこと",
+    "message": "こんにちは",
+    "route": "auto",
+    "execute": true,
+    "expect": {
+      "equals": {
+        "route": "qa_gemini",
+        "action.ok": true,
+        "action.mode": "local_greeting"
+      },
+      "contains": {
+        "action.output": ["こんにちは", "対応できます"]
+      },
+      "min_len": {
+        "action.output": 20
+      }
+    }
+  },
+  {
+    "id": "coding_handoff_ready",
+    "description": "実装依頼が coding_codex に分類され、要件JSONが生成されること",
+    "message": "チャット欄のUXを改善して",
+    "route": "auto",
+    "execute": false,
+    "expect": {
+      "equals": {
+        "route": "coding_codex",
+        "action.executed": false
+      },
+      "contains": {
+        "action.requirements.objective": ["チャット欄", "UX"]
+      }
+    }
+  },
+  {
+    "id": "minutes_route_ready",
+    "description": "議事録依頼が minutes_pipeline に分類され、実行コマンドが組み立てられること",
+    "message": "TOKIWAGIの議事録からタスク化して",
+    "route": "auto",
+    "execute": false,
+    "expect": {
+      "equals": {
+        "route": "minutes_pipeline",
+        "action.executed": false,
+        "action.mode": "run"
+      },
+      "contains": {
+        "action.command": ["roby-minutes.py", "--run"]
+      }
+    }
+  }
+]

@@ -60,6 +60,28 @@ flowchart LR
 - 監視: `created / updated / skipped / errors / hierarchy_applied / order_applied`
 - バッチ過大時は分割送信
 
+### 7.1 Neuronic品質フィードバック拡張（PBS統合）
+
+- 目的: 出力タスクの良否（FP）と抽出漏れ（FN）を低工数で回収し、継続学習へ接続する。
+- 即時評価: 各タスクに `👍 良い / 👎 悪い`、`👎理由チップ`（メモ混入/重複/プロジェクト誤判定/期限誤り/担当誤り/粒度不一致）。
+- 抽出漏れ対応: `漏れタスクを追加`（親子構造を維持して登録、`feedback_type=missed_task` を保持）。
+- Gmail特化: 親=`メール確認タスク`、子=`実行タスク` を標準構造化。
+- KPI追加: `FP率` `FN率` `Project一致率` `期限一致率`。
+- 週次反映: 失敗理由TOPを抽出ルール/プロンプトへ反映し、Evaluation Harnessで改善前後比較。
+
+### 7.2 内部IDとタグの責務分離（Neuronic仕様変更）
+
+- 問題: `group:roby:auto:*` をタグ保存すると、タグフィルターの実用性が低下する。
+- 方針: 内部識別子はタグから分離し、専用メタフィールド（例: `external_ref`）へ移行。
+- API方針:
+  - 維持: `source + origin_id`（Upsertキー）
+  - 追加: `external_ref`（表示/追跡用、タグUIには出さない）
+  - 制限: タグは `project:*` `assignee:*` `tool:*` など人間向け分類のみ
+- 移行順:
+  1. 新規登録分で `group:*` をタグに入れない
+  2. 既存タスク移行バッチで `group:*` を剥離
+  3. Task詳細に内部ID表示欄（コピー機能付き）を追加
+
 ## 8. OSS採用方針（最新版）
 
 - Tier A（本番可）: React Flow, Mermaid, OTel Collector, Promptfoo, OPA, Langfuse（条件付き）
@@ -118,6 +140,8 @@ flowchart LR
 2. #1 UI結果表示改善
 3. #2 添付画像のOrchestrator対応
 4. #8 Evaluation Harness
-5. #9 AB Router
-6. #7 Immutable Audit
-7. #10 Runbook/Drill完成
+5. #11 NeuronicフィードバックUI/API（👍👎/漏れ追加/FN回収）
+6. #12 内部ID分離移行（`group:*` タグ廃止 + `external_ref`）
+7. #9 AB Router
+8. #7 Immutable Audit
+9. #10 Runbook/Drill完成

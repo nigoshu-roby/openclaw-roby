@@ -20,6 +20,7 @@ MINUTES_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-minutes.py"
 SELF_GROWTH_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-self-growth.py"
 GMAIL_TRIAGE_SCRIPT = OPENCLAW_REPO / "skills" / "roby-mail" / "scripts" / "gmail_triage.py"
 NOTION_SYNC_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-notion-sync.py"
+EVAL_HARNESS_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-eval-harness.py"
 
 ROUTE_QA = "qa_gemini"
 ROUTE_CODING = "coding_codex"
@@ -27,6 +28,7 @@ ROUTE_MINUTES = "minutes_pipeline"
 ROUTE_SELF_GROWTH = "self_growth"
 ROUTE_GMAIL = "gmail_pipeline"
 ROUTE_NOTION_SYNC = "notion_sync"
+ROUTE_EVAL = "evaluation_harness"
 
 CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
@@ -39,6 +41,9 @@ GMAIL_HINTS = [
 ]
 NOTION_SYNC_HINTS = [
     "notion同期", "notion sync", "notion更新", "weekly focusをnotion", "done this weekをnotion", "githubからnotion"
+]
+EVAL_HINTS = [
+    "評価", "eval", "harness", "品質評価", "回帰テスト", "評価ハーネス", "品質検証", "回帰"
 ]
 GMAIL_EXEC_HINTS = [
     "整理", "仕分け", "実行", "triage", "アーカイブ", "通知", "確認して", "走らせて"
@@ -90,6 +95,8 @@ def classify_intent_heuristic(message: str) -> str:
         return ROUTE_SELF_GROWTH
     if any(k in lower for k in NOTION_SYNC_HINTS):
         return ROUTE_NOTION_SYNC
+    if any(k in lower for k in EVAL_HINTS):
+        return ROUTE_EVAL
     has_gmail = any(k in lower for k in GMAIL_HINTS)
     has_gmail_exec = any(k in lower for k in GMAIL_EXEC_HINTS)
     has_consult = any(k in lower for k in CONSULT_HINTS)
@@ -159,10 +166,10 @@ def run_summarize_json(
 def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
-        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}."
+        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_EVAL}."
     )
     parsed, raw = run_summarize_json(prompt, message, env, max_tokens="300", timeout_sec=45)
-    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC}:
+    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL}:
         parsed["raw"] = raw
         return parsed
     return None
@@ -357,6 +364,7 @@ def build_local_capability_summary() -> str:
             f"- {ROUTE_GMAIL}",
             f"- {ROUTE_SELF_GROWTH}",
             f"- {ROUTE_NOTION_SYNC}",
+            f"- {ROUTE_EVAL}",
         ]
     )
     return "\n".join(lines)
@@ -863,6 +871,28 @@ def handle_notion_sync(env: Dict[str, str], execute: bool, dry_run: bool = False
     return result
 
 
+def handle_eval_harness(env: Dict[str, str], execute: bool, verbose: bool) -> Dict[str, Any]:
+    cmd = [
+        "python3", str(EVAL_HARNESS_SCRIPT),
+        "--json",
+    ]
+    if verbose:
+        cmd.append("--verbose")
+    result: Dict[str, Any] = {
+        "route": ROUTE_EVAL,
+        "command": " ".join(shlex.quote(x) for x in cmd),
+        "executed": False,
+    }
+    if execute:
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        result["executed"] = True
+        result["ok"] = proc.returncode == 0
+        result["stdout"] = proc.stdout
+        result["stderr"] = proc.stderr
+        result["returncode"] = proc.returncode
+    return result
+
+
 def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
     attachment_files = parse_attachment_files(env)
     has_attachments = len(attachment_files) > 0
@@ -1024,8 +1054,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", default="")
     parser.add_argument("--message-stdin", action="store_true")
-    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC], default="auto")
-    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "none"], default="none")
+    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL], default="auto")
+    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "eval_harness", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -1070,6 +1100,14 @@ def main() -> int:
                     "GitHub Weekly Focus/DoneをNotionへ同期",
                 )
             classify_meta = {"method": "cron_task", "cron_task": "notion_sync"}
+        elif args.cron_task == "eval_harness":
+            route = ROUTE_EVAL
+            if not args.message:
+                args.message = env.get(
+                    "ROBY_ORCH_EVAL_CRON_MESSAGE",
+                    "PBSの評価ハーネスを実行して品質状況を記録",
+                )
+            classify_meta = {"method": "cron_task", "cron_task": "eval_harness"}
 
     if route == "auto":
         if not args.message.strip():
@@ -1094,6 +1132,8 @@ def main() -> int:
         msg_low = args.message.lower()
         dry = ("--dry-run" in msg_low) or ("dry-run" in msg_low) or ("ドライラン" in args.message)
         action = handle_notion_sync(env, args.execute, dry_run=dry)
+    elif route == ROUTE_EVAL:
+        action = handle_eval_harness(env, args.execute, args.verbose)
     elif route == ROUTE_SELF_GROWTH:
         action = handle_self_growth(env, args.execute)
     elif route == ROUTE_CODING:
@@ -1130,6 +1170,8 @@ def main() -> int:
         print("[orchestrator] self-growth route selected")
     if route == ROUTE_GMAIL:
         print("[orchestrator] gmail triage route selected")
+    if route == ROUTE_EVAL:
+        print("[orchestrator] evaluation harness route selected")
     if action.get("command"):
         print(f"[orchestrator] command={action['command']}")
     if action.get("note"):
