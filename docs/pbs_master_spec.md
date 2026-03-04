@@ -310,6 +310,18 @@
   - `ROBY_ORCH_ENABLE_WEEKLY_REPORT=1` で cron 有効化
   - 通知: `ROBY_WEEKLY_REPORT_NOTIFY=1`（Slack Webhook設定時）
 
+### 8.7 Completion Update（#6 Neuronic階層連携 回帰テスト）
+
+- 完了日: 2026-03-05
+- 実装:
+  - `scripts/tests/test_roby_minutes_neuronic.py` を追加
+  - 受け入れ条件に対応する3テストを実装:
+    - `parent_origin_id / sibling_order` 正常系
+    - legacyレスポンス互換（`hierarchy_applied/order_applied` 未返却）
+    - `Payload Too Large` 時の分割再送（413→分割→成功）
+- 検証:
+  - `python3 /Users/<user>/OpenClaw/scripts/tests/test_roby_minutes_neuronic.py` で `OK`
+
 ---
 
 ## 9. Change Management
