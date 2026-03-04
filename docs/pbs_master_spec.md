@@ -191,8 +191,16 @@
 2. #9 AB Router
 3. #7 Immutable Audit
 4. #10 Runbook/Drill
-5. #11 NeuronicフィードバックUI/API 仕上げ
-6. #12 内部ID分離移行 完全化
+5. #11 NeuronicフィードバックUI/API 仕上げ（完了: 2026-03-04）
+6. #12 内部ID分離移行 完全化（完了: 2026-03-04）
+
+### 8.1 Completion Update（#11/#12）
+
+- GitHub Issue:
+  - #11: `https://github.com/nigoshu-roby/openclaw-roby/issues/11`（Closed）
+  - #12: `https://github.com/nigoshu-roby/openclaw-roby/issues/12`（Closed）
+- GitHub Project（PBS Program）:
+  - #11 / #12 を `Done` に移行済み（2026-03-04）
 
 ---
 
@@ -226,11 +234,16 @@
 
 ### Neuronic（ローカル統合リポジトリ）
 
-- Commit: `aa1de0e`
+- Commit:
+  - `aa1de0e`（#11/#12 実装）
+  - `a55f304`（#12 契約整合の最終化）
+  - `96769b8`（Canonical Remote/公開運用ルール追記）
 - Branch: `master`
+- Push先: `origin (nigoshu-roby/Neuronic)` 反映済み
 - 対象:
   - `taskd` feedback API / feedback_state 永続化 / internal tag分離
   - `TaskToolMac` 一覧行評価ボタン / 永続ハイライト / 詳細評価UI削除
   - `docs/neuronic_outsourcing_handoff_2026-03-04.md`
-- 注記:
-  - このリポジトリは remote 未設定のため push は未実施
+- GitHubステータス:
+  - Issue #11/#12: Closed
+  - Project Status: Done
