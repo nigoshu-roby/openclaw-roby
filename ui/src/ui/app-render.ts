@@ -1058,6 +1058,9 @@ export function renderApp(state: AppViewState) {
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                onOrchestratorRerun: (meta) => void state.handleOrchestratorRerun(meta),
+                onOrchestratorExtractTasks: (meta) =>
+                  void state.handleOrchestratorExtractTasks(meta),
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing

@@ -22,7 +22,10 @@ type ImageBlock = {
 
 type OrchestratorResultMeta = {
   kind: "orchestrator_result";
+  requestId?: string;
+  inputMessage?: string;
   route?: string;
+  mode?: string;
   executed?: boolean;
   ok?: boolean;
   actionOk?: boolean;
@@ -34,6 +37,12 @@ type OrchestratorResultMeta = {
   errorReason?: string;
   stdout?: string;
   stderr?: string;
+  ocrText?: string;
+};
+
+type OrchestratorActionHandlers = {
+  onRerun?: (meta: OrchestratorResultMeta) => void;
+  onExtractTasks?: (meta: OrchestratorResultMeta) => void;
 };
 
 function parseOrchestratorResultMeta(message: unknown): OrchestratorResultMeta | null {
@@ -58,7 +67,63 @@ function formatElapsedSeconds(elapsedMs: number | null | undefined): string {
   return `${Math.round(elapsedMs / 1000)}秒`;
 }
 
-function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text.trim()) {
+    return false;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-1000px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return copied;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function buildOrchestratorLogText(meta: OrchestratorResultMeta): string {
+  const lines: string[] = [];
+  const status = meta.actionOk === true ? "成功" : meta.executed === false ? "未実行" : "要確認";
+  lines.push("### オーケストレーター実行ログ");
+  lines.push(`- 結果: ${status}`);
+  lines.push(`- ルート: ${meta.route ?? "-"}`);
+  lines.push(`- 経過: ${formatElapsedSeconds(meta.elapsedMs)}`);
+  if (typeof meta.returnCode === "number") {
+    lines.push(`- 終了コード: ${meta.returnCode}`);
+  }
+  if (meta.summary?.trim()) {
+    lines.push("", "[結論]", meta.summary.trim());
+  }
+  if (meta.command?.trim()) {
+    lines.push("", "[実行コマンド]", meta.command.trim());
+  }
+  if (meta.stdout?.trim()) {
+    lines.push("", "[標準出力]", meta.stdout.trim());
+  }
+  if (meta.stderr?.trim()) {
+    lines.push("", "[標準エラー]", meta.stderr.trim());
+  }
+  if (meta.errorReason?.trim()) {
+    lines.push("", "[エラー理由]", meta.errorReason.trim());
+  }
+  return lines.join("\n").trim();
+}
+
+function renderOrchestratorResultCard(
+  meta: OrchestratorResultMeta,
+  handlers?: OrchestratorActionHandlers,
+) {
   const executed = meta.executed === true;
   const success = meta.actionOk === true;
   const statusClass = !executed ? "warn" : success ? "ok" : "error";
@@ -76,6 +141,9 @@ function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
       ? meta.attachmentsCount
       : 0;
   const hasExecutionLog = Boolean(command || stdout || stderr || returnCodeText !== "-");
+  const hasRerun = Boolean(handlers?.onRerun);
+  const hasOcrTaskBridge = Boolean(handlers?.onExtractTasks);
+  const hasActionButtons = hasExecutionLog || hasRerun || hasOcrTaskBridge;
   const conclusionText =
     resultSummary || (success ? "実行が完了しました。" : "実行結果を確認してください。");
 
@@ -105,6 +173,77 @@ function renderOrchestratorResultCard(meta: OrchestratorResultMeta) {
       ${
         attachmentsCount > 0
           ? html`<p class="chat-orch-card__line">添付画像: ${attachmentsCount}件</p>`
+          : nothing
+      }
+      ${
+        hasActionButtons
+          ? html`
+              <div class="chat-orch-card__actions">
+                ${
+                  hasExecutionLog
+                    ? html`
+                        <button
+                          class="chat-orch-card__action"
+                          type="button"
+                          title="実行ログをコピー"
+                          aria-label="実行ログをコピー"
+                          @click=${async (e: Event) => {
+                            const button = e.currentTarget as HTMLButtonElement | null;
+                            if (!button) {
+                              return;
+                            }
+                            const ok = await copyTextToClipboard(buildOrchestratorLogText(meta));
+                            button.dataset.state = ok ? "copied" : "error";
+                            window.setTimeout(
+                              () => {
+                                if (button.isConnected) {
+                                  delete button.dataset.state;
+                                }
+                              },
+                              ok ? 1400 : 2200,
+                            );
+                          }}
+                        >
+                          ${icons.copy}
+                          <span>ログをコピー</span>
+                        </button>
+                      `
+                    : nothing
+                }
+                ${
+                  hasRerun
+                    ? html`
+                        <button
+                          class="chat-orch-card__action"
+                          type="button"
+                          title="同じ条件で再実行"
+                          aria-label="同じ条件で再実行"
+                          @click=${() => handlers?.onRerun?.(meta)}
+                        >
+                          ${icons.loader}
+                          <span>再実行</span>
+                        </button>
+                      `
+                    : nothing
+                }
+                ${
+                  hasOcrTaskBridge
+                    ? html`
+                        <button
+                          class="chat-orch-card__action"
+                          type="button"
+                          title="OCR結果をタスク抽出へ渡す"
+                          aria-label="OCR結果をタスク抽出へ渡す"
+                          @click=${() => handlers?.onExtractTasks?.(meta)}
+                        >
+                          ${icons.zap}
+                          <span>タスク抽出へ渡す</span>
+                        </button>
+                      `
+                    : nothing
+                }
+              </div>
+            `
           : nothing
       }
 
@@ -235,6 +374,8 @@ export function renderMessageGroup(
   group: MessageGroup,
   opts: {
     onOpenSidebar?: (content: string) => void;
+    onOrchestratorRerun?: (meta: OrchestratorResultMeta) => void;
+    onOrchestratorExtractTasks?: (meta: OrchestratorResultMeta) => void;
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
@@ -276,6 +417,8 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              onOrchestratorRerun: opts.onOrchestratorRerun,
+              onOrchestratorExtractTasks: opts.onOrchestratorExtractTasks,
             },
             opts.onOpenSidebar,
           ),
@@ -357,7 +500,12 @@ function renderMessageImages(images: ImageBlock[]) {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: {
+    isStreaming: boolean;
+    showReasoning: boolean;
+    onOrchestratorRerun?: (meta: OrchestratorResultMeta) => void;
+    onOrchestratorExtractTasks?: (meta: OrchestratorResultMeta) => void;
+  },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -403,7 +551,10 @@ function renderGroupedMessage(
   if (orchestratorMeta) {
     return html`
       <div class="${bubbleClasses} chat-bubble--orchestrator">
-        ${renderOrchestratorResultCard(orchestratorMeta)}
+        ${renderOrchestratorResultCard(orchestratorMeta, {
+          onRerun: opts.onOrchestratorRerun,
+          onExtractTasks: opts.onOrchestratorExtractTasks,
+        })}
         ${renderMessageImages(images)}
         ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
       </div>

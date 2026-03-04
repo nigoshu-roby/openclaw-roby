@@ -16,7 +16,9 @@ import {
 } from "./app-channels.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
+  extractTasksFromOcrResult as extractTasksFromOcrResultInternal,
   handleSendChat as handleSendChatInternal,
+  rerunOrchestratorResult as rerunOrchestratorResultInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
@@ -498,6 +500,20 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
+    );
+  }
+
+  async handleOrchestratorRerun(meta: unknown) {
+    await rerunOrchestratorResultInternal(
+      this as unknown as Parameters<typeof rerunOrchestratorResultInternal>[0],
+      meta as Parameters<typeof rerunOrchestratorResultInternal>[1],
+    );
+  }
+
+  async handleOrchestratorExtractTasks(meta: unknown) {
+    await extractTasksFromOcrResultInternal(
+      this as unknown as Parameters<typeof extractTasksFromOcrResultInternal>[0],
+      meta as Parameters<typeof extractTasksFromOcrResultInternal>[1],
     );
   }
 

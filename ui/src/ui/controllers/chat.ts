@@ -47,7 +47,10 @@ type OrchestratorRunResponse = {
 
 type OrchestratorResultMeta = {
   kind: "orchestrator_result";
+  requestId?: string;
+  inputMessage?: string;
   route: string;
+  mode?: string;
   executed: boolean;
   ok: boolean;
   actionOk: boolean;
@@ -59,6 +62,13 @@ type OrchestratorResultMeta = {
   errorReason?: string;
   stdout?: string;
   stderr?: string;
+  ocrText?: string;
+};
+
+export type ChatSendOptions = {
+  forceOrchestrator?: boolean;
+  routeOverride?: string;
+  requestId?: string;
 };
 
 const MAX_ORCHESTRATOR_ATTACHMENTS = 8;
@@ -69,6 +79,7 @@ const ORCHESTRATOR_CONTEXT_ITEM_MAX_CHARS = 360;
 const ORCHESTRATOR_SUMMARY_MAX_CHARS = 12_000;
 const ORCHESTRATOR_STDOUT_MAX_CHARS = 12_000;
 const ORCHESTRATOR_STDERR_MAX_CHARS = 6_000;
+const ORCHESTRATOR_OCR_TEXT_MAX_CHARS = 24_000;
 
 const CHAT_LOCAL_CACHE_PREFIX = "openclaw.control.chat.cache.v1:";
 const CHAT_LOCAL_CACHE_LIMIT = 400;
@@ -437,6 +448,7 @@ export async function sendChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  options?: ChatSendOptions,
 ): Promise<string | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -473,12 +485,14 @@ export async function sendChatMessage(
       }
     }
 
+    const requestId = options?.requestId?.trim() || generateUUID();
     state.chatMessages = [
       ...state.chatMessages,
       {
         role: "user",
         content: contentBlocks,
         timestamp: now,
+        __openclawRequestId: requestId,
       },
     ];
     persistLocalChatMessages(state);
@@ -487,7 +501,8 @@ export async function sendChatMessage(
     state.chatRunId = runId;
     state.chatStream = "送信中…";
     state.chatStreamStartedAt = now;
-    const nativeChatMode = shouldUseNativeChatMode(msg, hasAttachments);
+    const nativeChatMode =
+      !options?.forceOrchestrator && shouldUseNativeChatMode(msg, hasAttachments);
     if (!nativeChatMode) {
       // Native chat runId is not created for orchestrator RPC calls.
       state.chatRunId = null;
@@ -515,6 +530,7 @@ export async function sendChatMessage(
       response = await state.client.request<OrchestratorRunResponse>("orchestrator.run", {
         sessionKey: state.sessionKey,
         message: orchestratorMessage || "添付画像を確認して対応してください。",
+        route: options?.routeOverride?.trim() || undefined,
         execute: true,
         attachments: apiAttachments,
       });
@@ -524,7 +540,10 @@ export async function sendChatMessage(
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
-    const orchestratorMeta = buildOrchestratorResultMeta(response);
+    const orchestratorMeta = buildOrchestratorResultMeta(response, {
+      requestId,
+      inputMessage: msg,
+    });
     state.chatMessages = [
       ...state.chatMessages,
       {
@@ -607,10 +626,14 @@ function parseOrchestratorAction(result: Record<string, unknown> | null | undefi
   return { route, elapsedMs, action };
 }
 
-function buildOrchestratorResultMeta(response: OrchestratorRunResponse): OrchestratorResultMeta {
+function buildOrchestratorResultMeta(
+  response: OrchestratorRunResponse,
+  source?: { requestId?: string; inputMessage?: string },
+): OrchestratorResultMeta {
   const payload = response.result;
   const { route, elapsedMs, action } = parseOrchestratorAction(payload);
   const actionRoute = typeof action.route === "string" ? action.route : route;
+  const mode = typeof action.mode === "string" ? action.mode.trim() : "";
   const actionOk = action.ok === true;
   const executed = action.executed === true;
   const returnCode = typeof response.returnCode === "number" ? response.returnCode : null;
@@ -629,10 +652,17 @@ function buildOrchestratorResultMeta(response: OrchestratorRunResponse): Orchest
   ]);
   const errorReason = actionOk ? "" : rawErrorReason;
   const summary = firstNonEmptyText([output, stdout]);
+  const ocrText =
+    mode === "local_ocr" && output
+      ? truncateForDisplay(output, ORCHESTRATOR_OCR_TEXT_MAX_CHARS)
+      : "";
 
   return {
     kind: "orchestrator_result",
+    requestId: source?.requestId?.trim() || undefined,
+    inputMessage: source?.inputMessage?.trim() || undefined,
     route: actionRoute,
+    mode: mode || undefined,
     executed,
     ok: actionOk,
     actionOk,
@@ -644,6 +674,7 @@ function buildOrchestratorResultMeta(response: OrchestratorRunResponse): Orchest
     errorReason: errorReason || undefined,
     stdout: stdout || undefined,
     stderr: stderr || undefined,
+    ocrText: ocrText || undefined,
   };
 }
 

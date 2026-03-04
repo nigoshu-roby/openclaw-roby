@@ -76,6 +76,8 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onOrchestratorRerun?: (meta: unknown) => void;
+  onOrchestratorExtractTasks?: (meta: unknown) => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -405,6 +407,8 @@ export function renderChat(props: ChatProps) {
               showReasoning,
               assistantName: assistantDisplayName,
               assistantAvatar: assistantIdentity.avatar,
+              onOrchestratorRerun: props.onOrchestratorRerun,
+              onOrchestratorExtractTasks: props.onOrchestratorExtractTasks,
             });
           }
 

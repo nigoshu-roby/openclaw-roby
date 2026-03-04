@@ -463,6 +463,61 @@ img.chat-avatar {
   border-top: 1px dashed var(--border);
 }
 
+.chat-orch-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat-orch-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.chat-orch-card__action svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.chat-orch-card__action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-orch-card__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-orch-card__action[data-state="copied"] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.chat-orch-card__action[data-state="error"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .chat-orch-card__section-title {
   margin: 0;
   font-size: 11px;
