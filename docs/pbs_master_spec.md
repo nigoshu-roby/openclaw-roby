@@ -35,6 +35,8 @@
 - Roby/OpenClaw: `/Users/<user>/OpenClaw`
 - Neuronic API: `/Users/<user>/Documents/New project/taskd`
 - Neuronic UI: `/Users/<user>/Documents/New project/TaskToolMac`
+- Neuronic 公開リポジトリ（統合先）:
+  - `https://github.com/nigoshu-roby/Neuronic.git`
 
 ### 2.2 オーケストレーション方針
 
