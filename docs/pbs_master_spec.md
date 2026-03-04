@@ -79,6 +79,11 @@
   - `title`, `source`, `origin_id`
 - 親子/順序:
   - `parent_origin_id`, `sibling_order`
+  - 同期ポリシー:
+    - 既定: `ROBY_NEURONIC_HIERARCHY_MODE=create_only`
+    - 初回作成時のみ親子/順序を送信し、再同期時は階層フィールドを省略
+    - 目的: Neuronic上で手動変更した親子構造（再親化/子の子化）を保持
+    - 常時上書きが必要な場合のみ `ROBY_NEURONIC_HIERARCHY_MODE=always`
 - 拡張メタ:
   - `external_ref`, `run_id`, `feedback_state`, `source_doc_id`, `source_doc_title`
 - キー互換:

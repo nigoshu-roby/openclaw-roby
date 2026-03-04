@@ -18,6 +18,7 @@ RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_runs.jsonl"
 DEBUG_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_debug.jsonl"
 NEURONIC_LOG_PATH = Path.home() / ".openclaw" / "roby" / "neuronic_import_runs.jsonl"
 FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
+HIERARCHY_STATE_PATH = Path.home() / ".openclaw" / "roby" / "neuronic_hierarchy_state.json"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 NOTION_KEY_PATH = Path.home() / ".config" / "notion" / "api_key"
 
@@ -1467,6 +1468,86 @@ def _count_payload_meta(items: List[Dict[str, Any]]) -> Tuple[int, int]:
     return parent_items, order_items
 
 
+def _hierarchy_state_path(env: Dict[str, str]) -> Path:
+    custom = (env.get("ROBY_NEURONIC_HIERARCHY_STATE_PATH") or "").strip()
+    if custom:
+        return Path(custom).expanduser()
+    return HIERARCHY_STATE_PATH
+
+
+def _load_known_hierarchy_origin_ids(env: Dict[str, str]) -> set[str]:
+    path = _hierarchy_state_path(env)
+    if not path.exists():
+        return set()
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    ids = obj.get("known_origin_ids") if isinstance(obj, dict) else None
+    if not isinstance(ids, list):
+        return set()
+    return {str(x).strip() for x in ids if str(x).strip()}
+
+
+def _save_known_hierarchy_origin_ids(env: Dict[str, str], origin_ids: set[str]) -> None:
+    path = _hierarchy_state_path(env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": datetime.now(JST).isoformat(),
+        "known_origin_ids": sorted(origin_ids),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _apply_hierarchy_send_policy(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Tuple[List[Dict[str, Any]], set[str], str, int]:
+    mode = (env.get("ROBY_NEURONIC_HIERARCHY_MODE", "create_only") or "create_only").strip().lower()
+    if mode not in {"always", "create_only"}:
+        mode = "create_only"
+
+    known = _load_known_hierarchy_origin_ids(env) if mode == "create_only" else set()
+    out: List[Dict[str, Any]] = []
+    suppressed = 0
+    for item in tasks:
+        row = dict(item)
+        if mode == "create_only":
+            origin_id = (row.get("origin_id") or "").strip()
+            if origin_id and origin_id in known:
+                had_hierarchy = False
+                for key in ("parent_origin_id", "sibling_order", "outline_path", "parentOriginId", "siblingOrder", "outlinePath"):
+                    if key in row:
+                        had_hierarchy = had_hierarchy or (row.get(key) is not None)
+                        row.pop(key, None)
+                if had_hierarchy:
+                    suppressed += 1
+        out.append(row)
+    return out, known, mode, suppressed
+
+
+def _successful_origin_ids_from_response(batch: List[Dict[str, Any]], body: Dict[str, Any]) -> List[str]:
+    if not batch:
+        return []
+    errors = body.get("errors")
+    if not isinstance(errors, list) or not errors:
+        return [str(it.get("origin_id") or "").strip() for it in batch if str(it.get("origin_id") or "").strip()]
+    failed_indexes = set()
+    for err in errors:
+        if isinstance(err, dict) and "index" in err:
+            try:
+                failed_indexes.add(int(err.get("index")))
+            except Exception:
+                continue
+    if not failed_indexes:
+        return [str(it.get("origin_id") or "").strip() for it in batch if str(it.get("origin_id") or "").strip()]
+    ok_ids: List[str] = []
+    for idx, item in enumerate(batch):
+        if idx in failed_indexes:
+            continue
+        oid = str(item.get("origin_id") or "").strip()
+        if oid:
+            ok_ids.append(oid)
+    return ok_ids
+
+
 def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -1600,11 +1681,12 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
     if not tasks:
         return {"created": 0, "updated": 0, "skipped": 0}
 
+    send_tasks, known_hierarchy_ids, hierarchy_mode, suppressed_hierarchy_count = _apply_hierarchy_send_policy(tasks, env)
     default_batch = int(env.get("NEURONIC_BATCH_SIZE", "20"))
     max_batch_bytes = int(env.get("NEURONIC_MAX_BATCH_BYTES", "90000"))
-    queue: List[List[Dict[str, Any]]] = _split_grouped_batches(tasks, default_batch, max_batch_bytes)
+    queue: List[List[Dict[str, Any]]] = _split_grouped_batches(send_tasks, default_batch, max_batch_bytes)
     verbose = env.get("ROBY_NEURONIC_VERBOSE", "0") == "1"
-    items_with_parent, items_with_order = _count_payload_meta(tasks)
+    items_with_parent, items_with_order = _count_payload_meta(send_tasks)
 
     aggregate: Dict[str, Any] = {
         "ok": True,
@@ -1615,9 +1697,11 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
         "errors": [],
         "error_count": 0,
         "batches": 0,
-        "items_sent": len(tasks),
+        "items_sent": len(send_tasks),
         "items_with_parent": items_with_parent,
         "items_with_order": items_with_order,
+        "hierarchy_mode": hierarchy_mode,
+        "suppressed_hierarchy_count": suppressed_hierarchy_count,
         "endpoint_used": None,
         "fallback_used": False,
         "hierarchy_applied": None,
@@ -1628,6 +1712,7 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
     hierarchy_flags_seen: List[bool] = []
     order_flags_seen: List[bool] = []
     legacy_flags_unavailable = False
+    successful_origin_ids: set[str] = set()
 
     while queue:
         current = queue.pop(0)
@@ -1658,6 +1743,8 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
             continue
 
         body = resp.get("body") if isinstance(resp.get("body"), dict) else {}
+        for oid in _successful_origin_ids_from_response(current, body):
+            successful_origin_ids.add(oid)
         for key in ("created", "updated", "skipped", "hierarchy_updated", "order_updated"):
             if key in body and isinstance(body.get(key), int):
                 aggregate[key] = int(aggregate.get(key, 0)) + int(body.get(key, 0))
@@ -1705,6 +1792,11 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
 
     if not aggregate.get("errors"):
         aggregate.pop("errors", None)
+
+    if hierarchy_mode == "create_only" and successful_origin_ids:
+        merged_ids = set(known_hierarchy_ids)
+        merged_ids.update(successful_origin_ids)
+        _save_known_hierarchy_origin_ids(env, merged_ids)
 
     for line in _format_neuronic_cli_logs(aggregate, verbose=verbose):
         print(line)

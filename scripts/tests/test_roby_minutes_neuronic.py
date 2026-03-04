@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 from unittest import TestCase, main
@@ -33,6 +34,8 @@ def _load_minutes_module():
 class TestRobyMinutesNeuronic(TestCase):
     def setUp(self):
         self.mod = _load_minutes_module()
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.hierarchy_state_path = str(Path(self.tmpdir.name) / "hier_state.json")
         self._orig_send_once = self.mod._send_neuronic_once
         self._orig_append_jsonl = self.mod._append_jsonl
         self._orig_format_cli = self.mod._format_neuronic_cli_logs
@@ -43,6 +46,7 @@ class TestRobyMinutesNeuronic(TestCase):
         self.mod._send_neuronic_once = self._orig_send_once
         self.mod._append_jsonl = self._orig_append_jsonl
         self.mod._format_neuronic_cli_logs = self._orig_format_cli
+        self.tmpdir.cleanup()
 
     def test_parent_and_sibling_fields_normal_flow(self):
         extracted = [
@@ -213,6 +217,77 @@ class TestRobyMinutesNeuronic(TestCase):
         self.assertIn(4, send_sizes)
         self.assertIn(2, send_sizes)
         self.assertGreaterEqual(send_sizes.count(1), 4)
+
+    def test_create_only_mode_preserves_manual_hierarchy_on_resync(self):
+        tasks = [
+            {
+                "title": "親タスク",
+                "project": "TOKIWAGI",
+                "due_date": "",
+                "assignee": "私",
+                "note": "",
+                "source": "roby",
+                "origin_id": "roby:auto:parent01",
+                "status": "inbox",
+                "priority": 1,
+                "tags": ["project:TOKIWAGI"],
+                "parent_origin_id": None,
+                "sibling_order": 0,
+                "outline_path": "0",
+            },
+            {
+                "title": "子タスク",
+                "project": "TOKIWAGI",
+                "due_date": "",
+                "assignee": "私",
+                "note": "",
+                "source": "roby",
+                "origin_id": "roby:auto:child01",
+                "status": "inbox",
+                "priority": 1,
+                "tags": ["project:TOKIWAGI"],
+                "parent_origin_id": "roby:auto:parent01",
+                "sibling_order": 0,
+                "outline_path": "0/0",
+            },
+        ]
+
+        captured_batches: List[List[Dict[str, Any]]] = []
+
+        def _capture_once(batch: List[Dict[str, Any]], _env: Dict[str, str]) -> Dict[str, Any]:
+            captured_batches.append([dict(x) for x in batch])
+            return {
+                "ok": True,
+                "status_code": 200,
+                "endpoint_used": "/api/v1/tasks/import",
+                "fallback_used": False,
+                "body": {"created": len(batch), "updated": 0, "skipped": 0, "errors": []},
+            }
+
+        self.mod._send_neuronic_once = _capture_once
+        env = {
+            "ROBY_NEURONIC_VERBOSE": "0",
+            "ROBY_NEURONIC_HIERARCHY_MODE": "create_only",
+            "ROBY_NEURONIC_HIERARCHY_STATE_PATH": self.hierarchy_state_path,
+        }
+
+        # 1st sync (create): hierarchy fields should be sent.
+        first = self.mod.send_neuronic(tasks, env)
+        self.assertTrue(first.get("ok"))
+        self.assertEqual(len(captured_batches), 1)
+        first_batch = captured_batches[0]
+        self.assertIn("sibling_order", first_batch[0])
+        self.assertIn("parent_origin_id", first_batch[1])
+
+        # 2nd sync (resync): hierarchy fields should be omitted to keep manual edits.
+        second = self.mod.send_neuronic(tasks, env)
+        self.assertTrue(second.get("ok"))
+        self.assertEqual(len(captured_batches), 2)
+        second_batch = captured_batches[1]
+        self.assertNotIn("sibling_order", second_batch[0])
+        self.assertNotIn("outline_path", second_batch[0])
+        self.assertNotIn("parent_origin_id", second_batch[1])
+        self.assertNotIn("sibling_order", second_batch[1])
 
 
 if __name__ == "__main__":
