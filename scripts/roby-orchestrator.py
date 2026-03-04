@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -117,6 +119,24 @@ def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def float_from_env(value: Optional[str], default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return default
+
+
+def int_from_env(value: Optional[str], default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
 
 
 def load_ab_router_config(env: Dict[str, str]) -> Dict[str, Any]:
@@ -322,6 +342,15 @@ def is_greeting_request(message: str) -> bool:
     return normalized in greeting_tokens
 
 
+def prefers_short_answer(message: str) -> bool:
+    text = (message or "").strip().lower()
+    short_markers = [
+        "短く", "簡潔", "一言", "要点だけ", "3行", "2行", "箇条書きで3",
+        "in 3 lines", "in two lines", "briefly",
+    ]
+    return any(marker in text for marker in short_markers)
+
+
 def contains_japanese(text: str) -> bool:
     if not text:
         return False
@@ -382,6 +411,22 @@ def is_truncated_qa_output(text: str) -> bool:
         if present <= 1:
             return True
     if normalized.endswith(("## 実行", "## 提案", "## 推奨案", "## 次のアクション")):
+        return True
+    return False
+
+
+def is_likely_cutoff_output(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return True
+    tail = normalized[-40:]
+    if re.search(r"##\s*$", tail):
+        return True
+    if re.search(r"[：:]\s*$", tail):
+        return True
+    if re.search(r"\*\*$", tail):
+        return True
+    if re.search(r"[\(\[]\s*$", tail):
         return True
     return False
 
@@ -506,7 +551,7 @@ def build_local_capability_summary() -> str:
 
 def run_qa_ollama_local(message: str, env: Dict[str, str]) -> Dict[str, Any]:
     if shutil.which("ollama") is None:
-        return {"ok": False, "error": "ollama_not_installed"}
+        return {"ok": False, "error": "ollama_not_installed", "backend": "none"}
     model = env.get("ROBY_ORCH_OLLAMA_MODEL", "qwen2.5:7b").strip()
     if not model:
         model = "qwen2.5:7b"
@@ -516,30 +561,63 @@ def run_qa_ollama_local(message: str, env: Dict[str, str]) -> Dict[str, Any]:
     ).strip()
     user_text = compact_qa_message(message)
     composed = f"{prompt}\n\nユーザー:\n{user_text}\n\n回答:"
-    cmd = ["ollama", "run", model, composed]
-    timeout = int(env.get("ROBY_ORCH_OLLAMA_TIMEOUT_SEC", "90") or 90)
+    timeout = int_from_env(env.get("ROBY_ORCH_OLLAMA_TIMEOUT_SEC", "90"), 90)
+    base_url = env.get("ROBY_ORCH_OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+    endpoint = f"{base_url}/api/generate"
+    payload = {
+        "model": model,
+        "prompt": composed,
+        "stream": False,
+        "options": {
+            "temperature": float_from_env(env.get("ROBY_ORCH_OLLAMA_TEMPERATURE", "0.25"), 0.25),
+            "top_p": float_from_env(env.get("ROBY_ORCH_OLLAMA_TOP_P", "0.9"), 0.9),
+            "repeat_penalty": float_from_env(env.get("ROBY_ORCH_OLLAMA_REPEAT_PENALTY", "1.05"), 1.05),
+            "num_predict": int_from_env(env.get("ROBY_ORCH_OLLAMA_NUM_PREDICT", "2200"), 2200),
+        },
+    }
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(OPENCLAW_REPO),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "ollama_timeout"}
-    except Exception as e:
-        return {"ok": False, "error": f"ollama_runtime_error: {e}"}
-    output = (proc.stdout or "").strip()
-    if proc.returncode != 0:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", "ignore")
+            data = json.loads(raw) if raw else {}
+    except TimeoutError:
+        return {"ok": False, "error": "ollama_timeout", "backend": "ollama_api"}
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "ignore").strip()
+        except Exception:
+            detail = ""
         return {
             "ok": False,
-            "error": (proc.stderr or "").strip() or f"ollama_exit_{proc.returncode}",
+            "error": f"ollama_http_{e.code}",
+            "detail": detail[:400],
+            "backend": "ollama_api",
         }
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"ollama_connection_error: {e.reason}", "backend": "ollama_api"}
+    except Exception as e:
+        return {"ok": False, "error": f"ollama_runtime_error: {e}", "backend": "ollama_api"}
+
+    output = str(data.get("response") or "").strip()
     if not output:
-        return {"ok": False, "error": "ollama_empty_output"}
-    return {"ok": True, "output": output, "model": model}
+        return {"ok": False, "error": "ollama_empty_output", "backend": "ollama_api"}
+
+    min_chars = int_from_env(env.get("ROBY_ORCH_OLLAMA_MIN_OUTPUT_CHARS", "40"), 40)
+    if prefers_short_answer(message):
+        min_chars = min(30, min_chars)
+    if is_broken_qa_output(output, message):
+        return {"ok": False, "error": "ollama_low_quality_output", "backend": "ollama_api", "model": model}
+    if is_likely_cutoff_output(output):
+        return {"ok": False, "error": "ollama_truncated_output", "backend": "ollama_api", "model": model}
+    if len(output) < min_chars and not is_greeting_request(message):
+        return {"ok": False, "error": "ollama_too_short_output", "backend": "ollama_api", "model": model}
+    return {"ok": True, "output": output, "model": model, "backend": "ollama_api"}
 
 
 def build_coding_requirements(message: str, env: Dict[str, str]) -> Dict[str, Any]:
@@ -1245,6 +1323,7 @@ def handle_qa_ollama(
                 "ok": True,
                 "output": local.get("output", ""),
                 "model": local.get("model", ""),
+                "backend": local.get("backend", "ollama_api"),
             }
         )
         return result

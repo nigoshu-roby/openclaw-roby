@@ -57,6 +57,15 @@
   - `qa_ollama` を明示ルートとして追加
   - `ROBY_ORCH_OLLAMA_MODEL` / `ROBY_ORCH_OLLAMA_TIMEOUT_SEC` で運用調整
   - `ROBY_ORCH_OLLAMA_FALLBACK_QA=1` で失敗時に `qa_gemini` へ自動フォールバック
+  - 品質チューニング項目:
+    - `ROBY_ORCH_OLLAMA_TEMPERATURE`（既定 0.25）
+    - `ROBY_ORCH_OLLAMA_TOP_P`（既定 0.9）
+    - `ROBY_ORCH_OLLAMA_REPEAT_PENALTY`（既定 1.05）
+    - `ROBY_ORCH_OLLAMA_NUM_PREDICT`（既定 2200）
+    - `ROBY_ORCH_OLLAMA_MIN_OUTPUT_CHARS`（既定 40）
+  - 品質ガード:
+    - broken/truncated/短すぎる出力は `qa_gemini` に自動フォールバック
+    - 「短く/3行で」等の短文要求時は最小文字数チェックを緩和
 
 ### 2.4 AB Router（#9）
 
