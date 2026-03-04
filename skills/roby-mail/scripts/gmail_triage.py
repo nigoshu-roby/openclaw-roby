@@ -10,7 +10,7 @@ import hashlib
 from datetime import datetime, timedelta
 from html import unescape
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
@@ -562,6 +562,113 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
     return out
 
 
+def _parse_jsonish_text(raw: str) -> Any:
+    if not raw:
+        return None
+    s = raw.strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s)
+    try:
+        return json.loads(s)
+    except Exception:
+        m = re.search(r"(\{.*\}|\[.*\])", s, re.DOTALL)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            return None
+
+
+def _extract_summary_text(data: Dict[str, Any]) -> str:
+    for k in ("summary", "output", "text", "result"):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
+
+
+def llm_triage_decision(subject: str, sender: str, cc: str, body: str, env: Dict[str, str]) -> Tuple[Optional[str], str]:
+    if (env.get("GMAIL_TRIAGE_LLM_ENABLE", "0") or "0").strip() not in {"1", "true", "yes", "on"}:
+        return None, ""
+
+    model = (env.get("GMAIL_TRIAGE_LLM_MODEL", "ollama/llama3.2:3b") or "").strip()
+    if not model:
+        return None, ""
+    timeout_sec = int((env.get("GMAIL_TRIAGE_LLM_TIMEOUT_SEC", "45") or "45").strip())
+    max_input_chars = int((env.get("GMAIL_TRIAGE_LLM_MAX_INPUT_CHARS", "5000") or "5000").strip())
+    max_output_tokens = (env.get("GMAIL_TRIAGE_LLM_MAX_OUTPUT_TOKENS", "180") or "180").strip()
+    length = (env.get("GMAIL_TRIAGE_LLM_LENGTH", "s") or "s").strip()
+
+    prompt = (
+        "You classify business email triage for a Japanese solo operator. "
+        "Return ONLY JSON object: {\"category\":\"archive|later_check|needs_review|needs_reply\",\"reason\":\"short\"}. "
+        "Rules: "
+        "archive for obvious promo/newsletter/seminar announcements. "
+        "needs_review for internal coordination, ops notices, and anything involving decisions. "
+        "needs_reply only when explicit response/action is requested from recipient. "
+        "later_check for tool/platform notices worth checking later. "
+        "Be conservative with needs_reply."
+    )
+    body_trim = (body or "")[:max_input_chars]
+    source_text = (
+        f"Subject: {subject}\n"
+        f"From: {sender}\n"
+        f"CC: {cc}\n\n"
+        f"Body:\n{body_trim}\n"
+    )
+    cmd = [
+        "summarize", "-",
+        "--json", "--plain",
+        "--metrics", "off",
+        "--model", model,
+        "--length", length,
+        "--force-summary",
+        "--prompt", prompt,
+        "--max-output-tokens", max_output_tokens,
+    ]
+    try:
+        out = subprocess.check_output(cmd, input=source_text.encode("utf-8"), env=env, timeout=timeout_sec)
+        data = json.loads(out)
+        raw = _extract_summary_text(data)
+        parsed = _parse_jsonish_text(raw)
+        if isinstance(parsed, dict):
+            cat = str(parsed.get("category") or "").strip()
+            reason = str(parsed.get("reason") or "").strip()
+            if cat in {"archive", "later_check", "needs_review", "needs_reply"}:
+                return cat, reason
+    except Exception:
+        return None, ""
+    return None, ""
+
+
+def should_apply_llm_override(
+    current_category: str,
+    llm_category: str,
+    sender: str,
+    subject: str,
+) -> bool:
+    if llm_category == current_category:
+        return False
+    sender_lower = (sender or "").lower()
+    subject_lower = (subject or "").lower()
+
+    # Avoid downgrading explicit reply-required mail to archive.
+    if current_category == "needs_reply" and llm_category == "archive":
+        return False
+
+    # Archive override only when strong promotional signals exist.
+    if llm_category == "archive":
+        is_noreply = ("no-reply" in sender_lower) or ("noreply" in sender_lower)
+        promo_domain = any(dom in sender_lower for dom in PROMO_SENDER_DOMAINS)
+        promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
+        if not (is_noreply or promo_domain or promo_subject):
+            return False
+        return True
+
+    return True
+
+
 def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any] | None = None, cc: str = "") -> Tuple[str, List[str], bool, str | None]:
     text = f"{subject} {sender} {cc} {body}".lower()
     header_text = f"{subject} {sender} {cc}".lower()
@@ -774,6 +881,8 @@ def main() -> int:
         "notified": 0,
         "tasks": 0,
         "neuronic_errors": 0,
+        "llm_reviewed": 0,
+        "llm_overrides": 0,
     }
     run_id = build_run_id("gmail")
     summary["run_id"] = run_id
@@ -781,6 +890,9 @@ def main() -> int:
     category_counts: Dict[str, int] = {}
 
     skip_tasks = args.skip_tasks or args.dry_run
+    llm_enabled = (env.get("GMAIL_TRIAGE_LLM_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+    llm_max_reviews = int((env.get("GMAIL_TRIAGE_LLM_MAX_REVIEWS", "0") or "0").strip())
+    llm_review_count = 0
 
     for msg in messages:
         msg_id = msg.get("id")
@@ -795,6 +907,16 @@ def main() -> int:
 
         cc = msg.get("cc", "") or msg.get("ccs", "") or ""
         category, tags, needs_reply, rule_applied = classify_message(subject, sender, body, rules=rules, cc=cc)
+        llm_category = None
+        llm_reason = ""
+        if llm_enabled and llm_max_reviews > 0 and llm_review_count < llm_max_reviews and not rule_applied and category in ("needs_review", "later_check", "needs_reply"):
+            llm_category, llm_reason = llm_triage_decision(subject, sender, cc, body, env)
+            llm_review_count += 1
+            summary["llm_reviewed"] += 1
+            if llm_category and should_apply_llm_override(category, llm_category, sender, subject):
+                category = llm_category
+                summary["llm_overrides"] += 1
+                tags = _dedupe_tags(tags + ["llm:override"])
         category_counts[category] = category_counts.get(category, 0) + 1
         summary["new"] += 1
 
@@ -861,6 +983,10 @@ def main() -> int:
             }
             if rule_applied:
                 row["rule"] = rule_applied
+            if llm_category:
+                row["llm_category"] = llm_category
+            if llm_reason:
+                row["llm_reason"] = llm_reason
             print(json.dumps(row, ensure_ascii=False))
 
         if not args.dry_run:

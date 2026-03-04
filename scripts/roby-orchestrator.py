@@ -139,6 +139,74 @@ def int_from_env(value: Optional[str], default: int) -> int:
         return default
 
 
+def apply_minutes_llm_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
+    profile = (env.get("ROBY_ORCH_MINUTES_LLM_PROFILE", "hybrid") or "hybrid").strip().lower()
+    local_fast = (env.get("ROBY_ORCH_MINUTES_LOCAL_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
+    local_quality = (env.get("ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
+    cloud = (env.get("ROBY_ORCH_MINUTES_CLOUD_MODEL", env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview")) or "").strip()
+
+    def _csv(*models: str) -> str:
+        return ",".join([m for m in models if m])
+
+    overrides: Dict[str, str] = {}
+    if profile == "local":
+        overrides = {
+            "MINUTES_REVIEW_MODELS": _csv(local_quality, local_fast, cloud),
+            "MINUTES_TASKS_MODELS": _csv(local_quality, local_fast, cloud),
+            "MINUTES_SUMMARY_MODELS": _csv(local_quality, local_fast, cloud),
+            "MINUTES_COMPACT_MODELS": _csv(local_fast, local_quality, cloud),
+            "MINUTES_REPAIR_MODELS": _csv(local_quality, local_fast, cloud),
+            "MINUTES_ENRICH_MODELS": _csv(local_fast, local_quality, cloud),
+        }
+    elif profile == "cloud":
+        overrides = {
+            "MINUTES_REVIEW_MODELS": _csv(cloud, local_quality),
+            "MINUTES_TASKS_MODELS": _csv(cloud, local_quality),
+            "MINUTES_SUMMARY_MODELS": _csv(cloud, local_quality),
+            "MINUTES_COMPACT_MODELS": _csv(cloud, local_fast),
+            "MINUTES_REPAIR_MODELS": _csv(cloud, local_quality),
+            "MINUTES_ENRICH_MODELS": _csv(cloud, local_fast),
+        }
+    else:  # hybrid
+        profile = "hybrid"
+        overrides = {
+            "MINUTES_REVIEW_MODELS": _csv(local_quality, cloud),
+            "MINUTES_TASKS_MODELS": _csv(cloud, local_quality),
+            "MINUTES_SUMMARY_MODELS": _csv(cloud, local_quality),
+            "MINUTES_COMPACT_MODELS": _csv(local_fast, cloud),
+            "MINUTES_REPAIR_MODELS": _csv(cloud, local_quality),
+            "MINUTES_ENRICH_MODELS": _csv(local_fast, cloud),
+        }
+    return profile, overrides
+
+
+def apply_gmail_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
+    profile = (env.get("ROBY_ORCH_GMAIL_PROFILE", "fast") or "fast").strip().lower()
+    fast_model = (env.get("ROBY_ORCH_GMAIL_LLM_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
+    quality_model = (env.get("ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
+    overrides: Dict[str, str] = {}
+    if profile == "quality":
+        overrides = {
+            "GMAIL_TRIAGE_LLM_ENABLE": "1",
+            "GMAIL_TRIAGE_LLM_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_QUALITY", "30"),
+        }
+    elif profile == "hybrid":
+        overrides = {
+            "GMAIL_TRIAGE_LLM_ENABLE": "1",
+            "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_HYBRID", "10"),
+        }
+    else:  # fast
+        profile = "fast"
+        overrides = {
+            "GMAIL_TRIAGE_LLM_ENABLE": "0",
+            "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_FAST", "0"),
+        }
+    return profile, overrides
+
+
 def load_ab_router_config(env: Dict[str, str]) -> Dict[str, Any]:
     path = Path(env.get("ROBY_ORCH_AB_ROUTER_CONFIG", str(AB_ROUTER_CONFIG_PATH)))
     if not path.exists():
@@ -1018,14 +1086,20 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
     if verbose:
         cmd.append("--debug")
 
+    profile, profile_env = apply_minutes_llm_profile(env)
+    child_env = dict(env)
+    child_env.update(profile_env)
+
     result = {
         "route": ROUTE_MINUTES,
         "mode": run_mode,
+        "llm_profile": profile,
+        "llm_overrides": profile_env,
         "command": " ".join(shlex.quote(x) for x in cmd),
         "executed": False,
     }
     if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=child_env, capture_output=True, text=True)
         result["executed"] = True
         result["ok"] = proc.returncode == 0
         result["stdout"] = proc.stdout
@@ -1074,16 +1148,22 @@ def handle_gmail_pipeline(message: str, env: Dict[str, str], execute: bool, verb
     if any(k in message for k in ["dry-run", "ドライラン", "確認だけ", "一覧だけ"]):
         cmd.append("--dry-run")
 
+    profile, profile_env = apply_gmail_profile(env)
+    child_env = dict(env)
+    child_env.update(profile_env)
+
     result = {
         "route": ROUTE_GMAIL,
         "command": " ".join(shlex.quote(x) for x in cmd),
         "executed": False,
+        "llm_profile": profile,
+        "llm_overrides": profile_env,
         "account": account,
         "query": query,
         "max": int(max_items),
     }
     if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=child_env, capture_output=True, text=True)
         result["executed"] = True
         result["ok"] = proc.returncode == 0
         result["stdout"] = proc.stdout

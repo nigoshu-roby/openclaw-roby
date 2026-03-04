@@ -44,6 +44,10 @@
 - QAローカル系: Ollama ルート（明示指定時にローカル回答、失敗時はGeminiへフォールバック）
 - Coding系: Codex ルート（実装）
 - Pipeline系: minutes / gmail / self-growth
+- Route別負荷分離（新規）:
+  - minutes: `ROBY_ORCH_MINUTES_LLM_PROFILE=local|hybrid|cloud`
+  - gmail: `ROBY_ORCH_GMAIL_PROFILE=fast|hybrid|quality`
+  - 既定は `minutes=hybrid`, `gmail=fast`（コスト/速度優先）
 - 実装の原則:
   - ルーティングは明示的に残す
   - 実行結果は「結論 / 実行ログ / エラー理由」で表示
@@ -286,6 +290,22 @@
     - `ROBY_ORCH_OLLAMA_MODEL=qwen2.5:7b`
     - `ROBY_ORCH_OLLAMA_TIMEOUT_SEC=120`
     - `ROBY_ORCH_OLLAMA_FALLBACK_QA=1`
+
+### 8.11 Completion Update（minutes/gmail の Ollama段階導入）
+
+- 完了日: 2026-03-05
+- 実装:
+  - `roby-orchestrator.py` に route別 LLM profile 適用を追加
+    - minutes: 実行前に `MINUTES_*_MODELS` を profileに応じて動的上書き
+    - gmail: 実行前に `GMAIL_TRIAGE_LLM_*` を profileに応じて動的上書き
+  - `gmail_triage.py` に optional LLM判定を追加（既定OFF）
+    - 曖昧カテゴリ（needs_review/later_check/needs_reply）のみ対象
+    - 明示ルール適用メールは対象外
+    - `needs_reply -> archive` の危険な降格は抑止
+    - summaryに `llm_reviewed` / `llm_overrides` を追加
+- 運用デフォルト:
+  - `ROBY_ORCH_GMAIL_PROFILE=fast`（LLM未使用）
+  - 必要時のみ `hybrid` / `quality` へ切替
 
 ### 8.3 Completion Update（#9 AB Router）
 
