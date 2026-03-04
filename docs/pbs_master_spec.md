@@ -204,3 +204,31 @@
   - GitHubタスク状態
   - Notion PBS Snapshot
   - 必要なら本書
+
+---
+
+## 10. Handoff Checkpoint（#11/#12）
+
+- 日付: 2026-03-04
+- 目的: 別スレッドで現状確認できるよう、#11/#12の実装状態を固定化
+
+### OpenClaw（Roby側）
+
+- Commit: `1d81e4170`
+- Branch: `main`
+- Push先: `origin (nigoshu-roby/openclaw-roby)` 反映済み
+- 対象:
+  - `scripts/roby-minutes.py`
+  - `skills/roby-mail/scripts/gmail_triage.py`
+  - `docs/pbs_master_spec.md`
+
+### Neuronic（ローカル統合リポジトリ）
+
+- Commit: `aa1de0e`
+- Branch: `master`
+- 対象:
+  - `taskd` feedback API / feedback_state 永続化 / internal tag分離
+  - `TaskToolMac` 一覧行評価ボタン / 永続ハイライト / 詳細評価UI削除
+  - `docs/neuronic_outsourcing_handoff_2026-03-04.md`
+- 注記:
+  - このリポジトリは remote 未設定のため push は未実施
