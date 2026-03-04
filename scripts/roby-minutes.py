@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
 import urllib.error
+from roby_audit import append_audit_event
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "minutes_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_runs.jsonl"
@@ -2043,6 +2044,27 @@ def main() -> int:
 
     if args.policy:
         summary["policy"] = args.policy
+
+    if env.get("ROBY_IMMUTABLE_AUDIT", "1") == "1":
+        try:
+            append_audit_event(
+                "minutes_sync.run",
+                {
+                    "run_id": run_id,
+                    "notion_pages": int(summary.get("notion_pages", 0)),
+                    "gdocs": int(summary.get("gdocs", 0)),
+                    "tasks": int(summary.get("tasks", 0)),
+                    "heuristic_used_docs": int(summary.get("heuristic_used_docs", 0)),
+                    "neuronic_errors": int(summary.get("neuronic_errors", 0)),
+                    "dry_run": bool(summary.get("dry_run", False)),
+                    "policy": summary.get("policy", ""),
+                },
+                source="roby-minutes",
+                run_id=run_id,
+                severity="error" if int(summary.get("neuronic_errors", 0)) > 0 else "info",
+            )
+        except Exception:
+            pass
 
     print(json.dumps(summary, ensure_ascii=False))
     return 0

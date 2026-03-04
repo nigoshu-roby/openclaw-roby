@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from roby_audit import append_audit_event
 
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 STATE_DIR = Path.home() / ".openclaw" / "roby"
@@ -21,6 +23,10 @@ SELF_GROWTH_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-self-growth.py"
 GMAIL_TRIAGE_SCRIPT = OPENCLAW_REPO / "skills" / "roby-mail" / "scripts" / "gmail_triage.py"
 NOTION_SYNC_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-notion-sync.py"
 EVAL_HARNESS_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-eval-harness.py"
+DRILL_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-drill.py"
+WEEKLY_REPORT_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-weekly-report.py"
+AB_ROUTER_CONFIG_PATH = OPENCLAW_REPO / "config" / "pbs" / "ab_router.json"
+AB_RUN_LOG_PATH = STATE_DIR / "ab_router_runs.jsonl"
 
 ROUTE_QA = "qa_gemini"
 ROUTE_CODING = "coding_codex"
@@ -29,6 +35,8 @@ ROUTE_SELF_GROWTH = "self_growth"
 ROUTE_GMAIL = "gmail_pipeline"
 ROUTE_NOTION_SYNC = "notion_sync"
 ROUTE_EVAL = "evaluation_harness"
+ROUTE_DRILL = "runbook_drill"
+ROUTE_WEEKLY_REPORT = "weekly_report"
 
 CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
@@ -45,6 +53,23 @@ NOTION_SYNC_HINTS = [
 EVAL_HINTS = [
     "評価", "eval", "harness", "品質評価", "回帰テスト", "評価ハーネス", "品質検証", "回帰"
 ]
+DRILL_HINTS = [
+    "drill", "ドリル", "runbook", "ランブック", "運用確認", "疎通確認", "運用テスト"
+]
+WEEKLY_REPORT_HINTS = [
+    "週次レポート", "weekly report", "週報", "運用レポート", "サマリレポート"
+]
+
+
+def bool_from_env(value: str, default: bool = False) -> bool:
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 GMAIL_EXEC_HINTS = [
     "整理", "仕分け", "実行", "triage", "アーカイブ", "通知", "確認して", "走らせて"
 ]
@@ -89,12 +114,110 @@ def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def load_ab_router_config(env: Dict[str, str]) -> Dict[str, Any]:
+    path = Path(env.get("ROBY_ORCH_AB_ROUTER_CONFIG", str(AB_ROUTER_CONFIG_PATH)))
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def choose_weighted_arm(
+    arms: List[Dict[str, Any]],
+    seed_key: str,
+) -> Tuple[Optional[Dict[str, Any]], int, int]:
+    normalized: List[Dict[str, Any]] = []
+    total = 0
+    for arm in arms:
+        if not isinstance(arm, dict):
+            continue
+        weight = int(arm.get("weight", 0) or 0)
+        if weight <= 0:
+            continue
+        normalized.append({"arm": arm, "weight": weight})
+        total += weight
+    if total <= 0:
+        return None, 0, 0
+    digest = hashlib.sha256(seed_key.encode("utf-8")).hexdigest()
+    bucket = int(digest[:8], 16) % total
+    acc = 0
+    for row in normalized:
+        acc += row["weight"]
+        if bucket < acc:
+            return row["arm"], bucket, total
+    return normalized[-1]["arm"], bucket, total
+
+
+def pick_ab_router_for_qa(message: str, env: Dict[str, str]) -> Tuple[Dict[str, str], Optional[Dict[str, Any]]]:
+    config = load_ab_router_config(env)
+    enabled = bool_from_env(env.get("ROBY_ORCH_AB_ROUTER", ""), default=bool(config.get("enabled", False)))
+    if not enabled:
+        return {}, None
+    qa_conf = config.get("qa_gemini")
+    if not isinstance(qa_conf, dict) or not bool(qa_conf.get("enabled", True)):
+        return {}, None
+    arms = qa_conf.get("arms")
+    if not isinstance(arms, list) or not arms:
+        return {}, None
+
+    seed = str(config.get("seed", "pbs-ab-router-v1"))
+    rotate_daily = bool(config.get("rotate_daily", False))
+    msg_norm = re.sub(r"\s+", " ", (message or "").strip().lower())
+    day_tag = datetime.now(JST).strftime("%Y-%m-%d") if rotate_daily else "stable"
+    seed_key = f"{seed}|qa_gemini|{day_tag}|{msg_norm}"
+    selected, bucket, total = choose_weighted_arm(arms, seed_key)
+    if not selected:
+        return {}, None
+
+    overrides: Dict[str, str] = {}
+    if selected.get("model"):
+        overrides["ROBY_ORCH_GEMINI_MODEL"] = str(selected["model"])
+    if selected.get("length"):
+        overrides["ROBY_ORCH_GEMINI_LENGTH"] = str(selected["length"])
+    if selected.get("qa_max_tokens"):
+        overrides["ROBY_ORCH_QA_MAX_TOKENS"] = str(selected["qa_max_tokens"])
+    if selected.get("qa_retry_max_tokens"):
+        overrides["ROBY_ORCH_QA_RETRY_MAX_TOKENS"] = str(selected["qa_retry_max_tokens"])
+    if selected.get("qa_timeout_sec"):
+        overrides["ROBY_ORCH_QA_TIMEOUT_SEC"] = str(selected["qa_timeout_sec"])
+    if selected.get("prompt"):
+        overrides["ROBY_ORCH_GEMINI_QA_PROMPT"] = str(selected["prompt"])
+    elif selected.get("prompt_env_key"):
+        prompt_env_key = str(selected.get("prompt_env_key"))
+        prompt_env_value = env.get(prompt_env_key, "").strip()
+        if prompt_env_value:
+            overrides["ROBY_ORCH_GEMINI_QA_PROMPT"] = prompt_env_value
+
+    decision = {
+        "enabled": True,
+        "route": ROUTE_QA,
+        "arm_id": str(selected.get("id", "unknown")),
+        "label": str(selected.get("label", "")),
+        "bucket": bucket,
+        "total_weight": total,
+        "seed": seed,
+        "rotate_daily": rotate_daily,
+        "overrides": sorted(list(overrides.keys())),
+        "ts": datetime.now(JST).isoformat(),
+    }
+    return overrides, decision
+
+
 def classify_intent_heuristic(message: str) -> str:
     lower = message.lower()
     if any(k in lower for k in SELF_GROWTH_HINTS):
         return ROUTE_SELF_GROWTH
     if any(k in lower for k in NOTION_SYNC_HINTS):
         return ROUTE_NOTION_SYNC
+    if any(k in lower for k in WEEKLY_REPORT_HINTS):
+        return ROUTE_WEEKLY_REPORT
+    if any(k in lower for k in DRILL_HINTS):
+        return ROUTE_DRILL
     if any(k in lower for k in EVAL_HINTS):
         return ROUTE_EVAL
     has_gmail = any(k in lower for k in GMAIL_HINTS)
@@ -166,10 +289,10 @@ def run_summarize_json(
 def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
-        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_EVAL}."
+        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_EVAL}, {ROUTE_DRILL}, {ROUTE_WEEKLY_REPORT}."
     )
     parsed, raw = run_summarize_json(prompt, message, env, max_tokens="300", timeout_sec=45)
-    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL}:
+    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT}:
         parsed["raw"] = raw
         return parsed
     return None
@@ -365,6 +488,8 @@ def build_local_capability_summary() -> str:
             f"- {ROUTE_SELF_GROWTH}",
             f"- {ROUTE_NOTION_SYNC}",
             f"- {ROUTE_EVAL}",
+            f"- {ROUTE_DRILL}",
+            f"- {ROUTE_WEEKLY_REPORT}",
         ]
     )
     return "\n".join(lines)
@@ -893,7 +1018,54 @@ def handle_eval_harness(env: Dict[str, str], execute: bool, verbose: bool) -> Di
     return result
 
 
-def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+def handle_runbook_drill(env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+    cmd = [
+        "python3", str(DRILL_SCRIPT), "--json",
+    ]
+    result: Dict[str, Any] = {
+        "route": ROUTE_DRILL,
+        "command": " ".join(shlex.quote(x) for x in cmd),
+        "executed": False,
+    }
+    if execute:
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        result["executed"] = True
+        result["ok"] = proc.returncode == 0
+        result["stdout"] = proc.stdout
+        result["stderr"] = proc.stderr
+        result["returncode"] = proc.returncode
+    return result
+
+
+def handle_weekly_report(env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+    cmd = [
+        "python3", str(WEEKLY_REPORT_SCRIPT), "--json",
+    ]
+    result: Dict[str, Any] = {
+        "route": ROUTE_WEEKLY_REPORT,
+        "command": " ".join(shlex.quote(x) for x in cmd),
+        "executed": False,
+    }
+    if execute:
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        result["executed"] = True
+        result["ok"] = proc.returncode == 0
+        result["stdout"] = proc.stdout
+        result["stderr"] = proc.stderr
+        result["returncode"] = proc.returncode
+    return result
+
+
+def handle_qa_gemini(
+    message: str,
+    env: Dict[str, str],
+    execute: bool,
+    qa_overrides: Optional[Dict[str, str]] = None,
+    ab_decision: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    qa_env = dict(env)
+    if qa_overrides:
+        qa_env.update({k: v for k, v in qa_overrides.items() if v is not None})
     attachment_files = parse_attachment_files(env)
     has_attachments = len(attachment_files) > 0
     ocr_items: List[Dict[str, Any]] = []
@@ -935,8 +1107,8 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
             "mode": "local_greeting",
             "output": build_greeting_response(),
         }
-    if env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
-        qa_prompt = env.get(
+    if qa_env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
+        qa_prompt = qa_env.get(
             "ROBY_ORCH_GEMINI_QA_PROMPT",
             (
                 "あなたはRobyです。日本語で実務的に回答してください。"
@@ -962,7 +1134,7 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
                         ocr_lines.append(f"画像{idx}: 抽出失敗 ({item.get('error') or 'unknown'})")
                 qa_input = f"{message}\n" + "\n".join(ocr_lines)
         qa_input = compact_qa_message(qa_input)
-        parsed, raw = run_qa_generation(qa_prompt, qa_input, env)
+        parsed, raw = run_qa_generation(qa_prompt, qa_input, qa_env)
         text = raw
         if isinstance(parsed, (dict, list)):
             text = json.dumps(parsed, ensure_ascii=False)
@@ -976,24 +1148,31 @@ def handle_qa_gemini(message: str, env: Dict[str, str], execute: bool) -> Dict[s
                 "- 前提:\n"
                 "- 期待する出力:"
             )
-        return {
+        payload = {
             "route": ROUTE_QA,
             "executed": True,
             "ok": True,
             "mode": "native_gemini",
             "output": text,
         }
+        if ab_decision:
+            payload["ab_router"] = ab_decision
+        return payload
 
-    qa_cmd = env.get("ROBY_ORCH_GEMINI_QA_CMD", "").strip()
+    qa_cmd = qa_env.get("ROBY_ORCH_GEMINI_QA_CMD", "").strip()
     result = {"route": ROUTE_QA, "executed": False}
     if not qa_cmd:
         result["mode"] = "unconfigured"
         result["note"] = "Set ROBY_ORCH_GEMINI_QA_CMD to enable direct Gemini QA execution."
+        if ab_decision:
+            result["ab_router"] = ab_decision
         return result
-    child_env = dict(env)
+    child_env = dict(qa_env)
     child_env["ROBY_ORCH_MESSAGE"] = message
-    run = shell_run(qa_cmd, child_env, cwd=OPENCLAW_REPO, timeout=int(env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")))
+    run = shell_run(qa_cmd, child_env, cwd=OPENCLAW_REPO, timeout=int(qa_env.get("ROBY_ORCH_QA_TIMEOUT_SEC", "600")))
     result.update({"executed": True, **run, "command": qa_cmd})
+    if ab_decision:
+        result["ab_router"] = ab_decision
     return result
 
 
@@ -1054,8 +1233,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", default="")
     parser.add_argument("--message-stdin", action="store_true")
-    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL], default="auto")
-    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "eval_harness", "none"], default="none")
+    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT], default="auto")
+    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "eval_harness", "runbook_drill", "weekly_report", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -1108,6 +1287,22 @@ def main() -> int:
                     "PBSの評価ハーネスを実行して品質状況を記録",
                 )
             classify_meta = {"method": "cron_task", "cron_task": "eval_harness"}
+        elif args.cron_task == "runbook_drill":
+            route = ROUTE_DRILL
+            if not args.message:
+                args.message = env.get(
+                    "ROBY_ORCH_DRILL_CRON_MESSAGE",
+                    "PBSのRunbook Drillを実行して運用健全性を確認",
+                )
+            classify_meta = {"method": "cron_task", "cron_task": "runbook_drill"}
+        elif args.cron_task == "weekly_report":
+            route = ROUTE_WEEKLY_REPORT
+            if not args.message:
+                args.message = env.get(
+                    "ROBY_ORCH_WEEKLY_REPORT_CRON_MESSAGE",
+                    "PBSの週次運用レポートを生成",
+                )
+            classify_meta = {"method": "cron_task", "cron_task": "weekly_report"}
 
     if route == "auto":
         if not args.message.strip():
@@ -1124,6 +1319,11 @@ def main() -> int:
                     "confidence": gemini_cls.get("confidence", None),
                 }
 
+    qa_overrides: Dict[str, str] = {}
+    ab_decision: Optional[Dict[str, Any]] = None
+    if route == ROUTE_QA:
+        qa_overrides, ab_decision = pick_ab_router_for_qa(args.message, env)
+
     if route == ROUTE_MINUTES:
         action = handle_minutes_pipeline(args.message, env, args.execute, args.verbose)
     elif route == ROUTE_GMAIL:
@@ -1134,12 +1334,22 @@ def main() -> int:
         action = handle_notion_sync(env, args.execute, dry_run=dry)
     elif route == ROUTE_EVAL:
         action = handle_eval_harness(env, args.execute, args.verbose)
+    elif route == ROUTE_DRILL:
+        action = handle_runbook_drill(env, args.execute)
+    elif route == ROUTE_WEEKLY_REPORT:
+        action = handle_weekly_report(env, args.execute)
     elif route == ROUTE_SELF_GROWTH:
         action = handle_self_growth(env, args.execute)
     elif route == ROUTE_CODING:
         action = handle_coding_codex(args.message, env, args.execute)
     else:
-        action = handle_qa_gemini(args.message, env, args.execute)
+        action = handle_qa_gemini(
+            args.message,
+            env,
+            args.execute,
+            qa_overrides=qa_overrides,
+            ab_decision=ab_decision,
+        )
 
     result = {
         "ts": datetime.now(JST).isoformat(),
@@ -1151,6 +1361,50 @@ def main() -> int:
         "elapsed_ms": int((time.time() - started) * 1000),
     }
     append_jsonl(RUN_LOG_PATH, result)
+    if ab_decision:
+        append_jsonl(
+            AB_RUN_LOG_PATH,
+            {
+                "ts": result["ts"],
+                "message": args.message,
+                "route": route,
+                "arm_id": ab_decision.get("arm_id"),
+                "label": ab_decision.get("label"),
+                "bucket": ab_decision.get("bucket"),
+                "total_weight": ab_decision.get("total_weight"),
+                "ok": bool(action.get("ok", False)),
+                "elapsed_ms": result["elapsed_ms"],
+            },
+        )
+    if bool_from_env(env.get("ROBY_IMMUTABLE_AUDIT", "1"), default=True):
+        try:
+            append_audit_event(
+                "orchestrator.run",
+                {
+                    "route": route,
+                    "execute": bool(args.execute),
+                    "elapsed_ms": int(result["elapsed_ms"]),
+                    "ok": bool(action.get("ok", False)),
+                    "action_route": str(action.get("route", route)),
+                    "returncode": action.get("returncode"),
+                    "message_preview": (args.message or "")[:240],
+                    "classify_method": classify_meta.get("method"),
+                    "ab_arm": (ab_decision or {}).get("arm_id"),
+                },
+                source="roby-orchestrator",
+                run_id=str(result["ts"]),
+                severity="error" if not bool(action.get("ok", False)) and args.execute else "info",
+            )
+        except Exception as exc:
+            append_jsonl(
+                RUN_LOG_PATH,
+                {
+                    "ts": datetime.now(JST).isoformat(),
+                    "route": route,
+                    "event": "audit_append_error",
+                    "error": str(exc),
+                },
+            )
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
@@ -1172,6 +1426,15 @@ def main() -> int:
         print("[orchestrator] gmail triage route selected")
     if route == ROUTE_EVAL:
         print("[orchestrator] evaluation harness route selected")
+    if route == ROUTE_DRILL:
+        print("[orchestrator] runbook drill route selected")
+    if route == ROUTE_WEEKLY_REPORT:
+        print("[orchestrator] weekly report route selected")
+    if ab_decision:
+        print(
+            f"[orchestrator] ab_router arm={ab_decision.get('arm_id')} "
+            f"label={ab_decision.get('label','')}"
+        )
     if action.get("command"):
         print(f"[orchestrator] command={action['command']}")
     if action.get("note"):

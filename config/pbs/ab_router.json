@@ -1,0 +1,31 @@
+{
+  "enabled": true,
+  "seed": "pbs-ab-router-v1",
+  "rotate_daily": true,
+  "qa_gemini": {
+    "enabled": true,
+    "arms": [
+      {
+        "id": "A",
+        "label": "fast_baseline",
+        "weight": 80,
+        "model": "google/gemini-3-flash-preview",
+        "length": "xl",
+        "qa_max_tokens": 3200,
+        "qa_retry_max_tokens": 4800,
+        "qa_timeout_sec": 600
+      },
+      {
+        "id": "B",
+        "label": "quality_plus",
+        "weight": 20,
+        "model": "google/gemini-3-flash-preview",
+        "length": "long",
+        "qa_max_tokens": 3800,
+        "qa_retry_max_tokens": 5600,
+        "qa_timeout_sec": 900,
+        "prompt_env_key": "ROBY_ORCH_GEMINI_QA_PROMPT_QUALITY"
+      }
+    ]
+  }
+}

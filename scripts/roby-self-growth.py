@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
+from roby_audit import append_audit_event
 
 REPO_DIR = Path("/Users/<user>/OpenClaw")
 STATE_DIR = Path.home() / ".openclaw" / "roby"
@@ -215,6 +216,25 @@ def main() -> int:
     }
     with RUNS_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    if env.get("ROBY_IMMUTABLE_AUDIT", "1") == "1":
+        try:
+            append_audit_event(
+                "self_growth.run",
+                {
+                    "patch_status": patch_status,
+                    "test_status": test_status,
+                    "rollback_status": rollback_status,
+                    "commit_status": commit_status,
+                    "restart_status": restart_status,
+                    "report_preview": report[:300],
+                },
+                source="roby-self-growth",
+                run_id=timestamp,
+                severity="error" if test_status == "failed" else "info",
+            )
+        except Exception:
+            pass
 
     print(report)
     return 0

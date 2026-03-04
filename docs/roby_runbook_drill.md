@@ -1,0 +1,89 @@
+# PBS Runbook / Drill
+
+最終更新: 2026-03-04
+
+## 目的
+
+運用中に「壊れてから調べる」のではなく、定期的に疎通・監査・品質ゲートを確認する。
+
+## 実行コマンド
+
+```bash
+python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json
+```
+
+成功時も含めてSlack通知したい場合:
+
+```bash
+python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
+```
+
+出力:
+
+- 最新JSON: `~/.openclaw/roby/drills/latest.json`
+- 履歴: `~/.openclaw/roby/drills/history.jsonl`
+- 可読レポート: `~/.openclaw/roby/drills/latest.md`
+
+## 実行チェック項目（現行）
+
+1. `gateway_status`（必須）
+2. `orchestrator_qa_smoke`（必須）
+3. `eval_harness_smoke`（必須）
+4. `audit_verify`（必須）
+5. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
+
+## 部分実行
+
+```bash
+python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --check gateway_status --check audit_verify --json
+```
+
+## 失敗時の一次対応
+
+### gateway_status FAIL
+
+- `node /Users/<user>/OpenClaw/openclaw.mjs gateway status`
+- 必要なら `node /Users/<user>/OpenClaw/openclaw.mjs gateway restart`
+- 起動系は `/Users/<user>/OpenClaw/docs/roby_orchestrator_cron_runbook.md` を参照
+
+### orchestrator_qa_smoke FAIL
+
+- `python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py --route qa_gemini --message "こんにちは" --execute --json`
+- `~/.openclaw/roby/orchestrator_runs.jsonl` を確認
+
+### eval_harness_smoke FAIL
+
+- `python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --json`
+- `~/.openclaw/roby/evals/latest.json` の `gates.failures` / `results[].failures` を確認
+
+### audit_verify FAIL
+
+- `python3 /Users/<user>/OpenClaw/scripts/roby_audit.py verify --json`
+- 監査ログ: `~/.openclaw/roby/audit/events.jsonl`
+- 破損行がある場合はファイル退避後、以降を新規作成し、原因調査をIssue化
+
+### gmail_triage_dry_run FAIL
+
+- OAuth資格情報と `GOG_ACCOUNT` を確認
+- `python3 /Users/<user>/OpenClaw/skills/roby-mail/scripts/gmail_triage.py --account <account> --query "newer_than:1d in:inbox" --max 5 --dry-run --verbose`
+
+## 監査連携
+
+`ROBY_IMMUTABLE_AUDIT=1` 時、drill実行結果は監査ログへ記録:
+
+- `event_type=runbook_drill.run`
+- 保存先: `~/.openclaw/roby/audit/events.jsonl`
+
+## Slack通知
+
+- 既定: **失敗時のみ通知**
+- Webhook: `SLACK_WEBHOOK_URL`
+- 成功時も通知したい場合:
+  - 実行時 `--notify` を付与
+  - または env `ROBY_DRILL_NOTIFY_ON_PASS=1`
+
+## 推奨運用
+
+- 毎週1回（作業開始前）に drill を実行
+- FAIL発生時はその週の新規開発より先に修復
+- drill結果を GitHub Project の Weekly Focus / Done This Week に反映

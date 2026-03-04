@@ -7,13 +7,13 @@ set -euo pipefail
 # - structured logging
 #
 # Usage:
-#   scripts/roby-cron-dispatch.sh <self_growth|minutes_sync|gmail_triage|notion_sync> [timeout_sec]
+#   scripts/roby-cron-dispatch.sh <self_growth|minutes_sync|gmail_triage|notion_sync|eval_harness|runbook_drill|weekly_report> [timeout_sec]
 
 TASK="${1:-}"
 TIMEOUT_SEC="${2:-}"
 
 if [[ -z "$TASK" ]]; then
-  echo "Usage: $0 <self_growth|minutes_sync|gmail_triage> [timeout_sec]" >&2
+  echo "Usage: $0 <self_growth|minutes_sync|gmail_triage|notion_sync|eval_harness|runbook_drill|weekly_report> [timeout_sec]" >&2
   exit 2
 fi
 
@@ -29,6 +29,15 @@ case "$TASK" in
     ;;
   notion_sync)
     DEFAULT_TIMEOUT=600
+    ;;
+  eval_harness)
+    DEFAULT_TIMEOUT=900
+    ;;
+  runbook_drill)
+    DEFAULT_TIMEOUT=1200
+    ;;
+  weekly_report)
+    DEFAULT_TIMEOUT=900
     ;;
   *)
     echo "Unknown task: $TASK" >&2
