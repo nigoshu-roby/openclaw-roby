@@ -98,6 +98,11 @@ IMAGE_TEXT_HINTS = [
     "画像", "添付", "ocr", "文字", "テキスト", "読み取", "読取", "抽出", "写っている内容"
 ]
 
+SELF_STATUS_HINTS = [
+    "自分の機能", "機能を確認", "機能一覧", "何ができる", "現状把握", "ステータス",
+    "ollama導入", "ollama の導入", "ollama導入でき", "neuronic連携", "neuronic 連携",
+]
+
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
@@ -402,6 +407,20 @@ def is_feature_list_request(message: str) -> bool:
     return sum(1 for k in FEATURE_LIST_HINTS if k in lower or k in message) >= 2
 
 
+def is_self_status_request(message: str) -> bool:
+    text = (message or "").strip()
+    lower = text.lower()
+    if not text:
+        return False
+    if any(k in text for k in SELF_STATUS_HINTS):
+        return True
+    if "ollama" in lower and any(k in text for k in ["導入", "使える", "確認", "状況"]):
+        return True
+    if "neuronic" in lower and any(k in text for k in ["連携", "状況", "確認", "使える"]):
+        return True
+    return False
+
+
 def is_greeting_request(message: str) -> bool:
     normalized = (message or "").strip().lower()
     greeting_tokens = [
@@ -604,6 +623,89 @@ def build_local_capability_summary() -> str:
             "利用可能ルート",
             f"- {ROUTE_QA}",
             f"- {ROUTE_QA_LOCAL} ({'有効' if has_ollama else 'ollama未導入'})",
+            f"- {ROUTE_CODING}",
+            f"- {ROUTE_MINUTES}",
+            f"- {ROUTE_GMAIL}",
+            f"- {ROUTE_SELF_GROWTH}",
+            f"- {ROUTE_NOTION_SYNC}",
+            f"- {ROUTE_EVAL}",
+            f"- {ROUTE_DRILL}",
+            f"- {ROUTE_WEEKLY_REPORT}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def read_last_jsonl(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if not lines:
+            return None
+        return json.loads(lines[-1])
+    except Exception:
+        return None
+
+
+def build_runtime_status_summary(env: Dict[str, str]) -> str:
+    lines: List[str] = ["現在の自己把握ステータス（ローカル検出）"]
+
+    # Ollama status
+    ollama_bin = shutil.which("ollama") is not None
+    ollama_api_ok = False
+    ollama_models: List[str] = []
+    base_url = env.get("ROBY_ORCH_OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+    if ollama_bin:
+        try:
+            req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                body = resp.read().decode("utf-8", "ignore")
+                data = json.loads(body) if body else {}
+                for m in data.get("models", [])[:5]:
+                    name = str(m.get("name", "")).strip()
+                    if name:
+                        ollama_models.append(name)
+                ollama_api_ok = True
+        except Exception:
+            ollama_api_ok = False
+
+    lines.append(f"- Ollama CLI: {'有効' if ollama_bin else '未導入'}")
+    lines.append(f"- Ollama API: {'接続OK' if ollama_api_ok else '未接続'} ({base_url})")
+    if ollama_models:
+        lines.append(f"- Ollama models: {', '.join(ollama_models)}")
+
+    # Neuronic status (from env + latest run logs)
+    neuronic_url = (
+        env.get("NEURONIC_URL", "").strip()
+        or env.get("ROBY_NEURONIC_URL", "").strip()
+        or "http://127.0.0.1:5174/api/v1/tasks/import"
+    )
+    neuronic_token = bool(env.get("NEURONIC_TOKEN", "").strip())
+    lines.append(f"- Neuronic endpoint: {neuronic_url}")
+    lines.append(f"- Neuronic token: {'設定済み' if neuronic_token else '未設定'}")
+
+    minutes_last = read_last_jsonl(STATE_DIR / "minutes_runs.jsonl")
+    if minutes_last and isinstance(minutes_last.get("summary"), dict):
+        s = minutes_last["summary"]
+        lines.append(
+            "- 直近 minutes_sync: "
+            f"tasks={int(s.get('tasks', 0))}, neuronic_errors={int(s.get('neuronic_errors', 0))}, run_id={s.get('run_id', '-')}"
+        )
+    gmail_last = read_last_jsonl(STATE_DIR / "gmail_triage_runs.jsonl")
+    if gmail_last and isinstance(gmail_last.get("summary"), dict):
+        s = gmail_last["summary"]
+        lines.append(
+            "- 直近 gmail_triage: "
+            f"tasks={int(s.get('tasks', 0))}, archived={int(s.get('archived', 0))}, notified={int(s.get('notified', 0))}, run_id={s.get('run_id', '-')}"
+        )
+
+    lines.extend(
+        [
+            "",
+            "利用可能ルート",
+            f"- {ROUTE_QA}",
+            f"- {ROUTE_QA_LOCAL}",
             f"- {ROUTE_CODING}",
             f"- {ROUTE_MINUTES}",
             f"- {ROUTE_GMAIL}",
@@ -1312,6 +1414,14 @@ def handle_qa_gemini(
             "mode": "local_greeting",
             "output": build_greeting_response(),
         }
+    if is_self_status_request(message):
+        return {
+            "route": ROUTE_QA,
+            "executed": True,
+            "ok": True,
+            "mode": "local_status",
+            "output": build_runtime_status_summary(qa_env),
+        }
     if qa_env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
         qa_prompt = qa_env.get(
             "ROBY_ORCH_GEMINI_QA_PROMPT",
@@ -1393,6 +1503,28 @@ def handle_qa_ollama(
     }
     if not execute:
         result["note"] = "ローカルLLM(Ollama)で回答する準備ができています。"
+        return result
+
+    if is_greeting_request(message):
+        result.update(
+            {
+                "executed": True,
+                "ok": True,
+                "mode": "local_greeting",
+                "output": build_greeting_response(),
+            }
+        )
+        return result
+
+    if is_self_status_request(message):
+        result.update(
+            {
+                "executed": True,
+                "ok": True,
+                "mode": "local_status",
+                "output": build_runtime_status_summary(env),
+            }
+        )
         return result
 
     local = run_qa_ollama_local(message, env)
