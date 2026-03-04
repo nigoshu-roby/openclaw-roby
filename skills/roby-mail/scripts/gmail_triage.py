@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Tuple
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
-RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
 
 DEFAULT_QUERY = "newer_than:2d in:inbox"
@@ -150,6 +149,63 @@ PROMO_SENDER_DOMAINS = [
     "shein.com",
 ]
 
+RULE_BUCKET_KEYS = ("sender_domains", "sender_contains", "subject_contains", "subject_regex")
+
+DEFAULT_RULES_TEMPLATE: Dict[str, Dict[str, List[str]]] = {
+    "force_archive": {
+        "sender_domains": sorted(set(PROMO_SENDER_DOMAINS)),
+        "sender_contains": [
+            "yads-no-reply@mail.yahoo.co.jp",
+            "blends-info@toridori.co.jp",
+            "hello@mapbox.com",
+        ],
+        "subject_contains": [
+            "申込受付中",
+            "主催",
+            "セミナー",
+            "ウェビナー",
+            "メルマガ",
+            "ads update",
+            "新着情報",
+            "キャンペーンの予算が消化されました",
+            "広告が承認されました",
+            "広告アカウントが承認されました",
+            "お知らせが",
+        ],
+        "subject_regex": [],
+    },
+    "force_review": {
+        "sender_domains": [
+            "tokiwa-gi.com",
+            "crmstyle.com",
+            "autoro.io",
+            "zuiho-group.co.jp",
+        ],
+        "sender_contains": [
+            "support@crmstyle.com",
+            "noreply@autoro.io",
+            "<internal-user-email>",
+        ],
+        "subject_contains": [
+            "定例ミーティング",
+            "ミーティングの件",
+            "打ち合わせ",
+            "日程",
+            "アカウント発行",
+            "スケジュールエラー通知",
+            "pipeline",
+            "etl結果",
+        ],
+        "subject_regex": [],
+    },
+    "force_reply": {
+        "sender_domains": [],
+        "sender_contains": [],
+        "subject_contains": [],
+        "subject_regex": [],
+    },
+}
+
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
@@ -220,25 +276,75 @@ def write_feedback_manifest(tasks: List[Dict[str, Any]], run_id: str) -> None:
         )
 
 
+def _normalize_rule_bucket(bucket: Dict[str, Any] | None) -> Dict[str, List[str]]:
+    src = bucket if isinstance(bucket, dict) else {}
+    out: Dict[str, List[str]] = {}
+    for key in RULE_BUCKET_KEYS:
+        values = src.get(key, [])
+        if not isinstance(values, list):
+            values = []
+        cleaned = []
+        seen = set()
+        for v in values:
+            s = str(v).strip()
+            if not s:
+                continue
+            low = s.lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            cleaned.append(s)
+        out[key] = cleaned
+    return out
+
+
 def ensure_rules_file(path: Path) -> None:
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     template = {
-        "force_archive": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
-        "force_review": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
-        "force_reply": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+        key: _normalize_rule_bucket(val) for key, val in DEFAULT_RULES_TEMPLATE.items()
     }
     path.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _merge_rules_with_defaults(data: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+    merged: Dict[str, Any] = {}
+    changed = False
+    for category in ("force_archive", "force_review", "force_reply"):
+        base = _normalize_rule_bucket(DEFAULT_RULES_TEMPLATE.get(category, {}))
+        cur = _normalize_rule_bucket(data.get(category, {}))
+        out_bucket: Dict[str, List[str]] = {}
+        for key in RULE_BUCKET_KEYS:
+            items = []
+            seen = set()
+            for src in (cur.get(key, []), base.get(key, [])):
+                for v in src:
+                    low = v.lower()
+                    if low in seen:
+                        continue
+                    seen.add(low)
+                    items.append(v)
+            out_bucket[key] = items
+            if items != cur.get(key, []):
+                changed = True
+        merged[category] = out_bucket
+    if set(data.keys()) != {"force_archive", "force_review", "force_reply"}:
+        changed = True
+    return merged, changed
 
 
 def load_rules(path: Path) -> Dict[str, Any]:
     ensure_rules_file(path)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        data = raw if isinstance(raw, dict) else {}
     except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+        data = {}
+    merged, changed = _merge_rules_with_defaults(data)
+    if changed:
+        path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    return merged
 
 
 def _match_rule_bucket(bucket: Dict[str, Any], subject_lower: str, sender_lower: str) -> bool:
@@ -264,65 +370,9 @@ def _match_rule_bucket(bucket: Dict[str, Any], subject_lower: str, sender_lower:
     return False
 
 
-def match_user_override(subject: str, sender: str, rules: Dict[str, Any]) -> Tuple[str | None, str | None]:
+def match_user_override(subject: str, sender: str, rules: Dict[str, Any], cc: str = "") -> Tuple[str | None, str | None]:
     subject_lower = (subject or "").lower()
-    sender_lower = (sender or "").lower()
-    category_map = {
-        "force_reply": "needs_reply",
-        "force_review": "needs_review",
-        "force_archive": "archive",
-    }
-    for key in ("force_reply", "force_review", "force_archive"):
-        if _match_rule_bucket(rules.get(key, {}), subject_lower, sender_lower):
-            return category_map[key], key
-    return None, None
-
-
-def ensure_rules_file(path: Path) -> None:
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    template = {
-        "force_archive": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
-        "force_review": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
-        "force_reply": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
-    }
-    path.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def load_rules(path: Path) -> Dict[str, Any]:
-    ensure_rules_file(path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _match_rule_bucket(bucket: Dict[str, Any], subject_lower: str, sender_lower: str) -> bool:
-    if not isinstance(bucket, dict):
-        return False
-    for dom in bucket.get("sender_domains", []) or []:
-        if dom and str(dom).lower() in sender_lower:
-            return True
-    for s in bucket.get("sender_contains", []) or []:
-        if s and str(s).lower() in sender_lower:
-            return True
-    for s in bucket.get("subject_contains", []) or []:
-        if s and str(s).lower() in subject_lower:
-            return True
-    for pat in bucket.get("subject_regex", []) or []:
-        try:
-            if pat and re.search(str(pat), subject_lower, flags=re.IGNORECASE):
-                return True
-        except re.error:
-            continue
-    return False
-
-
-def match_user_override(subject: str, sender: str, rules: Dict[str, Any]) -> Tuple[str | None, str | None]:
-    subject_lower = (subject or "").lower()
-    sender_lower = (sender or "").lower()
+    sender_lower = f"{sender or ''} {cc or ''}".lower()
     category_map = {
         "force_archive": "archive",
         "force_review": "needs_review",
@@ -538,7 +588,7 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
     if related:
         tags.extend([f"tool:{t}" for t in related])
 
-    override_category, override_rule = match_user_override(subject, sender, rules or {})
+    override_category, override_rule = match_user_override(subject, sender, rules or {}, cc=cc)
     if override_category:
         return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule
 

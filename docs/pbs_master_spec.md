@@ -342,6 +342,27 @@
     - 親子フラット化
   - 既存回帰: `scripts/tests/test_roby_minutes_neuronic.py` も通過
 
+### 8.9 Completion Update（#4 Gmail仕訳 ルール投入/精度調整）
+
+- 完了日: 2026-03-05
+- 実装:
+  - `skills/roby-mail/scripts/gmail_triage.py`
+    - 重複していたルール関数定義を整理（単一実装化）
+    - 初期ルールセットをデフォルト投入（`force_archive / force_review / force_reply`）
+    - 既存ルールファイルへ defaults をマージして自動補完
+    - `match_user_override` を `cc` 含め判定
+  - 初期ルール方針:
+    - 既知プロモーション送信元を `force_archive` に投入
+    - 社内/運用通知系（`tokiwa-gi.com`, `crmstyle.com`, `autoro.io` など）を `force_review` に投入
+- テスト:
+  - 追加: `skills/roby-mail/scripts/test_gmail_triage_classify.py`
+    - ルールbootstrap
+    - internal domain in CC
+    - promo domain archive
+    - actionable notice review
+    - LINE no-reply approval archive
+    - force_reply override
+
 ---
 
 ## 9. Change Management
