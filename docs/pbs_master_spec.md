@@ -264,6 +264,20 @@
   - `ROBY_ORCH_ENABLE_EVAL=1` で cron 有効化
   - `~/.openclaw/roby/evals/latest.md` で最新結果を可視化
 
+### 8.10 Completion Update（Ollama導入フェーズ着手）
+
+- 完了日: 2026-03-05
+- 実装/運用:
+  - Homebrewで `ollama` を導入し、LaunchAgent常駐化
+  - 初期モデルを導入:
+    - `qwen2.5:7b`（標準ローカルQA）
+    - `llama3.2:3b`（軽量/高速QA）
+  - `qa_ollama` ルートを有効運用化（失敗時 `qa_gemini` 自動フォールバック）
+  - `~/.openclaw/.env` にローカル運用設定を反映:
+    - `ROBY_ORCH_OLLAMA_MODEL=qwen2.5:7b`
+    - `ROBY_ORCH_OLLAMA_TIMEOUT_SEC=120`
+    - `ROBY_ORCH_OLLAMA_FALLBACK_QA=1`
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

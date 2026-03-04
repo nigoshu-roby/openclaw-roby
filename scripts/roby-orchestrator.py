@@ -507,9 +507,9 @@ def build_local_capability_summary() -> str:
 def run_qa_ollama_local(message: str, env: Dict[str, str]) -> Dict[str, Any]:
     if shutil.which("ollama") is None:
         return {"ok": False, "error": "ollama_not_installed"}
-    model = env.get("ROBY_ORCH_OLLAMA_MODEL", "qwen2.5:14b-instruct").strip()
+    model = env.get("ROBY_ORCH_OLLAMA_MODEL", "qwen2.5:7b").strip()
     if not model:
-        model = "qwen2.5:14b-instruct"
+        model = "qwen2.5:7b"
     prompt = env.get(
         "ROBY_ORCH_OLLAMA_QA_PROMPT",
         "あなたはRobyです。日本語で簡潔に、実務に役立つ回答を返してください。",
