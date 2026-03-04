@@ -16,6 +16,7 @@ STATE_PATH = Path.home() / ".openclaw" / "roby" / "minutes_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_runs.jsonl"
 DEBUG_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_debug.jsonl"
 NEURONIC_LOG_PATH = Path.home() / ".openclaw" / "roby" / "neuronic_import_runs.jsonl"
+FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 NOTION_KEY_PATH = Path.home() / ".config" / "notion" / "api_key"
 
@@ -23,6 +24,11 @@ DEFAULT_DAYS = 14
 DEFAULT_MAX = 200
 
 JST = timezone(timedelta(hours=9))
+
+
+def build_run_id(prefix: str = "minutes") -> str:
+    seed = f"{time.time_ns()}|{os.getpid()}|{prefix}"
+    return f"roby:{prefix}:{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:12]}"
 
 
 def load_env() -> Dict[str, str]:
@@ -1255,6 +1261,8 @@ def build_neuronic_tasks(
     source_url: str,
     default_project: str,
     source_id: str,
+    run_id: str,
+    include_legacy_group_tag: bool = False,
 ) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
     group_index = 0
@@ -1290,13 +1298,19 @@ def build_neuronic_tasks(
             "parent_origin_id": None,
             "sibling_order": group_index,
             "outline_path": str(group_index),
+            "run_id": run_id,
+            "feedback_state": "pending",
+            "source_doc_id": source_id,
+            "source_doc_title": source_title,
         }
         parent_origin = _stable_origin_id(parent_task, f"{source_id}|parent|{group_index}")
         parent_task["origin_id"] = parent_origin
+        group_ref = f"group:{parent_origin}"
+        parent_task["external_ref"] = group_ref
 
         if subtasks:
-            group_tag = f"group:{parent_origin}"
-            parent_task["tags"] = _dedupe_tags(parent_task["tags"] + [group_tag])
+            if include_legacy_group_tag:
+                parent_task["tags"] = _dedupe_tags(parent_task["tags"] + [group_ref])
             tasks.append(parent_task)
             for sub_idx, sub in enumerate(subtasks):
                 sub_norm = _normalize_task_item(sub, normalized.get("project") or default_project)
@@ -1313,8 +1327,9 @@ def build_neuronic_tasks(
                     f"source:{source}",
                     f"project:{sub_norm.get('project')}",
                     f"assignee:{sub_norm.get('assignee')}",
-                    group_tag,
                 ])
+                if include_legacy_group_tag:
+                    sub_tags = _dedupe_tags(sub_tags + [group_ref])
                 child_task = {
                     "title": sub_norm.get("title"),
                     "project": sub_norm.get("project"),
@@ -1328,6 +1343,11 @@ def build_neuronic_tasks(
                     "parent_origin_id": parent_origin,
                     "sibling_order": sub_idx,
                     "outline_path": f"{group_index}/{sub_idx}",
+                    "run_id": run_id,
+                    "feedback_state": "pending",
+                    "source_doc_id": source_id,
+                    "source_doc_title": source_title,
+                    "external_ref": group_ref,
                 }
                 child_task["origin_id"] = _stable_origin_id(
                     child_task, f"{source_id}|child|{group_index}|{sub_idx}"
@@ -1353,6 +1373,16 @@ def _send_neuronic_once(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dic
             row["siblingOrder"] = row.get("sibling_order")
         if "outline_path" in row:
             row["outlinePath"] = row.get("outline_path")
+        if "external_ref" in row:
+            row["externalRef"] = row.get("external_ref")
+        if "run_id" in row:
+            row["runId"] = row.get("run_id")
+        if "feedback_state" in row:
+            row["feedbackState"] = row.get("feedback_state")
+        if "source_doc_id" in row:
+            row["sourceDocId"] = row.get("source_doc_id")
+        if "source_doc_title" in row:
+            row["sourceDocTitle"] = row.get("source_doc_title")
         payload_items.append(row)
     payload = {"items": payload_items}
     data = json.dumps(payload).encode("utf-8")
@@ -1442,6 +1472,32 @@ def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def write_feedback_manifest(tasks: List[Dict[str, Any]], run_id: str) -> None:
+    items: List[Dict[str, Any]] = []
+    for t in tasks:
+        items.append(
+            {
+                "origin_id": t.get("origin_id", ""),
+                "title": t.get("title", ""),
+                "project": t.get("project", ""),
+                "parent_origin_id": t.get("parent_origin_id", None),
+                "source_doc_id": t.get("source_doc_id", ""),
+                "source_doc_title": t.get("source_doc_title", ""),
+                "feedback_state": t.get("feedback_state", "pending"),
+            }
+        )
+    _append_jsonl(
+        FEEDBACK_MANIFEST_PATH,
+        {
+            "event": "feedback_candidates",
+            "timestamp": datetime.now(JST).isoformat(),
+            "run_id": run_id,
+            "count": len(items),
+            "items": items,
+        },
+    )
+
+
 def _format_neuronic_cli_logs(result: Dict[str, Any], verbose: bool = False) -> List[str]:
     lines: List[str] = []
     endpoint = result.get("endpoint_used") or "(unknown)"
@@ -1502,8 +1558,8 @@ def _format_neuronic_cli_logs(result: Dict[str, Any], verbose: bool = False) -> 
 def _task_group_key(item: Dict[str, Any]) -> str:
     parent = item.get("parent_origin_id")
     if parent:
-        return f"group:{parent}"
-    return f"group:{item.get('origin_id', '')}"
+        return f"parent:{parent}"
+    return f"root:{item.get('origin_id', '')}"
 
 
 def _split_grouped_batches(tasks: List[Dict[str, Any]], default_batch: int, max_batch_bytes: int) -> List[List[Dict[str, Any]]]:
@@ -1829,6 +1885,8 @@ def main() -> int:
 
     all_tasks: List[Dict[str, Any]] = []
     debug_records: List[Dict[str, Any]] = []
+    run_id = build_run_id("minutes")
+    include_legacy_group_tag = env.get("NEURONIC_LEGACY_GROUP_TAG", "0") == "1"
 
     for item in selected:
         if item.get("source") == "notion":
@@ -1879,6 +1937,8 @@ def main() -> int:
                 item.get("url", ""),
                 item.get("project") or "TOKIWAGI",
                 page_id,
+                run_id,
+                include_legacy_group_tag=include_legacy_group_tag,
             )
             all_tasks.extend(tasks)
             processed_notion[page_id] = item.get("updated", "")
@@ -1929,6 +1989,8 @@ def main() -> int:
                 item.get("url", ""),
                 "GDocs",
                 doc_id,
+                run_id,
+                include_legacy_group_tag=include_legacy_group_tag,
             )
             all_tasks.extend(tasks)
             processed_gdocs[doc_id] = item.get("updated", "")
@@ -1936,9 +1998,11 @@ def main() -> int:
 
     summary["tasks"] = len(all_tasks)
     summary["heuristic_used_docs"] = heuristic_used_docs
+    summary["run_id"] = run_id
 
     if not args.dry_run:
         if all_tasks:
+            write_feedback_manifest(all_tasks, run_id)
             resp = send_neuronic(all_tasks, env)
             if isinstance(resp, dict):
                 summary["neuronic_created"] = int(resp.get("created", 0) or 0)

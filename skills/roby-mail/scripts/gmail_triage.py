@@ -16,9 +16,15 @@ STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
+FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
 
 DEFAULT_QUERY = "newer_than:2d in:inbox"
 DEFAULT_MAX = 50
+
+
+def build_run_id(prefix: str = "gmail") -> str:
+    seed = f"{time.time_ns()}|{os.getpid()}|{prefix}"
+    return f"roby:{prefix}:{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:12]}"
 
 RELATED_TOOLS = [
     "liny",
@@ -181,6 +187,37 @@ def log_run(entry: Dict[str, Any]) -> None:
     RUN_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with RUN_LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def write_feedback_manifest(tasks: List[Dict[str, Any]], run_id: str) -> None:
+    FEEDBACK_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    items: List[Dict[str, Any]] = []
+    for t in tasks:
+        items.append(
+            {
+                "origin_id": t.get("origin_id", ""),
+                "title": t.get("title", ""),
+                "project": t.get("project", ""),
+                "parent_origin_id": t.get("parent_origin_id", None),
+                "source_doc_id": t.get("source_doc_id", ""),
+                "source_doc_title": t.get("source_doc_title", ""),
+                "feedback_state": t.get("feedback_state", "pending"),
+            }
+        )
+    with FEEDBACK_MANIFEST_PATH.open("a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "event": "feedback_candidates",
+                    "ts": int(time.time()),
+                    "run_id": run_id,
+                    "count": len(items),
+                    "items": items,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
 
 
 def ensure_rules_file(path: Path) -> None:
@@ -403,7 +440,26 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
     url = env.get("NEURONIC_URL", "http://127.0.0.1:5174/api/v1/tasks/import")
     fallback_url = env.get("NEURONIC_FALLBACK_URL", "http://127.0.0.1:5174/api/v1/tasks/bulk")
     token = env.get("NEURONIC_TOKEN") or env.get("TASKD_AUTH_TOKEN")
-    payload = {"items": tasks}
+    payload_items = []
+    for item in tasks:
+        row = dict(item)
+        if "parent_origin_id" in row:
+            row["parentOriginId"] = row.get("parent_origin_id")
+        if "sibling_order" in row:
+            row["siblingOrder"] = row.get("sibling_order")
+        if "external_ref" in row:
+            row["externalRef"] = row.get("external_ref")
+        if "run_id" in row:
+            row["runId"] = row.get("run_id")
+        if "feedback_state" in row:
+            row["feedbackState"] = row.get("feedback_state")
+        if "source_doc_id" in row:
+            row["sourceDocId"] = row.get("source_doc_id")
+        if "source_doc_title" in row:
+            row["sourceDocTitle"] = row.get("source_doc_title")
+        payload_items.append(row)
+
+    payload = {"items": payload_items}
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
@@ -431,12 +487,13 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
         return {"error": str(e)}
 
 
-def _stable_origin_id(task: Dict[str, Any]) -> str:
+def _stable_origin_id(task: Dict[str, Any], source_key: str = "") -> str:
     raw = "|".join([
         (task.get("title") or "").strip(),
         (task.get("project") or "").strip(),
         (task.get("due_date") or "").strip(),
         (task.get("assignee") or "").strip(),
+        (source_key or "").strip(),
     ])
     sha1_12 = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
     return f"roby:auto:{sha1_12}"
@@ -563,9 +620,43 @@ def build_tasks(
     msg: Dict[str, Any],
     category: str,
     tags: List[str],
+    run_id: str,
 ) -> List[Dict[str, Any]]:
-    tasks = []
+    tasks: List[Dict[str, Any]] = []
     base_tags = ["source:gmail", f"category:{category}"] + tags
+    assignee = "私"
+    msg_subject = (msg.get("subject") or "").strip()
+    msg_thread_id = (msg.get("threadId") or "").strip()
+    msg_id = (msg.get("id") or "").strip()
+    msg_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_thread_id}"
+
+    parent_task = {
+        "title": f"メール確認: {msg_subject}" if msg_subject else "メール確認タスク",
+        "project": "email",
+        "due_date": "",
+        "assignee": assignee,
+        "note": (
+            f"Email: {msg_subject}\n"
+            f"From: {msg.get('from','')}\n"
+            f"Date: {msg.get('date','')}\n"
+            f"Link: {msg_url}"
+        ),
+        "source": "roby",
+        "status": "inbox",
+        "priority": 1 if category in ("needs_reply", "needs_review") else 0,
+        "tags": _dedupe_tags(base_tags + ["project:email", f"assignee:{assignee}", "task_type:email_review"]),
+        "parent_origin_id": None,
+        "sibling_order": 0,
+        "run_id": run_id,
+        "feedback_state": "pending",
+        "source_doc_id": msg_id or msg_thread_id,
+        "source_doc_title": msg_subject,
+    }
+    parent_origin = _stable_origin_id(parent_task, f"{msg_thread_id}|parent")
+    parent_task["origin_id"] = parent_origin
+    parent_task["external_ref"] = f"group:{parent_origin}"
+    tasks.append(parent_task)
+
     for i, item in enumerate(extracted):
         title = (item.get("title") or "").strip()
         if not title:
@@ -573,12 +664,11 @@ def build_tasks(
         due = (item.get("due_date") or "").strip()
         project = (item.get("project") or "").strip() or "email"
         note = (item.get("note") or "").strip()
-        assignee = "私"
-        item_tags = base_tags + [f"project:{project}", f"assignee:{assignee}"]
-        msg_url = f"https://mail.google.com/mail/u/0/#inbox/{msg.get('threadId','')}"
+        item_tags = _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", "task_type:action"])
         note = (
             (note + "\n\n" if note else "")
-            + f"Email: {msg.get('subject','')}\n"
+            + f"Parent: {parent_task['title']}\n"
+            + f"Email: {msg_subject}\n"
             + f"From: {msg.get('from','')}\n"
             + f"Date: {msg.get('date','')}\n"
             + f"Link: {msg_url}"
@@ -592,9 +682,16 @@ def build_tasks(
             "source": "roby",
             "status": "inbox",
             "priority": 1 if category in ("needs_reply", "needs_review") else 0,
-            "tags": _dedupe_tags(item_tags),
+            "tags": item_tags,
+            "parent_origin_id": parent_origin,
+            "sibling_order": i,
+            "run_id": run_id,
+            "feedback_state": "pending",
+            "source_doc_id": msg_id or msg_thread_id,
+            "source_doc_title": msg_subject,
+            "external_ref": f"group:{parent_origin}",
         }
-        task["origin_id"] = _stable_origin_id(task)
+        task["origin_id"] = _stable_origin_id(task, f"{msg_thread_id}|child|{i}")
         tasks.append(task)
     return tasks
 
@@ -628,6 +725,8 @@ def main() -> int:
         "tasks": 0,
         "neuronic_errors": 0,
     }
+    run_id = build_run_id("gmail")
+    summary["run_id"] = run_id
     last_neuronic_error: str | None = None
     category_counts: Dict[str, int] = {}
 
@@ -683,8 +782,9 @@ def main() -> int:
                 else:
                     fallback_title = f"メール対応: {subject}"
                 extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": ""}]
-            tasks = build_tasks(extracted, msg, category, tags)
+            tasks = build_tasks(extracted, msg, category, tags, run_id=run_id)
             if tasks and not args.dry_run:
+                write_feedback_manifest(tasks, run_id)
                 resp = send_neuronic(tasks, env)
                 if isinstance(resp, dict) and resp.get("error"):
                     summary["neuronic_errors"] += 1
