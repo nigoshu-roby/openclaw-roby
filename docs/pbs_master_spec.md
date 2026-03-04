@@ -327,6 +327,21 @@
 - 検証:
   - `python3 /Users/<user>/OpenClaw/scripts/tests/test_roby_minutes_neuronic.py` で `OK`
 
+### 8.8 Completion Update（#5 Minutes抽出精度改善）
+
+- 完了日: 2026-03-05
+- 実装:
+  - `scripts/roby-minutes.py` のノイズ判定を強化（メモ/背景/曖昧タイトルを除外）
+  - `infer_primary_project(...)` を追加し、議事録本文とタイトルから既知プロジェクトを推定
+  - GDocs/Notion双方で project default を推定値に寄せ、`project:*` の精度を改善
+  - 親タスクがノイズで子1件のみの場合は子タスクへ自動フラット化（階層の安定化）
+- テスト:
+  - 追加: `scripts/tests/test_roby_minutes_quality.py`
+    - メモ混入抑制
+    - project推定
+    - 親子フラット化
+  - 既存回帰: `scripts/tests/test_roby_minutes_neuronic.py` も通過
+
 ---
 
 ## 9. Change Management

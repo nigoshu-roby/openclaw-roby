@@ -99,7 +99,14 @@ class TestRobyMinutesNeuronic(TestCase):
             }
 
         self.mod._send_neuronic_once = _ok_once
-        result = self.mod.send_neuronic(tasks, {"ROBY_NEURONIC_VERBOSE": "0"})
+        result = self.mod.send_neuronic(
+            tasks,
+            {
+                "ROBY_NEURONIC_VERBOSE": "0",
+                "ROBY_NEURONIC_HIERARCHY_MODE": "always",
+                "ROBY_NEURONIC_HIERARCHY_STATE_PATH": self.hierarchy_state_path,
+            },
+        )
 
         self.assertTrue(result.get("ok"))
         self.assertEqual(result.get("created"), 3)
@@ -142,7 +149,14 @@ class TestRobyMinutesNeuronic(TestCase):
             }
 
         self.mod._send_neuronic_once = _legacy_once
-        result = self.mod.send_neuronic(tasks, {"ROBY_NEURONIC_VERBOSE": "0"})
+        result = self.mod.send_neuronic(
+            tasks,
+            {
+                "ROBY_NEURONIC_VERBOSE": "0",
+                "ROBY_NEURONIC_HIERARCHY_MODE": "always",
+                "ROBY_NEURONIC_HIERARCHY_STATE_PATH": self.hierarchy_state_path,
+            },
+        )
 
         self.assertTrue(result.get("ok"))
         self.assertEqual(result.get("created"), 1)
@@ -205,6 +219,8 @@ class TestRobyMinutesNeuronic(TestCase):
             tasks,
             {
                 "ROBY_NEURONIC_VERBOSE": "0",
+                "ROBY_NEURONIC_HIERARCHY_MODE": "always",
+                "ROBY_NEURONIC_HIERARCHY_STATE_PATH": self.hierarchy_state_path,
                 "NEURONIC_BATCH_SIZE": "20",
                 "NEURONIC_MAX_BATCH_BYTES": "999999",
             },

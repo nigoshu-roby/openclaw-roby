@@ -340,6 +340,16 @@ STATUS_ONLY_HINTS = [
     "振り返り",
 ]
 
+MEMO_NOISE_HINTS = [
+    "参考",
+    "背景",
+    "所感",
+    "振り返り",
+    "報告のみ",
+    "メモ",
+    "議論",
+]
+
 GENERIC_PROJECT_NAMES = {
     "",
     "TOKIWAGI",
@@ -408,6 +418,12 @@ def _looks_noise_task_title(title: str) -> bool:
         return True
     if re.match(r"^(現状|進捗|報告|備考|要確認|背景|所感|振り返り)([:：].*)?$", s) and not _has_action_signal(s):
         return True
+    if any(k in s for k in MEMO_NOISE_HINTS) and not _has_action_signal(s):
+        return True
+    if re.match(r"^(共有|確認|対応|調整|検討)(事項|内容)?$", s):
+        return True
+    if re.match(r"^[^。.!?]{1,12}(について|に関して)$", s):
+        return True
     if s.endswith("について") and not _has_action_signal(s):
         return True
     return False
@@ -439,6 +455,53 @@ def _resolve_project_name(
     if default_project and default_project not in GENERIC_PROJECT_NAMES:
         return default_project
     return p or default_project or "TOKIWAGI"
+
+
+def _project_aliases(name: str) -> List[str]:
+    base = (name or "").strip()
+    if not base:
+        return []
+    aliases = {
+        base,
+        base.replace("　", " "),
+        base.replace(" ", ""),
+        base.replace("　", ""),
+        base.replace("・", ""),
+        base.replace("様", ""),
+        base.split(":", 1)[0].strip(),
+    }
+    return [a for a in aliases if a and len(a) >= 2]
+
+
+def infer_primary_project(
+    text: str,
+    known_projects: List[str],
+    source_title: str,
+    fallback_project: str,
+) -> str:
+    candidates = [p for p in known_projects if p and p not in GENERIC_PROJECT_NAMES]
+    if not candidates:
+        return fallback_project or "TOKIWAGI"
+
+    blob = f"{source_title}\n{text}"[:60000]
+    best_project = ""
+    best_score = 0
+    for project in candidates:
+        score = 0
+        for alias in _project_aliases(project):
+            count = blob.count(alias)
+            if count <= 0:
+                continue
+            score += min(count, 8) * 10
+            if alias in source_title:
+                score += 15
+        if score > best_score:
+            best_score = score
+            best_project = project
+
+    if best_project and best_score >= 10:
+        return best_project
+    return fallback_project or "TOKIWAGI"
 
 
 def sanitize_extracted_tasks(
@@ -511,6 +574,17 @@ def sanitize_extracted_tasks(
                     "assignee": sa,
                     "note": sn,
                 })
+
+        if subtasks and len(subtasks) == 1 and ((not title) or _looks_noise_task_title(title)):
+            single = subtasks[0]
+            cleaned.append({
+                "title": single.get("title", "")[:120],
+                "project": single.get("project", project),
+                "due_date": single.get("due_date", ""),
+                "assignee": single.get("assignee", assignee),
+                "note": single.get("note", note),
+            })
+            continue
 
         if subtasks:
             parent_title = title
@@ -1988,14 +2062,20 @@ def main() -> int:
             if not text:
                 processed_notion[page_id] = item.get("updated", "")
                 continue
+            default_project = infer_primary_project(
+                text=text,
+                known_projects=known_projects,
+                source_title=item.get("title", ""),
+                fallback_project=item.get("project") or "TOKIWAGI",
+            )
             extracted, raw_summary = summarize_tasks(
-                text, env, item.get("project") or "TOKIWAGI", known_projects, today_str
+                text, env, default_project, known_projects, today_str
             )
             fallback_used = False
             if (not extracted) and (not _is_explicit_empty_tasks(raw_summary)):
                 extracted = heuristic_tasks_from_text(
                     text,
-                    item.get("project") or "TOKIWAGI",
+                    default_project,
                     known_projects,
                     max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "6")),
                     max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "6")),
@@ -2005,9 +2085,9 @@ def main() -> int:
                 heuristic_used_docs += 1
             sanitized = sanitize_extracted_tasks(
                 extracted,
-                item.get("project") or "TOKIWAGI",
+                default_project,
                 known_projects,
-                item.get("title", ""),
+                f"{item.get('title', '')} / {item.get('db_title', '')}",
                 max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
                 max_subtasks_per_parent=int(env.get("MINUTES_MAX_SUBTASKS_PER_PARENT", "8")),
             )
@@ -2028,7 +2108,7 @@ def main() -> int:
                 "notion",
                 item.get("title", ""),
                 item.get("url", ""),
-                item.get("project") or "TOKIWAGI",
+                default_project,
                 page_id,
                 run_id,
                 include_legacy_group_tag=include_legacy_group_tag,
@@ -2042,12 +2122,18 @@ def main() -> int:
             if not text:
                 processed_gdocs[doc_id] = item.get("updated", "")
                 continue
-            extracted, raw_summary = summarize_tasks(text, env, "GDocs", known_projects, today_str)
+            default_project = infer_primary_project(
+                text=text,
+                known_projects=known_projects,
+                source_title=item.get("title", ""),
+                fallback_project="TOKIWAGI",
+            )
+            extracted, raw_summary = summarize_tasks(text, env, default_project, known_projects, today_str)
             fallback_used = False
             if (not extracted) and (not _is_explicit_empty_tasks(raw_summary)):
                 extracted = heuristic_tasks_from_text(
                     text,
-                    "GDocs",
+                    default_project,
                     known_projects,
                     max_projects=int(env.get("MINUTES_HEURISTIC_MAX_PROJECTS", "6")),
                     max_items_per_project=int(env.get("MINUTES_HEURISTIC_MAX_ITEMS_PER_PROJECT", "6")),
@@ -2057,7 +2143,7 @@ def main() -> int:
                 heuristic_used_docs += 1
             sanitized = sanitize_extracted_tasks(
                 extracted,
-                "GDocs",
+                default_project,
                 known_projects,
                 item.get("title", ""),
                 max_tasks_per_doc=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
@@ -2080,7 +2166,7 @@ def main() -> int:
                 "gdocs",
                 item.get("title", ""),
                 item.get("url", ""),
-                "GDocs",
+                default_project,
                 doc_id,
                 run_id,
                 include_legacy_group_tag=include_legacy_group_tag,
