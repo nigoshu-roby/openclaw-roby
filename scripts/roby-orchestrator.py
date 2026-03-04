@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +30,7 @@ AB_ROUTER_CONFIG_PATH = OPENCLAW_REPO / "config" / "pbs" / "ab_router.json"
 AB_RUN_LOG_PATH = STATE_DIR / "ab_router_runs.jsonl"
 
 ROUTE_QA = "qa_gemini"
+ROUTE_QA_LOCAL = "qa_ollama"
 ROUTE_CODING = "coding_codex"
 ROUTE_MINUTES = "minutes_pipeline"
 ROUTE_SELF_GROWTH = "self_growth"
@@ -40,6 +42,9 @@ ROUTE_WEEKLY_REPORT = "weekly_report"
 
 CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
+]
+OLLAMA_HINTS = [
+    "ollama", "ローカルllm", "local llm", "ローカルで回答", "ローカル回答"
 ]
 MINUTES_HINTS = [
     "議事録", "notion", "gdocs", "google docs", "googlemeet", "google meet", "タスク抽出", "細分化", "neuronic", "tokiwagi"
@@ -210,6 +215,8 @@ def pick_ab_router_for_qa(message: str, env: Dict[str, str]) -> Tuple[Dict[str, 
 
 def classify_intent_heuristic(message: str) -> str:
     lower = message.lower()
+    if any(k in lower for k in OLLAMA_HINTS):
+        return ROUTE_QA_LOCAL
     if any(k in lower for k in SELF_GROWTH_HINTS):
         return ROUTE_SELF_GROWTH
     if any(k in lower for k in NOTION_SYNC_HINTS):
@@ -289,10 +296,10 @@ def run_summarize_json(
 def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
-        f"route must be one of: {ROUTE_QA}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_EVAL}, {ROUTE_DRILL}, {ROUTE_WEEKLY_REPORT}."
+        f"route must be one of: {ROUTE_QA}, {ROUTE_QA_LOCAL}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_EVAL}, {ROUTE_DRILL}, {ROUTE_WEEKLY_REPORT}."
     )
     parsed, raw = run_summarize_json(prompt, message, env, max_tokens="300", timeout_sec=45)
-    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT}:
+    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_QA_LOCAL, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT}:
         parsed["raw"] = raw
         return parsed
     return None
@@ -465,6 +472,7 @@ def build_greeting_response() -> str:
 
 
 def build_local_capability_summary() -> str:
+    has_ollama = shutil.which("ollama") is not None
     checks = [
         ("UIチャット + オーケストレーター表示", OPENCLAW_REPO / "ui" / "src" / "ui" / "controllers" / "chat.ts"),
         ("オーケストレーター本体", OPENCLAW_REPO / "scripts" / "roby-orchestrator.py"),
@@ -482,6 +490,7 @@ def build_local_capability_summary() -> str:
             "",
             "利用可能ルート",
             f"- {ROUTE_QA}",
+            f"- {ROUTE_QA_LOCAL} ({'有効' if has_ollama else 'ollama未導入'})",
             f"- {ROUTE_CODING}",
             f"- {ROUTE_MINUTES}",
             f"- {ROUTE_GMAIL}",
@@ -493,6 +502,44 @@ def build_local_capability_summary() -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def run_qa_ollama_local(message: str, env: Dict[str, str]) -> Dict[str, Any]:
+    if shutil.which("ollama") is None:
+        return {"ok": False, "error": "ollama_not_installed"}
+    model = env.get("ROBY_ORCH_OLLAMA_MODEL", "qwen2.5:14b-instruct").strip()
+    if not model:
+        model = "qwen2.5:14b-instruct"
+    prompt = env.get(
+        "ROBY_ORCH_OLLAMA_QA_PROMPT",
+        "あなたはRobyです。日本語で簡潔に、実務に役立つ回答を返してください。",
+    ).strip()
+    user_text = compact_qa_message(message)
+    composed = f"{prompt}\n\nユーザー:\n{user_text}\n\n回答:"
+    cmd = ["ollama", "run", model, composed]
+    timeout = int(env.get("ROBY_ORCH_OLLAMA_TIMEOUT_SEC", "90") or 90)
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(OPENCLAW_REPO),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "ollama_timeout"}
+    except Exception as e:
+        return {"ok": False, "error": f"ollama_runtime_error: {e}"}
+    output = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": (proc.stderr or "").strip() or f"ollama_exit_{proc.returncode}",
+        }
+    if not output:
+        return {"ok": False, "error": "ollama_empty_output"}
+    return {"ok": True, "output": output, "model": model}
 
 
 def build_coding_requirements(message: str, env: Dict[str, str]) -> Dict[str, Any]:
@@ -1176,6 +1223,50 @@ def handle_qa_gemini(
     return result
 
 
+def handle_qa_ollama(
+    message: str,
+    env: Dict[str, str],
+    execute: bool,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "route": ROUTE_QA_LOCAL,
+        "mode": "local_ollama",
+        "executed": False,
+    }
+    if not execute:
+        result["note"] = "ローカルLLM(Ollama)で回答する準備ができています。"
+        return result
+
+    local = run_qa_ollama_local(message, env)
+    if local.get("ok"):
+        result.update(
+            {
+                "executed": True,
+                "ok": True,
+                "output": local.get("output", ""),
+                "model": local.get("model", ""),
+            }
+        )
+        return result
+
+    if env.get("ROBY_ORCH_OLLAMA_FALLBACK_QA", "1") == "1":
+        fallback = handle_qa_gemini(message, env, execute=True)
+        fallback["route"] = ROUTE_QA_LOCAL
+        fallback["mode"] = "ollama_fallback_gemini"
+        fallback["fallback_reason"] = local.get("error", "unknown")
+        fallback["fallback_from"] = "local_ollama"
+        return fallback
+
+    result.update(
+        {
+            "executed": True,
+            "ok": False,
+            "error": local.get("error", "local_ollama_failed"),
+        }
+    )
+    return result
+
+
 def handle_coding_codex(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
     requirements = build_coding_requirements(message, env)
     codex_cmd = env.get("ROBY_ORCH_CODEX_CMD", "").strip()
@@ -1233,7 +1324,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", default="")
     parser.add_argument("--message-stdin", action="store_true")
-    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT], default="auto")
+    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_QA_LOCAL, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT], default="auto")
     parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "eval_harness", "runbook_drill", "weekly_report", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--verbose", action="store_true")
@@ -1342,6 +1433,8 @@ def main() -> int:
         action = handle_self_growth(env, args.execute)
     elif route == ROUTE_CODING:
         action = handle_coding_codex(args.message, env, args.execute)
+    elif route == ROUTE_QA_LOCAL:
+        action = handle_qa_ollama(args.message, env, args.execute)
     else:
         action = handle_qa_gemini(
             args.message,
@@ -1430,6 +1523,8 @@ def main() -> int:
         print("[orchestrator] runbook drill route selected")
     if route == ROUTE_WEEKLY_REPORT:
         print("[orchestrator] weekly report route selected")
+    if route == ROUTE_QA_LOCAL:
+        print("[orchestrator] local ollama qa route selected")
     if ab_decision:
         print(
             f"[orchestrator] ab_router arm={ab_decision.get('arm_id')} "

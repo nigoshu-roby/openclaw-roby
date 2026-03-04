@@ -41,6 +41,7 @@
 ### 2.2 オーケストレーション方針
 
 - QA系: Gemini ルート（相談・要件整理）
+- QAローカル系: Ollama ルート（明示指定時にローカル回答、失敗時はGeminiへフォールバック）
 - Coding系: Codex ルート（実装）
 - Pipeline系: minutes / gmail / self-growth
 - 実装の原則:
@@ -52,6 +53,10 @@
 
 - ローカル: 安定処理・低コスト処理（将来 Ollama を段階導入）
 - クラウド: 複雑推論・実装生成
+- 導入方針（現行）:
+  - `qa_ollama` を明示ルートとして追加
+  - `ROBY_ORCH_OLLAMA_MODEL` / `ROBY_ORCH_OLLAMA_TIMEOUT_SEC` で運用調整
+  - `ROBY_ORCH_OLLAMA_FALLBACK_QA=1` で失敗時に `qa_gemini` へ自動フォールバック
 
 ### 2.4 AB Router（#9）
 
