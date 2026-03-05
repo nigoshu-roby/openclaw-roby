@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from roby_audit import verify_audit
+from roby_audit import append_audit_event, verify_audit
 
 JST = timezone(timedelta(hours=9))
 ENV_PATH = Path.home() / ".openclaw" / ".env"
@@ -287,6 +287,39 @@ def main() -> int:
             LATEST_JSON.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     else:
         report["slack_notified"] = False
+
+    if env.get("ROBY_IMMUTABLE_AUDIT", "1") == "1":
+        try:
+            eval_latest_ok = bool((report.get("eval", {}).get("latest") or {}).get("all_ok", True))
+            drill_latest_ok = bool((report.get("drill", {}).get("latest") or {}).get("all_ok", True))
+            audit_ok = bool(report.get("audit", {}).get("ok", False))
+            append_audit_event(
+                "weekly_report.run",
+                {
+                    "window_days": int(report["window_days"]),
+                    "eval_runs": int(report["eval"].get("runs", 0)),
+                    "eval_failed_runs": int(report["eval"].get("failed_runs", 0)),
+                    "drill_runs": int(report["drill"].get("runs", 0)),
+                    "drill_failed_runs": int(report["drill"].get("failed_runs", 0)),
+                    "audit_ok": bool(report["audit"].get("ok", False)),
+                    "audit_errors": int(report["audit"].get("errors", 0)),
+                    "ops": {
+                        "minutes_sync_runs": int(report["ops"].get("minutes_sync", {}).get("runs", 0)),
+                        "gmail_triage_runs": int(report["ops"].get("gmail_triage", {}).get("runs", 0)),
+                        "notion_sync_runs": int(report["ops"].get("notion_sync", {}).get("runs", 0)),
+                        "self_growth_runs": int(report["ops"].get("self_growth", {}).get("runs", 0)),
+                        "evaluation_harness_runs": int(report["ops"].get("evaluation_harness", {}).get("runs", 0)),
+                        "runbook_drill_runs": int(report["ops"].get("runbook_drill", {}).get("runs", 0)),
+                    },
+                    "slack_notified": bool(report.get("slack_notified", False)),
+                    "slack_error": str(report.get("slack_error", "")),
+                },
+                source="roby-weekly-report",
+                run_id=str(report["generated_at"]),
+                severity="error" if (not eval_latest_ok or not drill_latest_ok or not audit_ok) else "info",
+            )
+        except Exception:
+            pass
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False))

@@ -271,6 +271,34 @@ def check_notion_sync_dry_run(env: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def check_weekly_report_smoke(env: Dict[str, str]) -> Dict[str, Any]:
+    run = run_cmd(
+        [
+            "python3",
+            str(OPENCLAW_REPO / "scripts" / "roby-weekly-report.py"),
+            "--json",
+        ],
+        env,
+        timeout=180,
+    )
+    parsed = _parse_json(run["stdout"])
+    ok = (
+        run["returncode"] == 0
+        and isinstance(parsed.get("eval"), dict)
+        and isinstance(parsed.get("drill"), dict)
+        and isinstance(parsed.get("audit"), dict)
+        and isinstance(parsed.get("ops"), dict)
+    )
+    return {
+        "id": "weekly_report_smoke",
+        "kind": "optional",
+        "ok": ok,
+        "elapsed_ms": run["elapsed_ms"],
+        "detail": "" if ok else (run["stderr"] or run["stdout"] or "weekly report smoke failed"),
+        "command": run["command"],
+    }
+
+
 def check_minutes_neuronic_regression(env: Dict[str, str]) -> Dict[str, Any]:
     run = run_cmd(
         [
@@ -391,6 +419,7 @@ CHECKS = {
     "minutes_neuronic_regression": check_minutes_neuronic_regression,
     "gmail_neuronic_regression": check_gmail_neuronic_regression,
     "notion_sync_dry_run": check_notion_sync_dry_run,
+    "weekly_report_smoke": check_weekly_report_smoke,
     "gmail_triage_dry_run": check_gmail_dry_run,
 }
 

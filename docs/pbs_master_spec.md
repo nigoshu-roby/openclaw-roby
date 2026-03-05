@@ -509,6 +509,26 @@
 - 目的:
   - 「週次で何がどれだけ動き、どこで失敗しているか」を単一レポートで把握できるようにする
 
+### 8.24 Completion Update（週次レポートの監査化 + ドリル疎通追加）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-weekly-report.py`
+    - `event_type=weekly_report.run` を Immutable Audit に記録
+    - 記録内容:
+      - eval/drillの実行数・失敗数
+      - audit結果
+      - ops集計の主要実行数
+    - Slack通知成否
+    - 監査severityは「直近実行の健全性（latest eval/drill + audit）」で判定
+  - `scripts/roby-drill.py`
+    - `weekly_report_smoke`（任意）を追加
+    - 週次レポートJSON出力の構造（`eval/drill/audit/ops`）を検証
+  - `docs/roby_runbook_drill.md`
+    - `weekly_report_smoke` の一次対応手順を追記
+- 目的:
+  - 週次サマリ生成を監査対象に含め、運用レポート系の停止を定期ドリルで検知する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04
