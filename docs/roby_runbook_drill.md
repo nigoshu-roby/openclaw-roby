@@ -27,12 +27,13 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
 ## 実行チェック項目（現行）
 
 1. `gateway_status`（必須）
-2. `orchestrator_qa_smoke`（必須）
-3. `eval_harness_smoke`（必須）
-4. `audit_verify`（必須）
-5. `minutes_neuronic_regression`（必須）
-6. `gmail_neuronic_regression`（必須）
-7. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
+2. `ollama_health`（任意, `ROBY_DRILL_REQUIRE_OLLAMA=1` で必須化）
+3. `orchestrator_qa_smoke`（必須）
+4. `eval_harness_smoke`（必須）
+5. `audit_verify`（必須）
+6. `minutes_neuronic_regression`（必須）
+7. `gmail_neuronic_regression`（必須）
+8. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
 
 ## 部分実行
 
@@ -52,6 +53,13 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --check gateway_status --ch
 
 - `python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py --route qa_gemini --message "こんにちは" --execute --json`
 - `~/.openclaw/roby/orchestrator_runs.jsonl` を確認
+
+### ollama_health FAIL
+
+- `ollama --version` でCLI確認
+- `curl -s http://127.0.0.1:11434/api/tags` でAPI確認
+- `ROBY_ORCH_OLLAMA_MODEL` が `models` に含まれるか確認
+- Ollama導入を必須運用にする場合は `ROBY_DRILL_REQUIRE_OLLAMA=1` を設定
 
 ### eval_harness_smoke FAIL
 

@@ -391,6 +391,25 @@
 - 目的:
   - #6の回帰観点（階層/順序/フォールバック/分割再送）を定期ドリルで自動監視
 
+### 8.17 Completion Update（Ollamaヘルスチェックを運用ドリルへ統合）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-drill.py`
+    - `ollama_health` チェックを追加
+    - 判定内容:
+      - Ollama CLI有無
+      - `ROBY_ORCH_OLLAMA_BASE_URL` へのAPI接続（`/api/tags`）
+      - `ROBY_ORCH_OLLAMA_MODEL` の存在確認
+    - 運用スイッチ:
+      - `ROBY_DRILL_REQUIRE_OLLAMA=1` で必須化（未導入/未接続/モデル未検出をFAIL）
+      - 未設定時は任意チェック（未導入ならSKIP）
+  - Runbook更新:
+    - `docs/roby_runbook_drill.md`
+    - `ollama_health` の一次対応手順を追記
+- 目的:
+  - Ollama導入フェーズ前後で「導入済みなのに使えない」状態を定期ドリルで即検知する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

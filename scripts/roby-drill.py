@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import time
 import urllib.request
@@ -233,8 +234,79 @@ def check_gmail_neuronic_regression(env: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def check_ollama_health(env: Dict[str, str]) -> Dict[str, Any]:
+    require_ollama = str(env.get("ROBY_DRILL_REQUIRE_OLLAMA", "0")).strip() == "1"
+    configured_model = env.get("ROBY_ORCH_OLLAMA_MODEL", "qwen2.5:7b").strip()
+    base_url = env.get("ROBY_ORCH_OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip().rstrip("/")
+    has_cli = shutil.which("ollama") is not None
+    kind = "required" if require_ollama else "optional"
+
+    if not has_cli:
+        if require_ollama:
+            return {
+                "id": "ollama_health",
+                "kind": kind,
+                "ok": False,
+                "elapsed_ms": 0,
+                "detail": "ollama CLI が見つかりません（ROBY_DRILL_REQUIRE_OLLAMA=1）",
+                "command": "ollama --version",
+            }
+        return {
+            "id": "ollama_health",
+            "kind": kind,
+            "ok": True,
+            "skipped": True,
+            "elapsed_ms": 0,
+            "detail": "ollama CLI 未導入のためスキップ",
+            "command": "ollama --version",
+        }
+
+    started = time.perf_counter()
+    models: List[str] = []
+    detail = ""
+    ok = False
+    try:
+        req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = resp.read().decode("utf-8", "ignore")
+            parsed = json.loads(body) if body else {}
+            for item in parsed.get("models", []):
+                name = str(item.get("name", "")).strip()
+                if name:
+                    models.append(name)
+        ok = True
+        if configured_model:
+            if configured_model in models:
+                detail = f"Ollama API接続OK / model={configured_model} 利用可"
+            else:
+                if require_ollama:
+                    ok = False
+                    detail = (
+                        f"Ollama API接続OKだが configured model 未検出: {configured_model} "
+                        f"(available={', '.join(models[:8]) or 'none'})"
+                    )
+                else:
+                    detail = (
+                        f"Ollama API接続OKだが configured model 未検出: {configured_model} "
+                        f"(available={', '.join(models[:8]) or 'none'})"
+                    )
+    except Exception as exc:
+        ok = False
+        detail = f"Ollama API接続失敗: {exc}"
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "id": "ollama_health",
+        "kind": kind,
+        "ok": ok,
+        "elapsed_ms": elapsed_ms,
+        "detail": detail,
+        "command": f"GET {base_url}/api/tags",
+    }
+
+
 CHECKS = {
     "gateway_status": check_gateway_status,
+    "ollama_health": check_ollama_health,
     "orchestrator_qa_smoke": check_orchestrator_qa,
     "eval_harness_smoke": check_eval_harness,
     "audit_verify": check_audit_verify,
