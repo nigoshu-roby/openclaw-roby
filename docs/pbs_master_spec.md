@@ -307,6 +307,24 @@
   - `ROBY_ORCH_GMAIL_PROFILE=fast`（LLM未使用）
   - 必要時のみ `hybrid` / `quality` へ切替
 
+### 8.12 Completion Update（#5 Recall改善: coverage pass）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-minutes.py` に **coverage pass** を追加
+    - 2段階抽出（review + tasks）後、長文かつ件数不足時のみ追加LLM抽出を実行
+    - 既存タイトルを入力し、重複を避けながら不足タスクを補完
+  - 追加設定キー:
+    - `MINUTES_COVERAGE_MODELS`
+    - `MINUTES_COVERAGE_MAX_TOKENS`
+    - `MINUTES_COVERAGE_RETRY_MAX_TOKENS`
+    - `MINUTES_COVERAGE_LENGTH`
+    - `MINUTES_COVERAGE_TIMEOUT_SEC`
+    - `MINUTES_COVERAGE_RETRY_TIMEOUT_SEC`
+- 目的:
+  - fallback（heuristic）に依存せず、LLMのみで抽出件数（Recall）を戻す
+  - 既存のメモ混入抑制方針を維持
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

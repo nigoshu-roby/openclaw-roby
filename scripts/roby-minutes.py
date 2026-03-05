@@ -1026,6 +1026,49 @@ def extract_tasks_with_gemini_from_review(
     return [], raw
 
 
+def extract_coverage_tasks_from_review(
+    review: Dict[str, Any],
+    current_tasks: List[Dict[str, Any]],
+    env: Dict[str, str],
+    default_project: str,
+    known_projects: List[str],
+    today: str,
+) -> Tuple[List[Dict[str, Any]], str]:
+    known = ", ".join(sorted(set([p for p in known_projects if p]))[:30])
+    review_text = json.dumps(review, ensure_ascii=False)
+    existing_titles = ", ".join([str(t.get("title") or "") for t in current_tasks[:40]])
+    prompt = (
+        "You are doing a coverage boost pass for task extraction. "
+        "Given reviewed meeting sections and already extracted tasks, add only missing high-confidence actionable tasks. "
+        "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note, subtasks(optional). "
+        "Do not duplicate existing titles. Do NOT emit status summaries or commentary. "
+        "Prefer one concrete task per actionable section when missing. "
+        "Project must be specific (avoid generic TOKIWAGI for internal MTG if section suggests project). "
+        "due_date must be YYYY-MM-DD or empty string. "
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
+        f"Existing titles: {existing_titles}."
+    )
+    parsed, raw = _run_gemini_json_prompt_with_retry(
+        review_text,
+        prompt,
+        env,
+        model_list_key="MINUTES_COVERAGE_MODELS",
+        fallback_models=[
+            env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+            "google/gemini-2.5-pro",
+        ],
+        max_output_tokens=env.get("MINUTES_COVERAGE_MAX_TOKENS", "2000"),
+        retry_max_output_tokens=env.get("MINUTES_COVERAGE_RETRY_MAX_TOKENS", "3000"),
+        length=env.get("MINUTES_COVERAGE_LENGTH", "m"),
+        timeout_sec=int(env.get("MINUTES_COVERAGE_TIMEOUT_SEC", "120")),
+        retry_timeout_sec=int(env.get("MINUTES_COVERAGE_RETRY_TIMEOUT_SEC", "180")),
+    )
+    coerced = _coerce_task_array(parsed)
+    if coerced:
+        return coerced, raw
+    return [], raw
+
+
 def tasks_from_review_object(
     review: Dict[str, Any],
     default_project: str,
@@ -1109,6 +1152,8 @@ def local_recall_boost_tasks(
 
 def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_projects: List[str], today: str) -> Tuple[List[Dict[str, Any]], str]:
     known = ", ".join(sorted(set([p for p in known_projects if p]))[:25])
+    min_tasks_if_long = int(env.get("MINUTES_MIN_TASKS_IF_LONG", "4"))
+    long_doc_chars = int(env.get("MINUTES_LONG_DOC_CHARS", "1200"))
     review, review_raw = review_minutes_with_gemini(text, env, default_project, known_projects, today)
     if review:
         llm_tasks, task_raw = extract_tasks_with_gemini_from_review(review, env, default_project, known_projects, today)
@@ -1124,12 +1169,29 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
             review_tasks,
             int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
         )
+        coverage_raw = ""
+        if len(text) >= long_doc_chars and len(merged_review_tasks) < min_tasks_if_long:
+            coverage_tasks, coverage_raw = extract_coverage_tasks_from_review(
+                review,
+                merged_review_tasks,
+                env,
+                default_project,
+                known_projects,
+                today,
+            )
+            if coverage_tasks:
+                merged_review_tasks = _merge_tasks(
+                    merged_review_tasks,
+                    coverage_tasks,
+                    int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                )
         if merged_review_tasks:
             return merged_review_tasks, json.dumps(
                 {
                     "pipeline": "gemini_two_stage",
                     "review_raw": review_raw[:1200],
                     "task_raw": task_raw[:1200],
+                    "coverage_raw": coverage_raw[:1200],
                 },
                 ensure_ascii=False,
             )
@@ -1244,8 +1306,6 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         repair_raw = raw_repair or malformed_source
 
     # Recall補強: 長文なのに抽出件数が少ない場合、追加抽出を一回だけ実施
-    min_tasks_if_long = int(env.get("MINUTES_MIN_TASKS_IF_LONG", "4"))
-    long_doc_chars = int(env.get("MINUTES_LONG_DOC_CHARS", "1200"))
     final_raw = repair_raw or raw_compact or raw
     if len(text) >= long_doc_chars and len(tasks) < min_tasks_if_long:
         existing_titles = ", ".join([str(x.get("title") or "") for x in tasks][:20])
