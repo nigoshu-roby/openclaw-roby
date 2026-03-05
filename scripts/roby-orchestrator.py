@@ -84,7 +84,8 @@ SELF_GROWTH_HINTS = [
     "自己成長", "self-growth", "self growth", "自己改修", "自己修正", "自動パッチ", "毎時改善", "roby-self-growth"
 ]
 MINUTES_EXEC_HINTS = [
-    "実行", "取り込み", "連携", "同期", "抽出して", "タスク化して", "一覧", "list", "--select", "--run"
+    "実行", "取り込み", "連携", "同期", "抽出して", "タスク化して", "一覧", "list", "--select", "--run",
+    "登録", "タスク登録", "登録して", "追加して", "作成して", "入れ子", "親子", "配下", "配列してください",
 ]
 CONSULT_HINTS = [
     "どう", "改善", "方針", "相談", "設計", "考え", "おすすめ", "べき", "案"
@@ -101,6 +102,9 @@ IMAGE_TEXT_HINTS = [
 SELF_STATUS_HINTS = [
     "自分の機能", "機能を確認", "機能一覧", "何ができる", "現状把握", "ステータス",
     "ollama導入", "ollama の導入", "ollama導入でき", "neuronic連携", "neuronic 連携",
+]
+DIRECT_NEURONIC_REGISTER_HINTS = [
+    "タスク登録", "登録して", "登録をお願いします", "追加して", "作成して", "入れ子", "親子", "配下", "配列してください",
 ]
 
 
@@ -306,8 +310,35 @@ def pick_ab_router_for_qa(message: str, env: Dict[str, str]) -> Tuple[Dict[str, 
     return overrides, decision
 
 
+def extract_latest_user_request(message: str) -> str:
+    text = (message or "").strip()
+    if not text:
+        return ""
+    patterns = [
+        r"\[ユーザーの最新依頼\]\s*(.*?)\s*(?:上記コンテキストを前提に回答してください。不要な文脈は無視して構いません。)?\s*$",
+        r"\[latest user request\]\s*(.*?)\s*$",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        latest = (m.group(1) or "").strip()
+        if latest:
+            return latest
+    return text
+
+
+def is_direct_neuronic_register_request(message: str) -> bool:
+    text = extract_latest_user_request(message)
+    lower = text.lower()
+    if ("neuronic" not in lower) and ("ニューロニック" not in text):
+        return False
+    return any(h in text or h in lower for h in DIRECT_NEURONIC_REGISTER_HINTS)
+
+
 def classify_intent_heuristic(message: str) -> str:
-    lower = message.lower()
+    intent_text = extract_latest_user_request(message)
+    lower = intent_text.lower()
     if any(k in lower for k in OLLAMA_HINTS):
         return ROUTE_QA_LOCAL
     if any(k in lower for k in SELF_GROWTH_HINTS):
@@ -330,6 +361,8 @@ def classify_intent_heuristic(message: str) -> str:
     has_minutes = any(k in lower for k in MINUTES_HINTS)
     has_minutes_exec = any(k in lower for k in MINUTES_EXEC_HINTS)
     has_consult = any(k in lower for k in CONSULT_HINTS)
+    if is_direct_neuronic_register_request(intent_text) and not has_consult:
+        return ROUTE_MINUTES
     if has_minutes:
         if has_minutes_exec and not has_consult:
             return ROUTE_MINUTES
@@ -387,11 +420,12 @@ def run_summarize_json(
 
 
 def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    intent_text = extract_latest_user_request(message)
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
         f"route must be one of: {ROUTE_QA}, {ROUTE_QA_LOCAL}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_EVAL}, {ROUTE_DRILL}, {ROUTE_WEEKLY_REPORT}."
     )
-    parsed, raw = run_summarize_json(prompt, message, env, max_tokens="300", timeout_sec=45)
+    parsed, raw = run_summarize_json(prompt, intent_text, env, max_tokens="300", timeout_sec=45)
     if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_QA_LOCAL, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT}:
         parsed["raw"] = raw
         return parsed
@@ -399,16 +433,17 @@ def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[s
 
 
 def is_feature_list_request(message: str) -> bool:
-    lower = message.lower()
-    if "機能" in message and ("一覧" in message or "リスト" in message):
+    text = extract_latest_user_request(message)
+    lower = text.lower()
+    if "機能" in text and ("一覧" in text or "リスト" in text):
         return True
-    if "何ができる" in message or "実装済み" in message or "現状" in message:
+    if "何ができる" in text or "実装済み" in text or "現状" in text:
         return True
-    return sum(1 for k in FEATURE_LIST_HINTS if k in lower or k in message) >= 2
+    return sum(1 for k in FEATURE_LIST_HINTS if k in lower or k in text) >= 2
 
 
 def is_self_status_request(message: str) -> bool:
-    text = (message or "").strip()
+    text = extract_latest_user_request(message).strip()
     lower = text.lower()
     if not text:
         return False
@@ -422,7 +457,7 @@ def is_self_status_request(message: str) -> bool:
 
 
 def is_greeting_request(message: str) -> bool:
-    normalized = (message or "").strip().lower()
+    normalized = extract_latest_user_request(message).strip().lower()
     greeting_tokens = [
         "こんにちは", "こんばんは", "おはよう", "やあ", "hello", "hi", "hey"
     ]
@@ -1152,14 +1187,244 @@ def _replace_agent_flag(cmd: str, agent_id: str) -> str:
     return cmd
 
 
+def _extract_root_task_title(message: str) -> str:
+    text = extract_latest_user_request(message)
+    if not text:
+        return ""
+    patterns = [
+        r"「([^」]+)」\s*という?\s*大タスク",
+        r"\"([^\"]+)\"\s*という?\s*大タスク",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    return ""
+
+
+def _normalize_hierarchy_title(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^(?:タスクカテゴリー|大タスク|小タスク|小小タスク)\s*[：:]\s*", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _parse_hierarchical_nodes_from_message(message: str) -> List[Dict[str, Any]]:
+    text = extract_latest_user_request(message)
+    nodes: List[Dict[str, Any]] = []
+    marker_levels = [
+        ("■", 1),
+        ("◆", 2),
+        ("・", 3),
+        ("-", 4),
+        ("－", 4),
+        ("*", 5),
+        ("＊", 5),
+    ]
+    for line_no, raw_line in enumerate(text.splitlines(), 1):
+        stripped = raw_line.lstrip(" \t　")
+        if not stripped:
+            continue
+        level = None
+        content = ""
+        for marker, lv in marker_levels:
+            if stripped.startswith(marker):
+                level = lv
+                content = stripped[len(marker):].strip()
+                break
+        if level is None:
+            continue
+        title = _normalize_hierarchy_title(content)
+        if not title:
+            continue
+        nodes.append({"level": level, "title": title, "line_no": line_no})
+    return nodes
+
+
+def _build_direct_neuronic_tasks(message: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    root_title = _extract_root_task_title(message).strip() or "Robyチャット登録タスク"
+    nodes = _parse_hierarchical_nodes_from_message(message)
+    if not nodes:
+        return [], {"root_title": root_title, "node_count": 0}
+
+    run_id = f"roby:chat:{datetime.now(JST).strftime('%Y%m%d%H%M%S')}"
+    source = "roby"
+    tasks: List[Dict[str, Any]] = []
+    source_doc_title = root_title
+
+    root_path = "0"
+    root_seed = f"{root_title}|{root_path}|root"
+    root_origin = f"roby:chat:{hashlib.sha1(root_seed.encode('utf-8')).hexdigest()[:16]}"
+    root_task = {
+        "title": root_title,
+        "source": source,
+        "origin_id": root_origin,
+        "parent_origin_id": None,
+        "sibling_order": 0,
+        "outline_path": root_path,
+        "status": "inbox",
+        "priority": 1,
+        "run_id": run_id,
+        "source_doc_title": source_doc_title,
+        "external_ref": "roby:chat",
+    }
+    tasks.append(root_task)
+
+    stack: List[Dict[str, Any]] = [{"level": 0, "origin_id": root_origin, "path": root_path}]
+    sibling_counts: Dict[str, int] = {root_origin: 0}
+
+    for node in nodes:
+        level = int(node["level"])
+        title = str(node["title"])
+        while stack and int(stack[-1]["level"]) >= level:
+            stack.pop()
+        parent = stack[-1] if stack else {"level": 0, "origin_id": root_origin, "path": root_path}
+        parent_origin = str(parent["origin_id"])
+        order = int(sibling_counts.get(parent_origin, 0))
+        sibling_counts[parent_origin] = order + 1
+        path = f"{parent['path']}/{order}"
+        seed = f"{root_title}|{path}|{title}"
+        origin_id = f"roby:chat:{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:16]}"
+        task = {
+            "title": title,
+            "source": source,
+            "origin_id": origin_id,
+            "parent_origin_id": parent_origin,
+            "sibling_order": order,
+            "outline_path": path,
+            "status": "inbox",
+            "priority": 1,
+            "run_id": run_id,
+            "source_doc_title": source_doc_title,
+            "external_ref": "roby:chat",
+        }
+        tasks.append(task)
+        stack.append({"level": level, "origin_id": origin_id, "path": path})
+
+    return tasks, {"root_title": root_title, "node_count": len(nodes), "run_id": run_id}
+
+
+def _send_neuronic_direct_import(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
+    url = env.get("NEURONIC_URL", "http://127.0.0.1:5174/api/v1/tasks/import")
+    fallback_url = env.get("NEURONIC_FALLBACK_URL", "http://127.0.0.1:5174/api/v1/tasks/bulk")
+    token = env.get("NEURONIC_TOKEN", "")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    payload = json.dumps({"items": tasks}, ensure_ascii=False).encode("utf-8")
+
+    def _post(target_url: str) -> Dict[str, Any]:
+        req = urllib.request.Request(target_url, data=payload, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                raw = resp.read().decode("utf-8", "ignore")
+                body = json.loads(raw) if raw else {}
+                return {
+                    "ok": 200 <= resp.status < 300,
+                    "status_code": int(resp.status),
+                    "body": body,
+                    "raw": raw,
+                    "endpoint": target_url,
+                }
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "ignore")
+            parsed = {}
+            try:
+                parsed = json.loads(detail) if detail else {}
+            except Exception:
+                parsed = {}
+            return {
+                "ok": False,
+                "status_code": int(e.code),
+                "body": parsed,
+                "raw": detail,
+                "endpoint": target_url,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "body": {},
+                "raw": str(exc),
+                "endpoint": target_url,
+            }
+
+    first = _post(url)
+    used_fallback = False
+    result = first
+    if (not first.get("ok")) and first.get("status_code") == 404 and url.endswith("/tasks/import"):
+        result = _post(fallback_url)
+        used_fallback = True
+
+    body = result.get("body") if isinstance(result.get("body"), dict) else {}
+    errors = body.get("errors") if isinstance(body.get("errors"), list) else []
+    return {
+        "ok": bool(result.get("ok")),
+        "status_code": result.get("status_code"),
+        "endpoint_used": "/api/v1/tasks/bulk" if used_fallback else "/api/v1/tasks/import",
+        "fallback_used": used_fallback,
+        "created": int(body.get("created", 0) or 0),
+        "updated": int(body.get("updated", 0) or 0),
+        "skipped": int(body.get("skipped", 0) or 0),
+        "error_count": len(errors),
+        "errors": errors,
+        "hierarchy_applied": body.get("hierarchy_applied"),
+        "order_applied": body.get("order_applied"),
+        "detail": result.get("raw") if not result.get("ok") else "",
+    }
+
+
+def handle_neuronic_direct_register(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
+    tasks, meta = _build_direct_neuronic_tasks(message)
+    result: Dict[str, Any] = {
+        "route": ROUTE_MINUTES,
+        "mode": "direct_register",
+        "executed": False,
+        "root_title": meta.get("root_title", ""),
+        "task_count": len(tasks),
+        "node_count": int(meta.get("node_count", 0)),
+    }
+    if not tasks:
+        result["ok"] = False
+        result["error"] = "no_hierarchical_tasks_detected"
+        result["note"] = "階層タスクを抽出できませんでした。箇条書き（■◆・- *）形式で指定してください。"
+        return result
+    if not execute:
+        result["ok"] = True
+        result["note"] = "Neuronicへ階層タスク登録を実行する準備ができています。"
+        return result
+
+    sent = _send_neuronic_direct_import(tasks, env)
+    result.update(sent)
+    result["executed"] = True
+    if sent.get("ok"):
+        result["output"] = (
+            f"Neuronicへ階層タスクを登録しました。"
+            f" created={sent.get('created', 0)} updated={sent.get('updated', 0)}"
+            f" skipped={sent.get('skipped', 0)}"
+        )
+    else:
+        result["output"] = (
+            f"Neuronic登録に失敗しました。 status={sent.get('status_code')} "
+            f"endpoint={sent.get('endpoint_used')}"
+        )
+    return result
+
+
 def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, verbose: bool) -> Dict[str, Any]:
-    select_match = re.search(r"--select\s+\"([^\"]+)\"|--select\s+'([^']+)'|--select\s+(\S+)", message)
+    intent_text = extract_latest_user_request(message)
+    if is_direct_neuronic_register_request(intent_text):
+        return handle_neuronic_direct_register(intent_text, env, execute)
+
+    select_match = re.search(r"--select\s+\"([^\"]+)\"|--select\s+'([^']+)'|--select\s+(\S+)", intent_text)
     select_val = None
     if select_match:
         select_val = next((g for g in select_match.groups() if g), None)
 
     run_mode = "list"
-    if any(k in message for k in ["実行", "取り込み", "連携", "Neuronic", "タスク化"]):
+    if any(k in intent_text for k in ["実行", "取り込み", "連携", "Neuronic", "タスク化", "登録", "タスク登録"]):
         run_mode = "run"
 
     cmd = ["python3", str(MINUTES_SCRIPT)]
