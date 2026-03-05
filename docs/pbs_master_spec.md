@@ -490,6 +490,25 @@
 - 目的:
   - GitHub→Notion同期の健全性を定期ドリルに組み込み、同期不全を早期検知する
 
+### 8.23 Completion Update（週次レポートにPipeline運用統計を追加）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-weekly-report.py`
+    - 監査ログ（`events.jsonl`）を7日窓で集計し、運用統計を追加:
+      - `minutes_sync`
+      - `gmail_triage`
+      - `notion_sync`
+      - `self_growth`
+      - `evaluation_harness`
+      - `runbook_drill`
+      - `weekly_report`
+    - 各統計に `runs / errors / last_ts / last_run_id` を保持
+    - Markdown出力（`weekly_latest.md`）に `Pipeline Operations` セクションを追加
+    - Slack要約に主要パイプライン実行数（minutes/gmail/notion）を追記
+- 目的:
+  - 「週次で何がどれだけ動き、どこで失敗しているか」を単一レポートで把握できるようにする
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

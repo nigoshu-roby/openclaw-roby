@@ -137,6 +137,40 @@ def summarize_ab(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"runs": len(items), "arms": by_arm}
 
 
+def summarize_ops_from_audit(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    tracked = {
+        "minutes_sync.run": "minutes_sync",
+        "gmail_triage.run": "gmail_triage",
+        "notion_sync.run": "notion_sync",
+        "self_growth.run": "self_growth",
+        "evaluation_harness.run": "evaluation_harness",
+        "runbook_drill.run": "runbook_drill",
+        "weekly_report.run": "weekly_report",
+    }
+    out: Dict[str, Dict[str, Any]] = {
+        name: {"runs": 0, "errors": 0, "last_ts": "", "last_run_id": ""}
+        for name in tracked.values()
+    }
+    for row in items:
+        event_type = str(row.get("event_type") or "")
+        name = tracked.get(event_type)
+        if not name:
+            continue
+        bucket = out[name]
+        bucket["runs"] += 1
+        severity = str(row.get("severity") or "").lower()
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        if severity == "error" or (payload and payload.get("ok") is False):
+            bucket["errors"] += 1
+        ts = str(row.get("ts") or "")
+        if ts:
+            bucket["last_ts"] = ts
+        run_id = str(row.get("run_id") or "")
+        if run_id:
+            bucket["last_run_id"] = run_id
+    return out
+
+
 def send_slack(webhook_url: str, text: str) -> None:
     data = json.dumps({"text": text}).encode("utf-8")
     req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
@@ -187,6 +221,15 @@ def build_markdown(report: Dict[str, Any]) -> str:
             "",
         ]
     )
+    ops = report.get("ops", {})
+    if ops:
+        lines.extend(["## Pipeline Operations (from audit)"])
+        for name, row in ops.items():
+            lines.append(
+                f"- {name}: runs={row.get('runs',0)} errors={row.get('errors',0)} "
+                f"last_ts={row.get('last_ts','-')}"
+            )
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -203,6 +246,7 @@ def main() -> int:
     eval_items = in_window(read_jsonl(EVAL_HISTORY), since)
     drill_items = in_window(read_jsonl(DRILL_HISTORY), since)
     ab_items = in_window(read_jsonl(AB_HISTORY), since)
+    audit_events = in_window(read_jsonl(AUDIT_FILE), since)
     audit_report = verify_audit([AUDIT_FILE])
 
     report = {
@@ -212,6 +256,7 @@ def main() -> int:
         "drill": summarize_drill(drill_items),
         "ab": summarize_ab(ab_items),
         "audit": audit_report,
+        "ops": summarize_ops_from_audit(audit_events),
     }
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -228,7 +273,10 @@ def main() -> int:
             f"- generated_at: {report['generated_at']}\n"
             f"- eval runs: {report['eval'].get('runs',0)} failed: {report['eval'].get('failed_runs',0)}\n"
             f"- drill runs: {report['drill'].get('runs',0)} failed: {report['drill'].get('failed_runs',0)}\n"
-            f"- audit ok: {report['audit'].get('ok', False)} errors: {report['audit'].get('errors', 0)}"
+            f"- audit ok: {report['audit'].get('ok', False)} errors: {report['audit'].get('errors', 0)}\n"
+            f"- ops: minutes={report['ops'].get('minutes_sync',{}).get('runs',0)} "
+            f"gmail={report['ops'].get('gmail_triage',{}).get('runs',0)} "
+            f"notion={report['ops'].get('notion_sync',{}).get('runs',0)}"
         )
         try:
             send_slack(webhook, text[:3500])
