@@ -35,6 +35,14 @@ Neuronicへのタスク登録をお願いします。
 * 小小タスク：スマレジ管理画面（Web）にてテスト店舗名・基本情報を入力する
 """
 
+FULL_REGISTER_MESSAGE_WITH_DRILL_WORD = """Neuronicへのタスク登録をお願いします。
+「ボーネルンドスマレジテスト」という大タスクの配下に、下記タスクを配列してください。
+■フェーズ4：運用テストと業務フローの確立
+◆タスクカテゴリー：現場運用に向けた検証
+・大タスク：機器・連携テスト
+- 小タスク：バーコードリーダー等の動作確認
+"""
+
 
 class TestRobyOrchestratorRouting(TestCase):
     def setUp(self):
@@ -47,6 +55,10 @@ class TestRobyOrchestratorRouting(TestCase):
 
     def test_classify_direct_register_to_minutes_pipeline(self):
         route = self.mod.classify_intent_heuristic(WRAPPED_MESSAGE)
+        self.assertEqual(route, self.mod.ROUTE_MINUTES)
+
+    def test_classify_direct_register_prioritized_over_drill_keywords(self):
+        route = self.mod.classify_intent_heuristic(FULL_REGISTER_MESSAGE_WITH_DRILL_WORD)
         self.assertEqual(route, self.mod.ROUTE_MINUTES)
 
     def test_self_status_detection_not_triggered_by_wrapped_context(self):
@@ -71,6 +83,16 @@ class TestRobyOrchestratorRouting(TestCase):
         self.assertTrue(result.get("ok"))
         self.assertEqual(result.get("mode"), "direct_register")
         self.assertGreater(int(result.get("task_count", 0)), 1)
+
+    def test_is_direct_register_managed_task(self):
+        task = {
+            "id": "T1",
+            "source": "roby",
+            "external_ref": "roby:chat",
+            "source_doc_title": "ボーネルンドスマレジテスト",
+        }
+        self.assertTrue(self.mod._is_direct_register_managed_task(task, "ボーネルンドスマレジテスト"))
+        self.assertFalse(self.mod._is_direct_register_managed_task(task, "別タイトル"))
 
 
 if __name__ == "__main__":

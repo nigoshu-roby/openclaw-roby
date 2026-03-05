@@ -339,6 +339,8 @@ def is_direct_neuronic_register_request(message: str) -> bool:
 def classify_intent_heuristic(message: str) -> str:
     intent_text = extract_latest_user_request(message)
     lower = intent_text.lower()
+    if is_direct_neuronic_register_request(intent_text):
+        return ROUTE_MINUTES
     if any(k in lower for k in OLLAMA_HINTS):
         return ROUTE_QA_LOCAL
     if any(k in lower for k in SELF_GROWTH_HINTS):
@@ -1309,13 +1311,10 @@ def _build_direct_neuronic_tasks(message: str) -> Tuple[List[Dict[str, Any]], Di
 def _send_neuronic_direct_import(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
     url = env.get("NEURONIC_URL", "http://127.0.0.1:5174/api/v1/tasks/import")
     fallback_url = env.get("NEURONIC_FALLBACK_URL", "http://127.0.0.1:5174/api/v1/tasks/bulk")
-    token = env.get("NEURONIC_TOKEN", "")
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    payload = json.dumps({"items": tasks}, ensure_ascii=False).encode("utf-8")
+    headers = _neuronic_api_headers(env)
 
-    def _post(target_url: str) -> Dict[str, Any]:
+    def _post(items: List[Dict[str, Any]], target_url: str) -> Dict[str, Any]:
+        payload = json.dumps({"items": items}, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(target_url, data=payload, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=45) as resp:
@@ -1351,29 +1350,194 @@ def _send_neuronic_direct_import(tasks: List[Dict[str, Any]], env: Dict[str, str
                 "endpoint": target_url,
             }
 
-    first = _post(url)
-    used_fallback = False
-    result = first
-    if (not first.get("ok")) and first.get("status_code") == 404 and url.endswith("/tasks/import"):
-        result = _post(fallback_url)
-        used_fallback = True
-
-    body = result.get("body") if isinstance(result.get("body"), dict) else {}
-    errors = body.get("errors") if isinstance(body.get("errors"), list) else []
-    return {
-        "ok": bool(result.get("ok")),
-        "status_code": result.get("status_code"),
-        "endpoint_used": "/api/v1/tasks/bulk" if used_fallback else "/api/v1/tasks/import",
-        "fallback_used": used_fallback,
-        "created": int(body.get("created", 0) or 0),
-        "updated": int(body.get("updated", 0) or 0),
-        "skipped": int(body.get("skipped", 0) or 0),
-        "error_count": len(errors),
-        "errors": errors,
-        "hierarchy_applied": body.get("hierarchy_applied"),
-        "order_applied": body.get("order_applied"),
-        "detail": result.get("raw") if not result.get("ok") else "",
+    batch_size = int_from_env(env.get("NEURONIC_BATCH_SIZE", "25"), 25)
+    batch_size = max(1, batch_size)
+    queue: List[List[Dict[str, Any]]] = [tasks[i:i + batch_size] for i in range(0, len(tasks), batch_size)]
+    aggregate = {
+        "ok": True,
+        "status_code": 200,
+        "endpoint_used": "/api/v1/tasks/import",
+        "fallback_used": False,
+        "created": 0,
+        "updated": 0,
+        "skipped": 0,
+        "error_count": 0,
+        "errors": [],
+        "hierarchy_applied": None,
+        "order_applied": None,
+        "detail": "",
     }
+    hierarchy_flags: List[bool] = []
+    order_flags: List[bool] = []
+
+    while queue:
+        current = queue.pop(0)
+        first = _post(current, url)
+        used_fallback = False
+        result = first
+        if (not first.get("ok")) and first.get("status_code") == 404 and url.endswith("/tasks/import"):
+            result = _post(current, fallback_url)
+            used_fallback = True
+
+        if (not result.get("ok")) and result.get("status_code") == 413 and len(current) > 1:
+            mid = len(current) // 2
+            queue.insert(0, current[mid:])
+            queue.insert(0, current[:mid])
+            continue
+
+        if not result.get("ok"):
+            aggregate["ok"] = False
+            aggregate["status_code"] = result.get("status_code")
+            aggregate["detail"] = str(result.get("raw") or "")
+            break
+
+        body = result.get("body") if isinstance(result.get("body"), dict) else {}
+        errors = body.get("errors") if isinstance(body.get("errors"), list) else []
+        aggregate["created"] += int(body.get("created", 0) or 0)
+        aggregate["updated"] += int(body.get("updated", 0) or 0)
+        aggregate["skipped"] += int(body.get("skipped", 0) or 0)
+        aggregate["error_count"] += len(errors)
+        aggregate["errors"].extend(errors)
+        if used_fallback:
+            aggregate["fallback_used"] = True
+            aggregate["endpoint_used"] = "/api/v1/tasks/bulk"
+        if body.get("hierarchy_applied") is not None:
+            hierarchy_flags.append(bool(body.get("hierarchy_applied")))
+        if body.get("order_applied") is not None:
+            order_flags.append(bool(body.get("order_applied")))
+
+    if hierarchy_flags:
+        aggregate["hierarchy_applied"] = all(hierarchy_flags)
+    if order_flags:
+        aggregate["order_applied"] = all(order_flags)
+    if aggregate["error_count"] > 0:
+        aggregate["ok"] = False
+        if not aggregate["detail"]:
+            aggregate["detail"] = "neuronic returned item errors"
+
+    return {
+        "ok": bool(aggregate.get("ok")),
+        "status_code": aggregate.get("status_code"),
+        "endpoint_used": aggregate.get("endpoint_used"),
+        "fallback_used": bool(aggregate.get("fallback_used")),
+        "created": int(aggregate.get("created", 0) or 0),
+        "updated": int(aggregate.get("updated", 0) or 0),
+        "skipped": int(aggregate.get("skipped", 0) or 0),
+        "error_count": int(aggregate.get("error_count", 0) or 0),
+        "errors": aggregate.get("errors", []),
+        "hierarchy_applied": aggregate.get("hierarchy_applied"),
+        "order_applied": aggregate.get("order_applied"),
+        "detail": str(aggregate.get("detail") or ""),
+    }
+
+
+def _neuronic_api_headers(env: Dict[str, str]) -> Dict[str, str]:
+    token = env.get("NEURONIC_TOKEN", "")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _is_direct_register_managed_task(task: Dict[str, Any], root_title: str) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if str(task.get("source") or "") != "roby":
+        return False
+    if str(task.get("external_ref") or "") != "roby:chat":
+        return False
+    return str(task.get("source_doc_title") or "") == str(root_title or "")
+
+
+def _cleanup_existing_direct_register_tasks(root_title: str, env: Dict[str, str]) -> Dict[str, Any]:
+    base = env.get("NEURONIC_API_BASE_URL", "http://127.0.0.1:5174/api/v1").strip().rstrip("/")
+    headers = _neuronic_api_headers(env)
+
+    def _list_tasks(params: Dict[str, Any]) -> Dict[str, Any]:
+        query = urllib.parse.urlencode(params)
+        req = urllib.request.Request(f"{base}/tasks?{query}", headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8", "ignore")
+                body = json.loads(raw) if raw else {}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "items": []}
+        items = body.get("items") if isinstance(body, dict) else []
+        if not isinstance(items, list):
+            items = []
+        return {"ok": True, "items": items}
+
+    limit = 200
+    root_ids: List[str] = []
+    directly_found_ids: List[str] = []
+    offset = 0
+    while True:
+        listed = _list_tasks({"q": root_title, "limit": limit, "offset": offset})
+        if not listed.get("ok"):
+            return {"ok": False, "deleted": 0, "error": f"cleanup_list_failed: {listed.get('error')}"}
+        items = listed.get("items", [])
+        if not items:
+            break
+        for item in items:
+            if _is_direct_register_managed_task(item, root_title):
+                tid = str(item.get("id") or "").strip()
+                if tid:
+                    directly_found_ids.append(tid)
+            if (
+                str(item.get("source") or "") == "roby"
+                and str(item.get("external_ref") or "") == "roby:chat"
+                and str(item.get("title") or "") == root_title
+            ):
+                rid = str(item.get("id") or "").strip()
+                if rid:
+                    root_ids.append(rid)
+        if len(items) < limit:
+            break
+        offset += limit
+        if offset > 10000:
+            break
+
+    to_delete: set[str] = set(directly_found_ids)
+    queue: List[str] = sorted(set(root_ids))
+    seen: set[str] = set()
+    while queue:
+        parent_id = queue.pop(0)
+        if parent_id in seen:
+            continue
+        seen.add(parent_id)
+        to_delete.add(parent_id)
+        child_offset = 0
+        while True:
+            listed = _list_tasks({"parent_id": parent_id, "limit": limit, "offset": child_offset})
+            if not listed.get("ok"):
+                break
+            children = listed.get("items", [])
+            if not children:
+                break
+            for child in children:
+                if not _is_direct_register_managed_task(child, root_title):
+                    continue
+                cid = str(child.get("id") or "").strip()
+                if cid:
+                    to_delete.add(cid)
+                    queue.append(cid)
+            if len(children) < limit:
+                break
+            child_offset += limit
+            if child_offset > 10000:
+                break
+
+    deleted = 0
+    for tid in sorted(to_delete):
+        del_req = urllib.request.Request(f"{base}/tasks/{tid}", headers=headers, method="DELETE")
+        try:
+            with urllib.request.urlopen(del_req, timeout=20):
+                pass
+            deleted += 1
+        except Exception:
+            # Continue best-effort cleanup to avoid blocking the registration.
+            continue
+    return {"ok": True, "deleted": deleted}
 
 
 def handle_neuronic_direct_register(message: str, env: Dict[str, str], execute: bool) -> Dict[str, Any]:
@@ -1395,6 +1559,14 @@ def handle_neuronic_direct_register(message: str, env: Dict[str, str], execute: 
         result["ok"] = True
         result["note"] = "Neuronicへ階層タスク登録を実行する準備ができています。"
         return result
+
+    replace_mode = env.get("ROBY_ORCH_DIRECT_REGISTER_REPLACE", "1") == "1"
+    if replace_mode:
+        cleanup = _cleanup_existing_direct_register_tasks(str(meta.get("root_title") or ""), env)
+        result["replace_mode"] = True
+        result["cleanup_deleted"] = int(cleanup.get("deleted", 0) or 0)
+        if not cleanup.get("ok"):
+            result["cleanup_warning"] = cleanup.get("error", "cleanup_failed")
 
     sent = _send_neuronic_direct_import(tasks, env)
     result.update(sent)
