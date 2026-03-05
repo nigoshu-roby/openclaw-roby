@@ -79,7 +79,7 @@
     "id": "qa_local_status_neuronic",
     "description": "Neuronic連携確認が実環境ステータスで返ること",
     "message": "Neuronicとの連携は？",
-    "route": "qa_gemini",
+    "route": "auto",
     "execute": true,
     "expect": {
       "equals": {

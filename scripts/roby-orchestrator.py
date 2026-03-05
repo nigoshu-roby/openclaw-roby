@@ -84,7 +84,7 @@ SELF_GROWTH_HINTS = [
     "自己成長", "self-growth", "self growth", "自己改修", "自己修正", "自動パッチ", "毎時改善", "roby-self-growth"
 ]
 MINUTES_EXEC_HINTS = [
-    "実行", "取り込み", "連携", "同期", "抽出して", "タスク化して", "一覧", "list", "--select", "--run",
+    "実行", "取り込み", "抽出して", "タスク化して", "一覧", "list", "--select", "--run",
     "登録", "タスク登録", "登録して", "追加して", "作成して", "入れ子", "親子", "配下", "配列してください",
 ]
 CONSULT_HINTS = [

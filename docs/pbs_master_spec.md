@@ -460,6 +460,20 @@
 - 目的:
   - 自己把握品質とプロンプト漏れ防止の回帰を、日次/週次ドリルで常時監視する
 
+### 8.21 Completion Update（誤実行防止: Neuronic相談の自動ルーティング修正）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-orchestrator.py`
+    - `MINUTES_EXEC_HINTS` から汎用語（`連携`, `同期`）を除外
+    - 意図:
+      - 「Neuronicとの連携は？」のような相談/確認を `minutes_pipeline` へ誤分類しない
+      - 実行系は `登録/抽出/タスク化` など明示動詞がある場合のみ実行ルートへ寄せる
+  - `config/pbs/eval_cases.json`
+    - `qa_local_status_neuronic` を `route=auto` に戻し、誤実行防止を回帰監視
+- 目的:
+  - 相談系メッセージでの意図せぬパイプライン実行を防ぎ、安全側（QA）に倒す
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04
