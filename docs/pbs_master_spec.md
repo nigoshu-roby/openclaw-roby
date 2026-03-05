@@ -430,6 +430,19 @@
   - 過去に発生した「自己把握失敗」「機能一覧の低品質出力」「プロンプト漏れ/途中切れ」を
     Evaluation Harnessで常時回帰監視する
 
+### 8.19 Completion Update（#3 失敗時Runbook切り分け手順の追加）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `docs/roby_runbook_drill.md`
+    - #3向けの運用手順を追加
+      - 対象ケース一覧
+      - 失敗ケース抽出コマンド（`jq`）
+      - ケース単体再実行コマンド
+      - 判定失敗の切り分け観点（route/mode/not_contains/latency）
+- 目的:
+  - Eval失敗時に「どこを見るか」を固定化し、復旧時間を短縮する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

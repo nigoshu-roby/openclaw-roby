@@ -43,6 +43,44 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --check gateway_status --ch
 
 ## 失敗時の一次対応
 
+### #3 Evaluationケース（自己把握/プロンプト漏れ）の見方
+
+対象ケース:
+
+- `qa_local_status_ollama`
+- `qa_local_status_neuronic`
+- `qa_feature_list_quality`
+- `qa_no_prompt_leak_for_detailed_question`
+
+確認コマンド:
+
+```bash
+python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --json
+```
+
+失敗ケースだけ確認:
+
+```bash
+jq '.results[] | select(.ok==false) | {id, failures, route, execute, elapsed_ms}' ~/.openclaw/roby/evals/latest.json
+```
+
+ケース単体で再現:
+
+```bash
+python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_status_neuronic --json
+```
+
+切り分け観点:
+
+- `route` が想定と違う
+  - `scripts/roby-orchestrator.py` の `classify_intent_heuristic` / `SELF_STATUS_HINTS` を確認
+- `action.mode` が `local_status` にならない
+  - `is_self_status_request(...)` の判定語を確認
+- `not_contains` 違反（プロンプト断片漏れ）
+  - `is_broken_qa_output(...)` / `compact_qa_message(...)` 付近を確認
+- レイテンシのみ失敗
+  - `config/pbs/eval_policy.json` の `max_p95_ms` と AB制御（eval実行時はAB無効）を確認
+
 ### gateway_status FAIL
 
 - `node /Users/<user>/OpenClaw/openclaw.mjs gateway status`
