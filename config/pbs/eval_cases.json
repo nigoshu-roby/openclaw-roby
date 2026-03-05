@@ -51,5 +51,95 @@
         "action.command": ["roby-minutes.py", "--run"]
       }
     }
+  },
+  {
+    "id": "qa_local_status_ollama",
+    "description": "Ollama導入確認がローカル自己把握で回答されること",
+    "message": "ollama導入できましたか？",
+    "route": "auto",
+    "execute": true,
+    "expect": {
+      "equals": {
+        "route": "qa_ollama",
+        "action.ok": true,
+        "action.mode": "local_status"
+      },
+      "contains": {
+        "action.output": ["Ollama CLI", "Ollama API", "Neuronic endpoint"]
+      },
+      "not_contains": {
+        "action.output": ["持ち合わせていません", "情報はありません", "Unable to"]
+      },
+      "min_len": {
+        "action.output": 80
+      }
+    }
+  },
+  {
+    "id": "qa_local_status_neuronic",
+    "description": "Neuronic連携確認が実環境ステータスで返ること",
+    "message": "Neuronicとの連携は？",
+    "route": "qa_gemini",
+    "execute": true,
+    "expect": {
+      "equals": {
+        "route": "qa_gemini",
+        "action.ok": true,
+        "action.mode": "local_status"
+      },
+      "contains": {
+        "action.output": ["Neuronic endpoint", "利用可能ルート"]
+      },
+      "not_contains": {
+        "action.output": ["情報はありません", "具体的な内容をお聞かせください"]
+      },
+      "min_len": {
+        "action.output": 100
+      }
+    }
+  },
+  {
+    "id": "qa_feature_list_quality",
+    "description": "機能一覧要求で構造化された回答が返ること",
+    "message": "現在の機能をリスト化してください",
+    "route": "auto",
+    "execute": true,
+    "expect": {
+      "equals": {
+        "route": "qa_gemini",
+        "action.ok": true
+      },
+      "contains": {
+        "action.output": ["## 目的", "## 次のアクション"]
+      },
+      "not_contains": {
+        "action.output": ["Extracted content length", "Hard limit", "Let's look at the prompt"]
+      },
+      "min_len": {
+        "action.output": 120
+      }
+    }
+  },
+  {
+    "id": "qa_no_prompt_leak_for_detailed_question",
+    "description": "詳細相談時にプロンプト断片漏れ/途中切れを起こさないこと",
+    "message": "現在の機能をリスト化してください。詳細版でお願いします。",
+    "route": "auto",
+    "execute": true,
+    "expect": {
+      "equals": {
+        "route": "qa_gemini",
+        "action.ok": true
+      },
+      "contains": {
+        "action.output": ["## 目的", "## 実行可能な提案（優先順）", "## 次のアクション"]
+      },
+      "not_contains": {
+        "action.output": ["Extracted content length", "Hard limit", "Let's look at the prompt"]
+      },
+      "min_len": {
+        "action.output": 180
+      }
+    }
   }
 ]

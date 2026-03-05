@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import time
@@ -163,7 +164,11 @@ def run_orchestrator(case: EvalCase) -> Dict[str, Any]:
     if case.execute:
         cmd.append("--execute")
     started = time.perf_counter()
-    proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), capture_output=True, text=True)
+    child_env = dict(os.environ)
+    # Keep evaluation deterministic and low-variance:
+    # disable AB routing during harness runs.
+    child_env["ROBY_ORCH_AB_ROUTER"] = "0"
+    proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), capture_output=True, text=True, env=child_env)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()

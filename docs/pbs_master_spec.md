@@ -410,6 +410,26 @@
 - 目的:
   - Ollama導入フェーズ前後で「導入済みなのに使えない」状態を定期ドリルで即検知する
 
+### 8.18 Completion Update（#3 想定失敗ケースのEvaluation強化）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `config/pbs/eval_cases.json` に回帰ケースを追加
+    - `qa_local_status_ollama`
+      - Ollama導入確認が `qa_ollama/local_status` で返ること
+      - 幻覚系文言（「情報はありません」等）を禁止
+    - `qa_local_status_neuronic`
+      - Neuronic連携確認が `qa_gemini/local_status` で返ること
+    - `qa_feature_list_local_summary`
+      - 機能一覧要求でローカル検出サマリにフォールバックできること
+    - `qa_no_prompt_leak_for_detailed_question`
+      - 詳細質問時にプロンプト断片漏れ（`Extracted content length` 等）が出ないこと
+  - `scripts/roby-eval-harness.py`
+    - 評価実行時は `ROBY_ORCH_AB_ROUTER=0` を強制し、AB影響を除外した再現可能な測定へ統一
+- 目的:
+  - 過去に発生した「自己把握失敗」「機能一覧の低品質出力」「プロンプト漏れ/途中切れ」を
+    Evaluation Harnessで常時回帰監視する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

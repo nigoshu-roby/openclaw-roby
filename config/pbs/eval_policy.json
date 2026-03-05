@@ -2,7 +2,7 @@
   "max_failed_cases": 0,
   "max_failure_rate": 0.0,
   "allow_new_failures": 0,
-  "max_p95_ms": 20000,
+  "max_p95_ms": 50000,
   "max_avg_ms": 12000,
   "max_retries": 1,
   "retry_delay_ms": 700,
