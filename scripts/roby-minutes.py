@@ -2044,6 +2044,11 @@ def main() -> int:
         "gdocs": 0,
         "tasks": 0,
         "neuronic_errors": 0,
+        "candidates_total": 0,
+        "candidates_selected": 0,
+        "candidate_items_capped": 0,
+        "task_run_capped": 0,
+        "task_run_cap_reached": False,
     }
 
     candidates: List[Dict[str, Any]] = []
@@ -2121,13 +2126,23 @@ def main() -> int:
             if part.isdigit():
                 idxs.add(int(part))
         selected = [c for i, c in enumerate(candidates, 1) if i in idxs]
+    else:
+        max_candidates_per_run = int(env.get("MINUTES_MAX_CANDIDATES_PER_RUN", "30") or "30")
+        if max_candidates_per_run > 0 and len(selected) > max_candidates_per_run:
+            summary["candidate_items_capped"] = len(selected) - max_candidates_per_run
+            selected = selected[:max_candidates_per_run]
+
+    summary["candidates_total"] = len(candidates)
+    summary["candidates_selected"] = len(selected)
 
     all_tasks: List[Dict[str, Any]] = []
     debug_records: List[Dict[str, Any]] = []
     run_id = build_run_id("minutes")
     include_legacy_group_tag = env.get("NEURONIC_LEGACY_GROUP_TAG", "0") == "1"
+    max_tasks_per_run = int(env.get("MINUTES_MAX_TASKS_PER_RUN", "120") or "120")
 
     for item in selected:
+        reached_task_cap = False
         if item.get("source") == "notion":
             page_id = item.get("page_id")
             text = fetch_page_text(page_id, token, env.get("NOTION_VERSION", "2025-09-03"))
@@ -2185,6 +2200,15 @@ def main() -> int:
                 run_id,
                 include_legacy_group_tag=include_legacy_group_tag,
             )
+            if max_tasks_per_run > 0:
+                remaining = max_tasks_per_run - len(all_tasks)
+                if remaining <= 0:
+                    tasks = []
+                    reached_task_cap = True
+                elif len(tasks) > remaining:
+                    summary["task_run_capped"] += (len(tasks) - remaining)
+                    tasks = tasks[:remaining]
+                    reached_task_cap = True
             all_tasks.extend(tasks)
             processed_notion[page_id] = item.get("updated", "")
             summary["notion_pages"] += 1
@@ -2243,9 +2267,22 @@ def main() -> int:
                 run_id,
                 include_legacy_group_tag=include_legacy_group_tag,
             )
+            if max_tasks_per_run > 0:
+                remaining = max_tasks_per_run - len(all_tasks)
+                if remaining <= 0:
+                    tasks = []
+                    reached_task_cap = True
+                elif len(tasks) > remaining:
+                    summary["task_run_capped"] += (len(tasks) - remaining)
+                    tasks = tasks[:remaining]
+                    reached_task_cap = True
             all_tasks.extend(tasks)
             processed_gdocs[doc_id] = item.get("updated", "")
             summary["gdocs"] += 1
+
+        if reached_task_cap:
+            summary["task_run_cap_reached"] = True
+            break
 
     summary["tasks"] = len(all_tasks)
     summary["heuristic_used_docs"] = heuristic_used_docs
@@ -2286,9 +2323,13 @@ def main() -> int:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     slack_url = env.get("SLACK_WEBHOOK_URL", "").strip()
-    if slack_url:
+    notify_on_no_change = env.get("MINUTES_NOTIFY_ON_NO_CHANGE", "0") == "1"
+    should_notify = int(summary.get("neuronic_errors", 0)) > 0 or int(summary.get("tasks", 0)) > 0 or notify_on_no_change
+    summary["slack_notified"] = False
+    if slack_url and should_notify:
         try:
             send_slack(slack_url, f"Roby Minutes Sync\n{json.dumps(summary, ensure_ascii=False)}")
+            summary["slack_notified"] = True
         except Exception:
             pass
 
@@ -2303,7 +2344,10 @@ def main() -> int:
                     "run_id": run_id,
                     "notion_pages": int(summary.get("notion_pages", 0)),
                     "gdocs": int(summary.get("gdocs", 0)),
+                    "candidates_total": int(summary.get("candidates_total", 0)),
+                    "candidates_selected": int(summary.get("candidates_selected", 0)),
                     "tasks": int(summary.get("tasks", 0)),
+                    "task_run_cap_reached": bool(summary.get("task_run_cap_reached", False)),
                     "heuristic_used_docs": int(summary.get("heuristic_used_docs", 0)),
                     "neuronic_errors": int(summary.get("neuronic_errors", 0)),
                     "dry_run": bool(summary.get("dry_run", False)),

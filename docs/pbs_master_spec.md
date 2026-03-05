@@ -359,6 +359,25 @@
 - 目的:
   - 通知スパムと過剰タスク生成を抑え、日次運用を安定化
 
+### 8.15 Completion Update（#5 Minutes運用閾値チューニング）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-minutes.py`
+    - 1実行あたり候補件数の上限を追加:
+      - `MINUTES_MAX_CANDIDATES_PER_RUN`（既定: `30`）
+    - 1実行あたり送信タスク上限を追加:
+      - `MINUTES_MAX_TASKS_PER_RUN`（既定: `120`）
+    - Slack通知の抑制制御:
+      - `MINUTES_NOTIFY_ON_NO_CHANGE`（既定: `0`）
+      - デフォルトは「タスク生成あり or エラー時のみ通知」
+    - summary/監査に運用メトリクスを追加:
+      - `candidates_total`, `candidates_selected`, `candidate_items_capped`
+      - `task_run_capped`, `task_run_cap_reached`
+      - `slack_notified`
+- 目的:
+  - 大量候補時の負荷/ノイズを抑えつつ、定常運用を安定化
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04
