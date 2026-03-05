@@ -36,7 +36,8 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
 8. `gmail_neuronic_regression`（必須）
 9. `notion_sync_dry_run`（任意, Notion token未設定ならSKIP）
 10. `weekly_report_smoke`（任意）
-11. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
+11. `orchestrator_cron_status`（任意, `ROBY_DRILL_REQUIRE_CRON=1` で必須化）
+12. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
 
 ## 部分実行
 
@@ -150,6 +151,18 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
 - `python3 /Users/<user>/OpenClaw/scripts/roby-weekly-report.py --json`
 - `~/.openclaw/roby/reports/weekly_latest.json` の `eval/drill/audit/ops` を確認
 - `~/.openclaw/roby/audit/events.jsonl` に `weekly_report.run` が追記されるか確認
+
+### orchestrator_cron_status FAIL
+
+- `crontab -l` で `ROBY_ORCH_CRON_*` タグの有無を確認
+- 必須タグ（現行）:
+  - `ROBY_ORCH_CRON_SELF_GROWTH`
+  - `ROBY_ORCH_CRON_MINUTES_SYNC`
+  - `ROBY_ORCH_CRON_GMAIL_TRIAGE`
+- 再インストール:
+  - `bash /Users/<user>/OpenClaw/scripts/install_roby_orchestrator_cron.sh`
+- cronを必須運用にする場合:
+  - `ROBY_DRILL_REQUIRE_CRON=1` を `~/.openclaw/.env` へ設定
 
 ## 監査連携
 

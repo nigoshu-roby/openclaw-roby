@@ -529,6 +529,22 @@
 - 目的:
   - 週次サマリ生成を監査対象に含め、運用レポート系の停止を定期ドリルで検知する
 
+### 8.25 Completion Update（cron構成ヘルスチェックをドリルへ追加）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-drill.py`
+    - `orchestrator_cron_status`（任意）を追加
+    - `crontab -l` を検査し、必須タグの存在を確認
+      - `ROBY_ORCH_CRON_SELF_GROWTH`
+      - `ROBY_ORCH_CRON_MINUTES_SYNC`
+      - `ROBY_ORCH_CRON_GMAIL_TRIAGE`
+    - `ROBY_DRILL_REQUIRE_CRON=1` で必須化可能
+  - `docs/roby_runbook_drill.md`
+    - 失敗時の復旧手順（再インストール/タグ確認）を追記
+- 目的:
+  - 「ジョブは動くが cron 登録が壊れていた」を定期ドリルで早期検知する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

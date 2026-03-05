@@ -299,6 +299,68 @@ def check_weekly_report_smoke(env: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def check_orchestrator_cron_status(env: Dict[str, str]) -> Dict[str, Any]:
+    require_cron = str(env.get("ROBY_DRILL_REQUIRE_CRON", "0")).strip() == "1"
+    kind = "required" if require_cron else "optional"
+    started = time.perf_counter()
+    proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip() or "crontab command failed"
+        if require_cron:
+            return {
+                "id": "orchestrator_cron_status",
+                "kind": kind,
+                "ok": False,
+                "elapsed_ms": elapsed_ms,
+                "detail": detail,
+                "command": "crontab -l",
+            }
+        return {
+            "id": "orchestrator_cron_status",
+            "kind": kind,
+            "ok": True,
+            "skipped": True,
+            "elapsed_ms": elapsed_ms,
+            "detail": f"cron未設定のためスキップ: {detail}",
+            "command": "crontab -l",
+        }
+
+    text = proc.stdout or ""
+    required_tags = [
+        "ROBY_ORCH_CRON_SELF_GROWTH",
+        "ROBY_ORCH_CRON_MINUTES_SYNC",
+        "ROBY_ORCH_CRON_GMAIL_TRIAGE",
+    ]
+    optional_tags = [
+        "ROBY_ORCH_CRON_EVAL_HARNESS",
+        "ROBY_ORCH_CRON_RUNBOOK_DRILL",
+        "ROBY_ORCH_CRON_NOTION_SYNC",
+        "ROBY_ORCH_CRON_WEEKLY_REPORT",
+    ]
+    missing_required = [tag for tag in required_tags if tag not in text]
+    present_optional = [tag for tag in optional_tags if tag in text]
+
+    ok = len(missing_required) == 0
+    detail = ""
+    if missing_required:
+        detail = "missing required cron tags: " + ", ".join(missing_required)
+    else:
+        detail = "required cron tags present"
+    if present_optional:
+        detail += " / optional enabled: " + ", ".join(present_optional)
+
+    return {
+        "id": "orchestrator_cron_status",
+        "kind": kind,
+        "ok": ok,
+        "elapsed_ms": elapsed_ms,
+        "detail": detail,
+        "command": "crontab -l",
+    }
+
+
 def check_minutes_neuronic_regression(env: Dict[str, str]) -> Dict[str, Any]:
     run = run_cmd(
         [
@@ -420,6 +482,7 @@ CHECKS = {
     "gmail_neuronic_regression": check_gmail_neuronic_regression,
     "notion_sync_dry_run": check_notion_sync_dry_run,
     "weekly_report_smoke": check_weekly_report_smoke,
+    "orchestrator_cron_status": check_orchestrator_cron_status,
     "gmail_triage_dry_run": check_gmail_dry_run,
 }
 
