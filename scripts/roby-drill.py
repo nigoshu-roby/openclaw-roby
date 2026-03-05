@@ -193,11 +193,53 @@ def check_gmail_dry_run(env: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def check_minutes_neuronic_regression(env: Dict[str, str]) -> Dict[str, Any]:
+    run = run_cmd(
+        [
+            "python3",
+            str(OPENCLAW_REPO / "scripts" / "tests" / "test_roby_minutes_neuronic.py"),
+        ],
+        env,
+        timeout=240,
+    )
+    ok = run["returncode"] == 0
+    return {
+        "id": "minutes_neuronic_regression",
+        "kind": "required",
+        "ok": ok,
+        "elapsed_ms": run["elapsed_ms"],
+        "detail": "" if ok else (run["stderr"] or run["stdout"] or "minutes neuronic regression failed"),
+        "command": run["command"],
+    }
+
+
+def check_gmail_neuronic_regression(env: Dict[str, str]) -> Dict[str, Any]:
+    run = run_cmd(
+        [
+            "python3",
+            str(OPENCLAW_REPO / "skills" / "roby-mail" / "scripts" / "test_gmail_triage_neuronic.py"),
+        ],
+        env,
+        timeout=240,
+    )
+    ok = run["returncode"] == 0
+    return {
+        "id": "gmail_neuronic_regression",
+        "kind": "required",
+        "ok": ok,
+        "elapsed_ms": run["elapsed_ms"],
+        "detail": "" if ok else (run["stderr"] or run["stdout"] or "gmail neuronic regression failed"),
+        "command": run["command"],
+    }
+
+
 CHECKS = {
     "gateway_status": check_gateway_status,
     "orchestrator_qa_smoke": check_orchestrator_qa,
     "eval_harness_smoke": check_eval_harness,
     "audit_verify": check_audit_verify,
+    "minutes_neuronic_regression": check_minutes_neuronic_regression,
+    "gmail_neuronic_regression": check_gmail_neuronic_regression,
     "gmail_triage_dry_run": check_gmail_dry_run,
 }
 

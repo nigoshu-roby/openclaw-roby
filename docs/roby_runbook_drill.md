@@ -30,7 +30,9 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
 2. `orchestrator_qa_smoke`（必須）
 3. `eval_harness_smoke`（必須）
 4. `audit_verify`（必須）
-5. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
+5. `minutes_neuronic_regression`（必須）
+6. `gmail_neuronic_regression`（必須）
+7. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
 
 ## 部分実行
 
@@ -66,6 +68,21 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --check gateway_status --ch
 
 - OAuth資格情報と `GOG_ACCOUNT` を確認
 - `python3 /Users/<user>/OpenClaw/skills/roby-mail/scripts/gmail_triage.py --account <account> --query "newer_than:1d in:inbox" --max 5 --dry-run --verbose`
+
+### minutes_neuronic_regression FAIL
+
+- `python3 /Users/<user>/OpenClaw/scripts/tests/test_roby_minutes_neuronic.py`
+- 重点確認:
+  - `parent_origin_id / sibling_order` 正常系
+  - 413分割再送
+  - legacyレスポンス互換
+
+### gmail_neuronic_regression FAIL
+
+- `python3 /Users/<user>/OpenClaw/skills/roby-mail/scripts/test_gmail_triage_neuronic.py`
+- 重点確認:
+  - `/tasks/import` 404時 `/tasks/bulk` フォールバック
+  - 413分割再送
 
 ## 監査連携
 
