@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib import error, request
+from roby_audit import append_audit_event
 
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 STATE_DIR = Path.home() / ".openclaw" / "roby"
@@ -236,6 +237,31 @@ def build_snapshot_blocks(weekly: List[Dict[str, Any]], done: List[Dict[str, Any
     return blocks
 
 
+def build_phase_counts(items: List[Dict[str, Any]]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for item in items:
+        phase = str(item.get("phase") or "").strip()
+        if not phase:
+            continue
+        out[phase] = out.get(phase, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: kv[0]))
+
+
+def write_audit(summary: Dict[str, Any], run_id: str, severity: str = "info") -> None:
+    if os.environ.get("ROBY_IMMUTABLE_AUDIT", "1") != "1":
+        return
+    try:
+        append_audit_event(
+            "notion_sync.run",
+            summary,
+            source="roby-notion-sync",
+            run_id=run_id,
+            severity=severity,
+        )
+    except Exception:
+        pass
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--owner", default=os.environ.get("ROBY_GH_OWNER", "nigoshu-roby"))
@@ -249,47 +275,76 @@ def main() -> int:
     env = load_env()
     token = load_notion_key(env)
     page_id = (args.page_id or env.get("ROBY_NOTION_SYNC_PAGE_ID", "")).strip()
+    run_id = f"roby:notion_sync:{datetime.now(JST).strftime('%Y%m%d%H%M%S')}"
 
     if not token:
-        print("ERROR: missing Notion token (NOTION_API_KEY or ~/.config/notion/api_key)", file=sys.stderr)
+        msg = "missing Notion token (NOTION_API_KEY or ~/.config/notion/api_key)"
+        print(f"ERROR: {msg}", file=sys.stderr)
+        write_audit({"ok": False, "error": msg, "dry_run": bool(args.dry_run)}, run_id, severity="error")
         return 2
-    items = gh_project_items(args.owner, args.project_number)
-    views = split_views(items)
-    weekly = truncate(views["weekly_focus"], args.max_weekly)
-    done = truncate(views["done"], args.max_done)
 
-    if args.dry_run:
-        print(json.dumps({
+    try:
+        items = gh_project_items(args.owner, args.project_number)
+        views = split_views(items)
+        weekly = truncate(views["weekly_focus"], args.max_weekly)
+        done = truncate(views["done"], args.max_done)
+        phase_counts = build_phase_counts(weekly + done)
+
+        if args.dry_run:
+            payload = {
+                "owner": args.owner,
+                "project_number": args.project_number,
+                "weekly_focus": len(weekly),
+                "done": len(done),
+                "phase_counts": phase_counts,
+                "page_id": page_id or "(not-set)",
+                "dry_run": True,
+            }
+            print(json.dumps(payload, ensure_ascii=False))
+            write_audit({"ok": True, **payload}, run_id, severity="info")
+            return 0
+
+        if not page_id:
+            msg = "missing page id (ROBY_NOTION_SYNC_PAGE_ID or --page-id)"
+            print(f"ERROR: {msg}", file=sys.stderr)
+            write_audit({"ok": False, "error": msg, "dry_run": False}, run_id, severity="error")
+            return 2
+
+        old = read_state()
+        if old.get("page_id") == page_id and old.get("block_ids"):
+            delete_old_blocks(token, old.get("block_ids", []))
+
+        new_blocks = build_snapshot_blocks(weekly, done)
+        new_ids = append_blocks(token, page_id, new_blocks)
+        write_state({"page_id": page_id, "block_ids": new_ids, "updated_at": datetime.now(JST).isoformat()})
+
+        payload = {
             "owner": args.owner,
             "project_number": args.project_number,
             "weekly_focus": len(weekly),
             "done": len(done),
-            "page_id": page_id or "(not-set)",
-            "dry_run": True,
-        }, ensure_ascii=False))
+            "phase_counts": phase_counts,
+            "page_id": page_id,
+            "blocks_written": len(new_ids),
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        write_audit({"ok": True, **payload}, run_id, severity="info")
         return 0
-
-    if not page_id:
-        print("ERROR: missing page id (ROBY_NOTION_SYNC_PAGE_ID or --page-id)", file=sys.stderr)
-        return 2
-
-    old = read_state()
-    if old.get("page_id") == page_id and old.get("block_ids"):
-        delete_old_blocks(token, old.get("block_ids", []))
-
-    new_blocks = build_snapshot_blocks(weekly, done)
-    new_ids = append_blocks(token, page_id, new_blocks)
-    write_state({"page_id": page_id, "block_ids": new_ids, "updated_at": datetime.now(JST).isoformat()})
-
-    print(json.dumps({
-        "owner": args.owner,
-        "project_number": args.project_number,
-        "weekly_focus": len(weekly),
-        "done": len(done),
-        "page_id": page_id,
-        "blocks_written": len(new_ids),
-    }, ensure_ascii=False))
-    return 0
+    except Exception as exc:
+        msg = str(exc)
+        print(f"ERROR: {msg}", file=sys.stderr)
+        write_audit(
+            {
+                "ok": False,
+                "error": msg,
+                "owner": args.owner,
+                "project_number": args.project_number,
+                "dry_run": bool(args.dry_run),
+            },
+            run_id,
+            severity="error",
+        )
+        return 1
 
 
 if __name__ == "__main__":

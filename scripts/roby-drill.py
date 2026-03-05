@@ -229,6 +229,48 @@ def check_gmail_dry_run(env: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def check_notion_sync_dry_run(env: Dict[str, str]) -> Dict[str, Any]:
+    notion_token = (
+        env.get("NOTION_API_KEY", "").strip()
+        or env.get("NOTION_TOKEN", "").strip()
+        or env.get("NOTION_KEY", "").strip()
+    )
+    notion_key_file = Path.home() / ".config" / "notion" / "api_key"
+    if not notion_token and not notion_key_file.exists():
+        return {
+            "id": "notion_sync_dry_run",
+            "kind": "optional",
+            "ok": True,
+            "skipped": True,
+            "elapsed_ms": 0,
+            "detail": "Notion token is not set",
+            "command": "",
+        }
+    run = run_cmd(
+        [
+            "python3",
+            str(OPENCLAW_REPO / "scripts" / "roby-notion-sync.py"),
+            "--dry-run",
+        ],
+        env,
+        timeout=180,
+    )
+    parsed = _parse_json(run["stdout"])
+    ok = (
+        run["returncode"] == 0
+        and bool(parsed.get("dry_run", False))
+        and "phase_counts" in parsed
+    )
+    return {
+        "id": "notion_sync_dry_run",
+        "kind": "optional",
+        "ok": ok,
+        "elapsed_ms": run["elapsed_ms"],
+        "detail": "" if ok else (run["stderr"] or run["stdout"] or "notion sync dry-run failed"),
+        "command": run["command"],
+    }
+
+
 def check_minutes_neuronic_regression(env: Dict[str, str]) -> Dict[str, Any]:
     run = run_cmd(
         [
@@ -348,6 +390,7 @@ CHECKS = {
     "audit_verify": check_audit_verify,
     "minutes_neuronic_regression": check_minutes_neuronic_regression,
     "gmail_neuronic_regression": check_gmail_neuronic_regression,
+    "notion_sync_dry_run": check_notion_sync_dry_run,
     "gmail_triage_dry_run": check_gmail_dry_run,
 }
 

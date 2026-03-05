@@ -474,6 +474,22 @@
 - 目的:
   - 相談系メッセージでの意図せぬパイプライン実行を防ぎ、安全側（QA）に倒す
 
+### 8.22 Completion Update（Notion同期の監査化 + ドリル組み込み）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-notion-sync.py`
+    - 実行結果に `phase_counts` を追加（dry-run/本実行共通）
+    - 例外処理を明示化し、失敗時はJSONエラーで終了
+    - `event_type=notion_sync.run` を Immutable Audit へ記録
+  - `scripts/roby-drill.py`
+    - `notion_sync_dry_run` チェックを追加（任意）
+    - Notion token未設定時はSKIP、設定済みなら dry-run 実行
+  - `docs/roby_runbook_drill.md`
+    - `notion_sync_dry_run` の一次対応手順を追加
+- 目的:
+  - GitHub→Notion同期の健全性を定期ドリルに組み込み、同期不全を早期検知する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

@@ -34,7 +34,8 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
 6. `audit_verify`（必須）
 7. `minutes_neuronic_regression`（必須）
 8. `gmail_neuronic_regression`（必須）
-9. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
+9. `notion_sync_dry_run`（任意, Notion token未設定ならSKIP）
+10. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
 
 ## 部分実行
 
@@ -136,6 +137,12 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
 - 重点確認:
   - `/tasks/import` 404時 `/tasks/bulk` フォールバック
   - 413分割再送
+
+### notion_sync_dry_run FAIL
+
+- `python3 /Users/<user>/OpenClaw/scripts/roby-notion-sync.py --dry-run`
+- Notion token（`NOTION_API_KEY` / `~/.config/notion/api_key`）を確認
+- `gh project item-list` の実行権限（`gh auth status`）を確認
 
 ## 監査連携
 
