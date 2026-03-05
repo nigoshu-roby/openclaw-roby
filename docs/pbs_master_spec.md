@@ -443,6 +443,23 @@
 - 目的:
   - Eval失敗時に「どこを見るか」を固定化し、復旧時間を短縮する
 
+### 8.20 Completion Update（#3 ケースをRunbook Drill必須チェックへ統合）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-drill.py`
+    - `eval_self_awareness_cases` チェックを追加（必須）
+    - 実行内容:
+      - `qa_local_status_ollama`
+      - `qa_local_status_neuronic`
+      - `qa_feature_list_quality`
+      - `qa_no_prompt_leak_for_detailed_question`
+        を `roby-eval-harness.py --case ...` でまとめて検証
+  - `docs/roby_runbook_drill.md`
+    - チェック一覧・一次対応手順に `eval_self_awareness_cases` を追記
+- 目的:
+  - 自己把握品質とプロンプト漏れ防止の回帰を、日次/週次ドリルで常時監視する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

@@ -138,6 +138,41 @@ def check_eval_harness(env: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def check_eval_self_awareness_cases(env: Dict[str, str]) -> Dict[str, Any]:
+    run = run_cmd(
+        [
+            "python3",
+            str(OPENCLAW_REPO / "scripts" / "roby-eval-harness.py"),
+            "--case",
+            "qa_local_status_ollama",
+            "--case",
+            "qa_local_status_neuronic",
+            "--case",
+            "qa_feature_list_quality",
+            "--case",
+            "qa_no_prompt_leak_for_detailed_question",
+            "--json",
+        ],
+        env,
+        timeout=360,
+    )
+    parsed = _parse_json(run["stdout"])
+    ok = (
+        run["returncode"] == 0
+        and int(parsed.get("total", 0)) >= 4
+        and int(parsed.get("failed", 0)) == 0
+        and bool(parsed.get("gates", {}).get("ok", False))
+    )
+    return {
+        "id": "eval_self_awareness_cases",
+        "kind": "required",
+        "ok": ok,
+        "elapsed_ms": run["elapsed_ms"],
+        "detail": "" if ok else (run["stderr"] or run["stdout"] or "self-awareness eval cases failed"),
+        "command": run["command"],
+    }
+
+
 def check_audit_verify(env: Dict[str, str]) -> Dict[str, Any]:
     run = run_cmd(
         ["python3", str(OPENCLAW_REPO / "scripts" / "roby_audit.py"), "verify", "--json"],
@@ -309,6 +344,7 @@ CHECKS = {
     "ollama_health": check_ollama_health,
     "orchestrator_qa_smoke": check_orchestrator_qa,
     "eval_harness_smoke": check_eval_harness,
+    "eval_self_awareness_cases": check_eval_self_awareness_cases,
     "audit_verify": check_audit_verify,
     "minutes_neuronic_regression": check_minutes_neuronic_regression,
     "gmail_neuronic_regression": check_gmail_neuronic_regression,

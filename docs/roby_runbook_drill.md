@@ -30,10 +30,11 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
 2. `ollama_health`（任意, `ROBY_DRILL_REQUIRE_OLLAMA=1` で必須化）
 3. `orchestrator_qa_smoke`（必須）
 4. `eval_harness_smoke`（必須）
-5. `audit_verify`（必須）
-6. `minutes_neuronic_regression`（必須）
-7. `gmail_neuronic_regression`（必須）
-8. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
+5. `eval_self_awareness_cases`（必須）
+6. `audit_verify`（必須）
+7. `minutes_neuronic_regression`（必須）
+8. `gmail_neuronic_regression`（必須）
+9. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
 
 ## 部分実行
 
@@ -103,6 +104,12 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
 
 - `python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --json`
 - `~/.openclaw/roby/evals/latest.json` の `gates.failures` / `results[].failures` を確認
+
+### eval_self_awareness_cases FAIL
+
+- `python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_status_ollama --case qa_local_status_neuronic --case qa_feature_list_quality --case qa_no_prompt_leak_for_detailed_question --json`
+- `~/.openclaw/roby/evals/latest.json` で `results[].id` と `failures` を確認
+- 切り分け観点は本書「#3 Evaluationケース（自己把握/プロンプト漏れ）の見方」を参照
 
 ### audit_verify FAIL
 
