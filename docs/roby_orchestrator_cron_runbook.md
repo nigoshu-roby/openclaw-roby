@@ -131,6 +131,9 @@ WEEKLY_REPORT_CRON="30 9 * * 1" \
 - Per-task lock (`/tmp/roby-cron-<task>.lock`) to avoid overlap.
 - Timeout kill for each task (default 900/1800/900 sec).
 - Structured JSON output from orchestrator is preserved in logs.
+- `scripts/roby-cron-dispatch.sh` は失敗時（timeout / non-zero exit）に Slack 通知します。
+  - 通知先: `SLACK_WEBHOOK_URL`（`~/.openclaw/.env`）
+  - 通知内容: `task`, `reason`, `time`, `host`, `log path`
 
 ## QA AB Router (optional)
 

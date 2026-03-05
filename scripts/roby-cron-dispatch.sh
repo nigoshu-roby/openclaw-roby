@@ -53,6 +53,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${HOME}/.openclaw/roby"
 LOG_FILE="${LOG_DIR}/cron_${TASK}.log"
 LOCK_DIR="/tmp/roby-cron-${TASK}.lock"
+ENV_PATH="${HOME}/.openclaw/.env"
 
 mkdir -p "$LOG_DIR"
 
@@ -65,6 +66,47 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 now() { date '+%Y-%m-%d %H:%M:%S %Z'; }
+
+# load webhook from ~/.openclaw/.env when not injected by runner
+if [[ -z "${SLACK_WEBHOOK_URL:-}" && -f "$ENV_PATH" ]]; then
+  while IFS='=' read -r k v; do
+    [[ -z "$k" ]] && continue
+    [[ "$k" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$k" == "SLACK_WEBHOOK_URL" ]]; then
+      SLACK_WEBHOOK_URL="${v%\"}"
+      SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL#\"}"
+      SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL%\'}"
+      SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL#\'}"
+      break
+    fi
+  done < "$ENV_PATH"
+fi
+
+notify_slack_fail() {
+  local reason="${1:-unknown}"
+  if [[ -z "${SLACK_WEBHOOK_URL:-}" ]]; then
+    return 0
+  fi
+  local msg
+  msg="Roby Cron FAIL
+task=${TASK}
+reason=${reason}
+time=$(now)
+host=$(hostname)
+log=${LOG_FILE}"
+  "$PYTHON_BIN" - "$SLACK_WEBHOOK_URL" "$msg" <<'PY' >/dev/null 2>&1 || true
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+text = sys.argv[2]
+data = json.dumps({"text": text}).encode("utf-8")
+req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(req, timeout=8):
+    pass
+PY
+}
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "[$(now)] SKIP: ${TASK} already running (lock: ${LOCK_DIR})" >>"$LOG_FILE"
@@ -90,6 +132,7 @@ while kill -0 "$pid" 2>/dev/null; do
     kill -9 "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     echo "[$(now)] FAIL: task=${TASK} reason=timeout" >>"$LOG_FILE"
+    notify_slack_fail "timeout"
     exit 124
   fi
   sleep 1
@@ -100,5 +143,6 @@ if wait "$pid"; then
 else
   rc=$?
   echo "[$(now)] FAIL: task=${TASK} rc=${rc}" >>"$LOG_FILE"
+  notify_slack_fail "rc=${rc}"
   exit "$rc"
 fi
