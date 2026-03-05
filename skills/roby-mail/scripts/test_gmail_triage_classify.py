@@ -95,6 +95,18 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(rule, "force_reply")
         self.assertTrue(needs_reply)
 
+    def test_cap_extracted_actions(self):
+        rows = [{"title": f"t{i}"} for i in range(10)]
+        capped = self.mod.cap_extracted_actions(rows, 4)
+        self.assertEqual(len(capped), 4)
+        self.assertEqual(capped[0]["title"], "t0")
+        self.assertEqual(capped[-1]["title"], "t3")
+
+    def test_cap_extracted_actions_disabled_when_non_positive(self):
+        rows = [{"title": f"t{i}"} for i in range(3)]
+        capped = self.mod.cap_extracted_actions(rows, 0)
+        self.assertEqual(len(capped), 3)
+
 
 if __name__ == "__main__":
     main()

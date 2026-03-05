@@ -927,6 +927,12 @@ def build_tasks(
     return tasks
 
 
+def cap_extracted_actions(extracted: List[Dict[str, Any]], max_actions: int) -> List[Dict[str, Any]]:
+    if max_actions <= 0:
+        return extracted
+    return extracted[:max_actions]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--account", default="")
@@ -953,7 +959,10 @@ def main() -> int:
         "new": 0,
         "archived": 0,
         "notified": 0,
+        "notify_suppressed": 0,
         "tasks": 0,
+        "task_actions_capped": 0,
+        "task_run_cap_reached": False,
         "neuronic_errors": 0,
         "llm_reviewed": 0,
         "llm_overrides": 0,
@@ -967,6 +976,9 @@ def main() -> int:
     llm_enabled = (env.get("GMAIL_TRIAGE_LLM_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
     llm_max_reviews = int((env.get("GMAIL_TRIAGE_LLM_MAX_REVIEWS", "0") or "0").strip())
     llm_review_count = 0
+    notify_max_per_run = int((env.get("GMAIL_TRIAGE_NOTIFY_MAX_PER_RUN", "12") or "12").strip())
+    task_actions_max_per_mail = int((env.get("GMAIL_TRIAGE_TASK_MAX_ACTIONS_PER_MAIL", "6") or "6").strip())
+    task_items_max_per_run = int((env.get("GMAIL_TRIAGE_TASK_MAX_ITEMS_PER_RUN", "120") or "120").strip())
 
     for msg in messages:
         msg_id = msg.get("id")
@@ -1004,8 +1016,11 @@ def main() -> int:
                 f"Date: {msg.get('date','')}\n"
                 f"{msg_url}"
             )
-            send_slack(slack_url, text)
-            summary["notified"] += 1
+            if notify_max_per_run <= 0 or summary["notified"] < notify_max_per_run:
+                send_slack(slack_url, text)
+                summary["notified"] += 1
+            else:
+                summary["notify_suppressed"] += 1
 
         # Task extraction
         tasks = []
@@ -1028,7 +1043,19 @@ def main() -> int:
                 else:
                     fallback_title = f"メール対応: {subject}"
                 extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": ""}]
+            before_cap = len(extracted)
+            extracted = cap_extracted_actions(extracted, task_actions_max_per_mail)
+            if len(extracted) < before_cap:
+                summary["task_actions_capped"] += (before_cap - len(extracted))
             tasks = build_tasks(extracted, msg, category, tags, run_id=run_id)
+            if task_items_max_per_run > 0:
+                remaining = task_items_max_per_run - int(summary.get("tasks", 0))
+                if remaining <= 0:
+                    summary["task_run_cap_reached"] = True
+                    tasks = []
+                elif len(tasks) > remaining:
+                    tasks = tasks[:remaining]
+                    summary["task_run_cap_reached"] = True
             if tasks and not args.dry_run:
                 write_feedback_manifest(tasks, run_id)
                 resp = send_neuronic(tasks, env)

@@ -341,6 +341,24 @@
 - 目的:
   - Gmail→Neuronic連携での大容量失敗を自動回復し、運用停止を防ぐ
 
+### 8.14 Completion Update（#4 Gmail運用閾値チューニング）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `skills/roby-mail/scripts/gmail_triage.py`
+    - Slack通知上限を追加: `GMAIL_TRIAGE_NOTIFY_MAX_PER_RUN`（既定: `12`）
+    - 1メールあたり抽出アクション上限: `GMAIL_TRIAGE_TASK_MAX_ACTIONS_PER_MAIL`（既定: `6`）
+    - 1実行あたり送信タスク上限: `GMAIL_TRIAGE_TASK_MAX_ITEMS_PER_RUN`（既定: `120`）
+    - summaryへ運用メトリクス追加:
+      - `notify_suppressed`
+      - `task_actions_capped`
+      - `task_run_cap_reached`
+  - 回帰テストを追加/更新:
+    - `skills/roby-mail/scripts/test_gmail_triage_classify.py`
+      - `cap_extracted_actions` の上限制御テスト
+- 目的:
+  - 通知スパムと過剰タスク生成を抑え、日次運用を安定化
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04
