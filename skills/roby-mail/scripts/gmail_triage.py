@@ -509,32 +509,106 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
             row["sourceDocTitle"] = row.get("source_doc_title")
         payload_items.append(row)
 
-    payload = {"items": payload_items}
-    data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         header_name = env.get("NEURONIC_AUTH_HEADER", "Authorization")
         headers[header_name] = f"Bearer {token}"
-    def _post(target_url: str) -> Dict[str, Any]:
+
+    def _is_payload_too_large(resp: Dict[str, Any]) -> bool:
+        status = str(resp.get("status_code") or "")
+        detail = f"{resp.get('error','')} {resp.get('detail','')}".lower()
+        return status == "413" or "payload too large" in detail or "request entity too large" in detail
+
+    def _post(target_url: str, batch_items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        payload = {"items": batch_items}
+        data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(target_url, data=data, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
+            status_code = getattr(resp, "status", 200)
             body = resp.read().decode("utf-8", "ignore")
         try:
-            return json.loads(body)
+            parsed = json.loads(body)
+            if isinstance(parsed, dict):
+                parsed.setdefault("status_code", status_code)
+                parsed.setdefault("endpoint_used", target_url)
+                return parsed
+            return {"status_code": status_code, "endpoint_used": target_url, "response": parsed}
         except Exception:
-            return {"response": body}
+            return {"status_code": status_code, "endpoint_used": target_url, "response": body}
 
-    try:
-        return _post(url)
-    except urllib.error.HTTPError as e:
-        if e.code == 404 and url.endswith("/tasks/import"):
-            try:
-                return _post(fallback_url)
-            except urllib.error.HTTPError as e2:
-                return {"error": f"HTTP {e2.code}", "detail": e2.read().decode("utf-8", "ignore")}
-        return {"error": f"HTTP {e.code}", "detail": e.read().decode("utf-8", "ignore")}
-    except Exception as e:
-        return {"error": str(e)}
+    def _send_once(batch_items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        try:
+            return _post(url, batch_items)
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and url.endswith("/tasks/import"):
+                try:
+                    return _post(fallback_url, batch_items)
+                except urllib.error.HTTPError as e2:
+                    return {
+                        "error": f"HTTP {e2.code}",
+                        "status_code": e2.code,
+                        "detail": e2.read().decode("utf-8", "ignore"),
+                        "endpoint_used": fallback_url,
+                    }
+            return {
+                "error": f"HTTP {e.code}",
+                "status_code": e.code,
+                "detail": e.read().decode("utf-8", "ignore"),
+                "endpoint_used": url,
+            }
+        except Exception as e:
+            return {"error": str(e), "endpoint_used": url}
+
+    batch_size = int(env.get("NEURONIC_BATCH_SIZE", "100") or "100")
+    if batch_size < 1:
+        batch_size = 100
+    queue: List[List[Dict[str, Any]]] = [payload_items[i:i + batch_size] for i in range(0, len(payload_items), batch_size)]
+
+    aggregate: Dict[str, Any] = {
+        "ok": True,
+        "created": 0,
+        "updated": 0,
+        "skipped": 0,
+        "error_count": 0,
+        "errors": [],
+        "endpoint_used": url,
+        "fallback_used": False,
+    }
+
+    while queue:
+        batch = queue.pop(0)
+        resp = _send_once(batch)
+        endpoint_used = str(resp.get("endpoint_used") or "")
+        if endpoint_used:
+            aggregate["endpoint_used"] = endpoint_used
+        if endpoint_used.endswith("/tasks/bulk"):
+            aggregate["fallback_used"] = True
+
+        if resp.get("error"):
+            if len(batch) > 1 and _is_payload_too_large(resp):
+                mid = max(1, len(batch) // 2)
+                queue.insert(0, batch[mid:])
+                queue.insert(0, batch[:mid])
+                continue
+            aggregate["ok"] = False
+            aggregate["error_count"] = int(aggregate.get("error_count", 0)) + 1
+            aggregate["errors"].append({"batch_size": len(batch), "reason": resp.get("detail") or resp.get("error")})
+            aggregate["detail"] = resp.get("detail") or resp.get("error")
+            continue
+
+        aggregate["created"] += int(resp.get("created", 0) or 0)
+        aggregate["updated"] += int(resp.get("updated", 0) or 0)
+        aggregate["skipped"] += int(resp.get("skipped", 0) or 0)
+        resp_errors = resp.get("errors") or []
+        if isinstance(resp_errors, list) and resp_errors:
+            aggregate["errors"].extend(resp_errors)
+            aggregate["error_count"] = int(aggregate.get("error_count", 0)) + len(resp_errors)
+        if "hierarchy_applied" in resp:
+            aggregate["hierarchy_applied"] = resp.get("hierarchy_applied")
+        if "order_applied" in resp:
+            aggregate["order_applied"] = resp.get("order_applied")
+
+    return aggregate
 
 
 def _stable_origin_id(task: Dict[str, Any], source_key: str = "") -> str:
@@ -958,11 +1032,18 @@ def main() -> int:
             if tasks and not args.dry_run:
                 write_feedback_manifest(tasks, run_id)
                 resp = send_neuronic(tasks, env)
-                if isinstance(resp, dict) and resp.get("error"):
+                if isinstance(resp, dict) and (resp.get("error") or resp.get("ok") is False or int(resp.get("error_count", 0) or 0) > 0):
                     summary["neuronic_errors"] += 1
                     last_neuronic_error = resp.get("detail") or resp.get("error")
                 else:
                     summary["tasks"] += len(tasks)
+                    summary["neuronic_created"] = int(summary.get("neuronic_created", 0)) + int(resp.get("created", 0) or 0)
+                    summary["neuronic_updated"] = int(summary.get("neuronic_updated", 0)) + int(resp.get("updated", 0) or 0)
+                    summary["neuronic_skipped"] = int(summary.get("neuronic_skipped", 0)) + int(resp.get("skipped", 0) or 0)
+                    if "hierarchy_applied" in resp:
+                        summary["hierarchy_applied"] = resp.get("hierarchy_applied")
+                    if "order_applied" in resp:
+                        summary["order_applied"] = resp.get("order_applied")
 
         # Archive ads
         if category == "archive" and args.archive_ads and not args.dry_run:

@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+from typing import Dict, List
+from unittest import TestCase, main
+import urllib.error
+import urllib.request
+import warnings
+
+warnings.simplefilter("ignore", ResourceWarning)
+
+
+def _load_module():
+    script_path = Path(__file__).resolve().parent / "gmail_triage.py"
+    spec = importlib.util.spec_from_file_location("gmail_triage_module", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load {script_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Resp:
+    def __init__(self, body: Dict):
+        self._body = json.dumps(body).encode("utf-8")
+        self.status = 200
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _http_error(code: int, body: str = ""):
+    return urllib.error.HTTPError(
+        url="http://127.0.0.1",
+        code=code,
+        msg="error",
+        hdrs=None,
+        fp=None,
+    )
+
+
+class TestGmailTriageNeuronic(TestCase):
+    def setUp(self):
+        self.mod = _load_module()
+        self._orig_urlopen = urllib.request.urlopen
+
+    def tearDown(self):
+        urllib.request.urlopen = self._orig_urlopen
+
+    def _tasks(self, n: int) -> List[Dict]:
+        rows: List[Dict] = []
+        for i in range(n):
+            rows.append(
+                {
+                    "title": f"task-{i}",
+                    "project": "email",
+                    "due_date": "",
+                    "assignee": "私",
+                    "note": "",
+                    "source": "roby",
+                    "origin_id": f"roby:auto:test{i}",
+                    "status": "inbox",
+                    "priority": 1,
+                    "tags": ["project:email"],
+                    "parent_origin_id": None,
+                    "sibling_order": i,
+                }
+            )
+        return rows
+
+    def test_payload_too_large_is_split_and_succeeds(self):
+        send_sizes: List[int] = []
+
+        def fake_urlopen(req, timeout=10):
+            payload = json.loads(req.data.decode("utf-8"))
+            items = payload.get("items", [])
+            send_sizes.append(len(items))
+            if len(items) > 1:
+                raise _http_error(413, "Payload Too Large")
+            return _Resp({"created": 1, "updated": 0, "skipped": 0, "errors": [], "hierarchy_applied": True, "order_applied": True})
+
+        urllib.request.urlopen = fake_urlopen
+        result = self.mod.send_neuronic(self._tasks(4), {"NEURONIC_BATCH_SIZE": "10"})
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("created"), 4)
+        self.assertEqual(result.get("error_count"), 0)
+        self.assertIn(4, send_sizes)
+        self.assertIn(2, send_sizes)
+        self.assertGreaterEqual(send_sizes.count(1), 4)
+        self.assertIs(result.get("hierarchy_applied"), True)
+        self.assertIs(result.get("order_applied"), True)
+
+    def test_404_import_fallbacks_to_bulk(self):
+        called = {"import": 0, "bulk": 0}
+
+        def fake_urlopen(req, timeout=10):
+            url = req.full_url
+            if url.endswith("/api/v1/tasks/import"):
+                called["import"] += 1
+                raise _http_error(404, "Not Found")
+            if url.endswith("/api/v1/tasks/bulk"):
+                called["bulk"] += 1
+                payload = json.loads(req.data.decode("utf-8"))
+                return _Resp({"created": len(payload.get("items", [])), "updated": 0, "skipped": 0, "errors": []})
+            raise AssertionError(f"unexpected url: {url}")
+
+        urllib.request.urlopen = fake_urlopen
+        result = self.mod.send_neuronic(self._tasks(3), {})
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("created"), 3)
+        self.assertEqual(called["import"], 1)
+        self.assertEqual(called["bulk"], 1)
+        self.assertTrue(result.get("fallback_used"))
+
+
+if __name__ == "__main__":
+    main()

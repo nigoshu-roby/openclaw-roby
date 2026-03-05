@@ -325,6 +325,22 @@
   - fallback（heuristic）に依存せず、LLMのみで抽出件数（Recall）を戻す
   - 既存のメモ混入抑制方針を維持
 
+### 8.13 Completion Update（#4 Gmail連携の堅牢化）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `skills/roby-mail/scripts/gmail_triage.py` の Neuronic送信を強化
+    - 413 (`Payload Too Large`) 発生時に自動分割して再送
+    - `/tasks/import` 404 時は `/tasks/bulk` へフォールバック維持
+    - 送信集計を `created/updated/skipped/error_count` で集約
+    - `hierarchy_applied/order_applied` 返却がある場合は summary に反映
+  - 回帰テストを追加:
+    - `skills/roby-mail/scripts/test_gmail_triage_neuronic.py`
+      - 413分割再送の成功ケース
+      - 404フォールバックの成功ケース
+- 目的:
+  - Gmail→Neuronic連携での大容量失敗を自動回復し、運用停止を防ぐ
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04
