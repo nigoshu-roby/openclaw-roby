@@ -884,10 +884,22 @@ def _run_gemini_json_prompt(
 
 
 def _candidate_models(env: Dict[str, str], list_key: str, fallback: List[str]) -> List[str]:
+    supported_providers = {"xai", "openai", "google", "anthropic", "zai"}
+
+    def _is_supported(model: str) -> bool:
+        m = (model or "").strip()
+        if not m:
+            return False
+        if "/" not in m:
+            # Backward compatibility: bare model names are passed through.
+            return True
+        provider = m.split("/", 1)[0].strip().lower()
+        return provider in supported_providers
+
     raw = (env.get(list_key) or "").strip()
-    models = [x.strip() for x in raw.split(",") if x.strip()]
+    models = [x.strip() for x in raw.split(",") if x.strip() and _is_supported(x.strip())]
     if not models:
-        models = [x for x in fallback if x]
+        models = [x for x in fallback if x and _is_supported(x)]
     # dedupe while preserving order
     uniq: List[str] = []
     seen = set()
