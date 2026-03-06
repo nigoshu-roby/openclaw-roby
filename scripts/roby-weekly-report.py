@@ -119,6 +119,40 @@ def summarize_drill(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def summarize_freshness_from_drill(drill_summary: Dict[str, Any]) -> Dict[str, Any]:
+    latest = drill_summary.get("latest")
+    if not isinstance(latest, dict):
+        return {"present": False, "ok": False, "stale_count": 0, "stale_components": [], "detail": ""}
+    checks = latest.get("checks")
+    if not isinstance(checks, list):
+        return {"present": False, "ok": False, "stale_count": 0, "stale_components": [], "detail": ""}
+    target: Optional[Dict[str, Any]] = None
+    for row in checks:
+        if isinstance(row, dict) and str(row.get("id") or "") == "pipeline_freshness":
+            target = row
+            break
+    if not target:
+        return {"present": False, "ok": False, "stale_count": 0, "stale_components": [], "detail": ""}
+
+    detail = str(target.get("detail") or "")
+    stale_components: List[str] = []
+    if "/ stale:" in detail:
+        stale_part = detail.split("/ stale:", 1)[1]
+        if "/ remedy:" in stale_part:
+            stale_part = stale_part.split("/ remedy:", 1)[0]
+        parts = [x.strip() for x in stale_part.split(",") if x.strip()]
+        for item in parts:
+            stale_components.append(item.split(":", 1)[0])
+
+    return {
+        "present": True,
+        "ok": bool(target.get("ok", False)),
+        "stale_count": len(stale_components),
+        "stale_components": stale_components,
+        "detail": detail,
+    }
+
+
 def summarize_ab(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not items:
         return {"runs": 0, "arms": {}}
@@ -221,6 +255,17 @@ def build_markdown(report: Dict[str, Any]) -> str:
             "",
         ]
     )
+    freshness = report.get("freshness", {})
+    if freshness.get("present"):
+        lines.extend(
+            [
+                "## Pipeline Freshness",
+                f"- ok: {freshness.get('ok', False)}",
+                f"- stale_count: {freshness.get('stale_count', 0)}",
+                f"- stale_components: {', '.join(freshness.get('stale_components', [])) or '-'}",
+                "",
+            ]
+        )
     ops = report.get("ops", {})
     if ops:
         lines.extend(["## Pipeline Operations (from audit)"])
@@ -258,6 +303,7 @@ def main() -> int:
         "audit": audit_report,
         "ops": summarize_ops_from_audit(audit_events),
     }
+    report["freshness"] = summarize_freshness_from_drill(report["drill"])
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     LATEST_JSON.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -274,6 +320,7 @@ def main() -> int:
             f"- eval runs: {report['eval'].get('runs',0)} failed: {report['eval'].get('failed_runs',0)}\n"
             f"- drill runs: {report['drill'].get('runs',0)} failed: {report['drill'].get('failed_runs',0)}\n"
             f"- audit ok: {report['audit'].get('ok', False)} errors: {report['audit'].get('errors', 0)}\n"
+            f"- freshness stale: {report.get('freshness',{}).get('stale_count',0)}\n"
             f"- ops: minutes={report['ops'].get('minutes_sync',{}).get('runs',0)} "
             f"gmail={report['ops'].get('gmail_triage',{}).get('runs',0)} "
             f"notion={report['ops'].get('notion_sync',{}).get('runs',0)}"
@@ -303,6 +350,12 @@ def main() -> int:
                     "drill_failed_runs": int(report["drill"].get("failed_runs", 0)),
                     "audit_ok": bool(report["audit"].get("ok", False)),
                     "audit_errors": int(report["audit"].get("errors", 0)),
+                    "freshness": {
+                        "present": bool(report.get("freshness", {}).get("present", False)),
+                        "ok": bool(report.get("freshness", {}).get("ok", False)),
+                        "stale_count": int(report.get("freshness", {}).get("stale_count", 0)),
+                        "stale_components": list(report.get("freshness", {}).get("stale_components", [])),
+                    },
                     "ops": {
                         "minutes_sync_runs": int(report["ops"].get("minutes_sync", {}).get("runs", 0)),
                         "gmail_triage_runs": int(report["ops"].get("gmail_triage", {}).get("runs", 0)),

@@ -592,6 +592,23 @@
 - 目的:
   - Runbookの運用復旧時間（MTTR）を短縮する
 
+### 8.29 Completion Update（週次レポートへ鮮度サマリ統合）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-weekly-report.py`
+    - 最新 `runbook_drill` の `pipeline_freshness` チェックを解析し、週次レポートへ統合
+    - 追加出力:
+      - `freshness.present`
+      - `freshness.ok`
+      - `freshness.stale_count`
+      - `freshness.stale_components`
+    - Markdownに `Pipeline Freshness` セクションを追加
+    - Slack要約に `freshness stale` 件数を追加
+    - `weekly_report.run` の監査イベント payload に鮮度情報を追加
+- 目的:
+  - 「評価・ドリルは通っているが定期ジョブが止まり始めている」状態を週次レビューで見落とさない
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04
