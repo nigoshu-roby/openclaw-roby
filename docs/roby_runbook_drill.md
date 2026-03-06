@@ -181,6 +181,7 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
   - `ROBY_DRILL_GMAIL_MAX_MIN`
   - `ROBY_DRILL_NOTION_MAX_MIN`
   - `ROBY_DRILL_WEEKLY_MAX_MIN`
+- `pipeline_freshness` の `detail` には stale 系統ごとの `remedy` コマンドが出力されるため、そのまま再実行に利用可能
 
 ## 監査連携
 

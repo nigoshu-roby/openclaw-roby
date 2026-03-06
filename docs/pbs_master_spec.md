@@ -580,6 +580,18 @@
 - 目的:
   - 鮮度監視の誤検知を減らし、実際に stale な系統のみを正確に警告する
 
+### 8.28 Completion Update（Pipeline鮮度監視の自己復旧導線）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-drill.py`
+    - `pipeline_freshness` の `detail` へ stale 系統ごとの `remedy` コマンドを埋め込み
+    - stale検知後に手順検索せず、そのまま復旧コマンド実行へ遷移可能
+  - `docs/roby_runbook_drill.md`
+    - `remedy` 導線の使い方を追記
+- 目的:
+  - Runbookの運用復旧時間（MTTR）を短縮する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

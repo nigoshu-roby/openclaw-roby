@@ -419,6 +419,13 @@ def check_pipeline_freshness(env: Dict[str, str]) -> Dict[str, Any]:
     ]
     statuses: List[str] = []
     stale: List[str] = []
+    remedy_cmds = {
+        "self_growth": f"python3 {OPENCLAW_REPO}/scripts/roby-self-growth.py",
+        "minutes_sync": f"python3 {OPENCLAW_REPO}/scripts/roby-orchestrator.py --cron-task minutes_sync --execute --json",
+        "gmail_triage": f"python3 {OPENCLAW_REPO}/scripts/roby-orchestrator.py --cron-task gmail_triage --execute --json",
+        "notion_sync": f"python3 {OPENCLAW_REPO}/scripts/roby-notion-sync.py --dry-run",
+        "weekly_report": f"python3 {OPENCLAW_REPO}/scripts/roby-weekly-report.py --json",
+    }
 
     for name, path, max_min in targets:
         dt: Optional[datetime] = None
@@ -446,6 +453,9 @@ def check_pipeline_freshness(env: Dict[str, str]) -> Dict[str, Any]:
     detail = ", ".join(statuses) if statuses else "no status"
     if stale:
         detail += " / stale: " + ", ".join(stale)
+        stale_names = [item.split(":", 1)[0] for item in stale]
+        remedy_parts = [f"{n}=>{remedy_cmds.get(n, 'n/a')}" for n in stale_names]
+        detail += " / remedy: " + " ; ".join(remedy_parts)
 
     if not stale:
         return {
