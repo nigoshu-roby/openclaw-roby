@@ -444,6 +444,30 @@ def send_slack(webhook_url: str, text: str) -> None:
         resp.read()
 
 
+def format_gmail_slack_message(msg: Dict[str, Any], category: str) -> str:
+    labels = {
+        "needs_reply": "返信要",
+        "needs_review": "要確認",
+        "later_check": "後で確認",
+        "archive": "アーカイブ候補",
+    }
+    category_label = labels.get(category, category)
+    subject = str(msg.get("subject", "") or "(件名なし)").strip()
+    sender = str(msg.get("from", "") or "-").strip()
+    date = str(msg.get("date", "") or "-").strip()
+    thread_id = str(msg.get("threadId", "") or "").strip()
+    msg_url = f"https://mail.google.com/mail/u/0/#inbox/{thread_id}" if thread_id else "-"
+    lines = [
+        "【Roby Gmail通知】",
+        f"・分類: {category_label}",
+        f"・件名: {subject}",
+        f"・送信者: {sender}",
+        f"・日時: {date}",
+        f"・リンク: {msg_url}",
+    ]
+    return "\n".join(lines)
+
+
 def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     prompt = (
         "Extract actionable tasks from the message. "
@@ -1009,13 +1033,7 @@ def main() -> int:
         # Slack notify
         slack_url = env.get("SLACK_WEBHOOK_URL")
         if slack_url and not args.dry_run and category in ("needs_reply", "needs_review", "later_check"):
-            msg_url = f"https://mail.google.com/mail/u/0/#inbox/{msg.get('threadId','')}"
-            text = (
-                f"[Gmail:{category}] {subject}\n"
-                f"From: {sender}\n"
-                f"Date: {msg.get('date','')}\n"
-                f"{msg_url}"
-            )
+            text = format_gmail_slack_message(msg, category)
             if notify_max_per_run <= 0 or summary["notified"] < notify_max_per_run:
                 send_slack(slack_url, text)
                 summary["notified"] += 1

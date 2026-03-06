@@ -88,12 +88,12 @@ notify_slack_fail() {
     return 0
   fi
   local msg
-  msg="Roby Cron FAIL
-task=${TASK}
-reason=${reason}
-time=$(now)
-host=$(hostname)
-log=${LOG_FILE}"
+  msg="【Roby Cron 異常通知】
+・タスク: ${TASK}
+・理由: ${reason}
+・時刻: $(now)
+・ホスト: $(hostname)
+・ログ: ${LOG_FILE}"
   "$PYTHON_BIN" - "$SLACK_WEBHOOK_URL" "$msg" <<'PY' >/dev/null 2>&1 || true
 import json
 import sys

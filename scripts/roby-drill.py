@@ -52,6 +52,21 @@ def send_slack(webhook_url: str, text: str) -> None:
         resp.read()
 
 
+def format_drill_slack(report: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    failed_checks = [x["id"] for x in rows if (not x.get("ok") and not x.get("skipped"))]
+    status = "FAIL" if int(report.get("failed", 0)) > 0 else "PASS"
+    lines = [
+        f"【PBS Runbook Drill】{status}",
+        f"・実行時刻: {report.get('ts', '-')}",
+        f"・total/passed/failed/skipped: {report.get('total', 0)}/{report.get('passed', 0)}/{report.get('failed', 0)}/{report.get('skipped', 0)}",
+    ]
+    if failed_checks:
+        lines.extend(["", "■失敗チェック", "・" + " / ".join(failed_checks)])
+    else:
+        lines.extend(["", "■失敗チェック", "・なし"])
+    return "\n".join(lines)
+
+
 def run_cmd(cmd: List[str], env: Dict[str, str], timeout: int = 120) -> Dict[str, Any]:
     started = time.perf_counter()
     proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True, timeout=timeout)
@@ -691,15 +706,7 @@ def main() -> int:
     notify_on_pass = str(env.get("ROBY_DRILL_NOTIFY_ON_PASS", "0")).strip() == "1"
     should_notify = bool(webhook) and (args.notify or failed > 0 or notify_on_pass)
     if should_notify:
-        failed_checks = [x["id"] for x in rows if (not x.get("ok") and not x.get("skipped"))]
-        status = "FAIL" if failed > 0 else "PASS"
-        text = (
-            f"[PBS Drill] {status}\n"
-            f"- ts: {report['ts']}\n"
-            f"- total: {report['total']} passed: {report['passed']} failed: {report['failed']} skipped: {report['skipped']}\n"
-        )
-        if failed_checks:
-            text += f"- failed_checks: {', '.join(failed_checks)}\n"
+        text = format_drill_slack(report, rows)
         try:
             send_slack(webhook, text[:3500])
         except Exception as exc:

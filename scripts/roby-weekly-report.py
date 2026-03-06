@@ -318,16 +318,27 @@ def main() -> int:
     webhook = env.get("SLACK_WEBHOOK_URL", "").strip()
     notify_on_schedule = str(env.get("ROBY_WEEKLY_REPORT_NOTIFY", "1")).strip() == "1"
     if webhook and (args.notify or notify_on_schedule):
-        text = (
-            "[PBS Weekly Report]\n"
-            f"- generated_at: {report['generated_at']}\n"
-            f"- eval runs: {report['eval'].get('runs',0)} failed: {report['eval'].get('failed_runs',0)}\n"
-            f"- drill runs: {report['drill'].get('runs',0)} failed: {report['drill'].get('failed_runs',0)}\n"
-            f"- audit ok: {report['audit'].get('ok', False)} errors: {report['audit'].get('errors', 0)}\n"
-            f"- freshness stale: {report.get('freshness',{}).get('stale_count',0)}\n"
-            f"- ops: minutes={report['ops'].get('minutes_sync',{}).get('runs',0)} "
-            f"gmail={report['ops'].get('gmail_triage',{}).get('runs',0)} "
-            f"notion={report['ops'].get('notion_sync',{}).get('runs',0)}"
+        text = "\n".join(
+            [
+                "【PBS 週次運用レポート】",
+                f"・生成時刻: {report['generated_at']}",
+                "",
+                "■品質ゲート",
+                f"・Evaluation: runs={report['eval'].get('runs',0)} / failed={report['eval'].get('failed_runs',0)}",
+                f"・Runbook Drill: runs={report['drill'].get('runs',0)} / failed={report['drill'].get('failed_runs',0)}",
+                f"・監査整合性: ok={report['audit'].get('ok', False)} / errors={report['audit'].get('errors', 0)}",
+                f"・鮮度stale件数: {report.get('freshness',{}).get('stale_count',0)}",
+                "",
+                "■運用実行数（7日）",
+                f"・minutes_sync: {report['ops'].get('minutes_sync',{}).get('runs',0)}",
+                f"・gmail_triage: {report['ops'].get('gmail_triage',{}).get('runs',0)}",
+                f"・notion_sync: {report['ops'].get('notion_sync',{}).get('runs',0)}",
+                f"・self_growth: {report['ops'].get('self_growth',{}).get('runs',0)}",
+                "",
+                "■AB Router",
+                f"・runs: {report.get('ab',{}).get('runs',0)}",
+                f"・guard_applied_runs: {report.get('ab',{}).get('guard_applied_runs',0)}",
+            ]
         )
         try:
             send_slack(webhook, text[:3500])

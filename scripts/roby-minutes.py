@@ -1978,6 +1978,49 @@ def send_slack(webhook_url: str, text: str) -> None:
         resp.read()
 
 
+def format_minutes_slack(summary: Dict[str, Any]) -> str:
+    run_id = str(summary.get("run_id", "-"))
+    tasks = int(summary.get("tasks", 0) or 0)
+    errors = int(summary.get("neuronic_errors", 0) or 0)
+    notion_pages = int(summary.get("notion_pages", 0) or 0)
+    gdocs = int(summary.get("gdocs", 0) or 0)
+    candidates_total = int(summary.get("candidates_total", 0) or 0)
+    candidates_selected = int(summary.get("candidates_selected", 0) or 0)
+    created = int(summary.get("neuronic_created", 0) or 0)
+    updated = int(summary.get("neuronic_updated", 0) or 0)
+    skipped = int(summary.get("neuronic_skipped", 0) or 0)
+    endpoint = str(summary.get("neuronic_endpoint", "-"))
+    fallback = "あり" if bool(summary.get("neuronic_fallback", False)) else "なし"
+    hierarchy = summary.get("hierarchy_applied")
+    order = summary.get("order_applied")
+    hierarchy_text = "-" if hierarchy is None else ("適用" if bool(hierarchy) else "未適用")
+    order_text = "-" if order is None else ("適用" if bool(order) else "未適用")
+    status = "失敗あり" if errors > 0 else ("変更あり" if tasks > 0 else "変更なし")
+
+    lines = [
+        "【Roby 議事録同期レポート】",
+        f"・実行結果: {status}",
+        f"・run_id: {run_id}",
+        "",
+        "■入力",
+        f"・Notion対象ページ: {notion_pages}",
+        f"・Google Docs対象: {gdocs}",
+        f"・候補数: {candidates_total}（採用: {candidates_selected}）",
+        "",
+        "■Neuronic連携",
+        f"・生成タスク数: {tasks}",
+        f"・created/updated/skipped: {created}/{updated}/{skipped}",
+        f"・エラー数: {errors}",
+        f"・endpoint: {endpoint}",
+        f"・fallback: {fallback}",
+        f"・階層適用: {hierarchy_text}",
+        f"・順序適用: {order_text}",
+    ]
+    if summary.get("last_neuronic_error"):
+        lines.extend(["", "■エラー詳細", str(summary.get("last_neuronic_error"))[:800]])
+    return "\n".join(lines)
+
+
 def apply_candidate_policy(candidates: List[Dict[str, Any]], policy: str) -> List[Dict[str, Any]]:
     p = (policy or "").strip().lower()
     if not p:
@@ -2328,7 +2371,7 @@ def main() -> int:
     summary["slack_notified"] = False
     if slack_url and should_notify:
         try:
-            send_slack(slack_url, f"Roby Minutes Sync\n{json.dumps(summary, ensure_ascii=False)}")
+            send_slack(slack_url, format_minutes_slack(summary)[:3800])
             summary["slack_notified"] = True
         except Exception:
             pass

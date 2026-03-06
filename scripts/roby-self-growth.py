@@ -72,6 +72,35 @@ def send_slack(webhook_url: str, text: str) -> None:
         resp.read()
 
 
+def format_self_growth_slack(
+    timestamp: str,
+    patch_status: str,
+    test_status: str,
+    rollback_status: str,
+    commit_status: str,
+    restart_status: str,
+    report: str,
+) -> str:
+    status = "失敗あり" if any(x in {"failed", "invalid", "apply_failed"} for x in [patch_status, test_status, rollback_status, commit_status, restart_status]) else "正常"
+    lines = [
+        "【Roby 自己成長レポート】",
+        f"・実行時刻: {timestamp}",
+        f"・実行結果: {status}",
+        "",
+        "■処理ステータス",
+        f"・パッチ: {patch_status}",
+        f"・テスト: {test_status}",
+        f"・ロールバック: {rollback_status}",
+        f"・コミット: {commit_status}",
+        f"・再起動: {restart_status}",
+    ]
+    cleaned = [ln.strip() for ln in (report or "").splitlines() if ln.strip()]
+    if cleaned:
+        lines.extend(["", "■実行ログ（抜粋）"])
+        lines.extend(f"・{ln}" for ln in cleaned[:12])
+    return "\n".join(lines)
+
+
 def main() -> int:
     env = load_env()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -196,7 +225,15 @@ def main() -> int:
         report = "\n".join(steps) if steps else "[error] empty report"
 
     slack_url = env.get("SLACK_WEBHOOK_URL", "").strip()
-    slack_text = f"Roby Self-Growth Report ({timestamp})\n\n{report}"
+    slack_text = format_self_growth_slack(
+        timestamp=timestamp,
+        patch_status=patch_status,
+        test_status=test_status,
+        rollback_status=rollback_status,
+        commit_status=commit_status,
+        restart_status=restart_status,
+        report=report,
+    )
     if slack_url:
         try:
             send_slack(slack_url, slack_text[:3800])

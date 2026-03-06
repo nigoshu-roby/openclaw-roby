@@ -653,6 +653,25 @@
 - 目的:
   - 「機能一覧は毎回内容がぶれる」問題を抑え、実運用で一貫した自己把握結果を返す
 
+### 8.32 Completion Update（Slack通知の日本語整形）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-minutes.py`
+    - 議事録同期通知を日本語見出し + 改行整形へ変更
+  - `skills/roby-mail/scripts/gmail_triage.py`
+    - メール通知を日本語ラベル（返信要/要確認/後で確認）で整形
+  - `scripts/roby-self-growth.py`
+    - 自己成長通知を「処理ステータス/実行ログ抜粋」形式へ変更
+  - `scripts/roby-drill.py`
+    - ドリル通知を「結果/失敗チェック」形式へ変更
+  - `scripts/roby-weekly-report.py`
+    - 週次通知を品質ゲート/運用実行数/AB要約の日本語フォーマットへ変更
+  - `scripts/roby-cron-dispatch.sh`
+    - cron失敗通知を日本語整形へ変更
+- 目的:
+  - Slack通知の可読性を上げ、失敗時の判断と復旧を短時間で行えるようにする
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04
