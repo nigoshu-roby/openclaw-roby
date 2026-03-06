@@ -52,6 +52,7 @@
   - ルーティングは明示的に残す
   - 実行結果は「結論 / 実行ログ / エラー理由」で表示
   - 再実行可能なUI導線を維持
+  - 機能一覧要求は `ROBY_ORCH_FEATURE_LIST_LOCAL_FIRST=1`（既定）でローカル実体ベース回答を優先
 
 ### 2.3 Local First / Cloud for Brilliance
 
@@ -639,6 +640,18 @@
     - `health_guard` 設定を追加
 - 目的:
   - A/B検証を継続しつつ、劣化armによるユーザー体験低下を運用時に自動抑止する
+
+### 8.31 Completion Update（機能一覧要求のローカル優先回答）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-orchestrator.py`
+    - `is_feature_list_request` 判定時に `local_capabilities` モードを追加
+    - `ROBY_ORCH_FEATURE_LIST_LOCAL_FIRST=1`（既定）で、Gemini生成前にローカル検出結果を返却
+    - 出力は見出し付き（目的/実行可能な提案/主要機能一覧/パイプライン状態/次アクション）
+  - 既存の低品質フォールバック（Gemini出力が薄い場合のローカル要約）も継続
+- 目的:
+  - 「機能一覧は毎回内容がぶれる」問題を抑え、実運用で一貫した自己把握結果を返す
 
 ### 8.3 Completion Update（#9 AB Router）
 

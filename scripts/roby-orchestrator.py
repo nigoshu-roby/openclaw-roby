@@ -756,7 +756,8 @@ def build_greeting_response() -> str:
     )
 
 
-def build_local_capability_summary() -> str:
+def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
+    runtime_env = env or {}
     has_ollama = shutil.which("ollama") is not None
     checks = [
         ("UIチャット + オーケストレーター表示", OPENCLAW_REPO / "ui" / "src" / "ui" / "controllers" / "chat.ts"),
@@ -766,14 +767,55 @@ def build_local_capability_summary() -> str:
         ("自己成長ジョブ", SELF_GROWTH_SCRIPT),
         ("GitHub→Notion同期", NOTION_SYNC_SCRIPT),
     ]
-    lines = ["現在の主要機能一覧（ローカル検出）"]
+    neuronic_url = (
+        runtime_env.get("NEURONIC_URL", "").strip()
+        or runtime_env.get("ROBY_NEURONIC_URL", "").strip()
+        or "http://127.0.0.1:5174/api/v1/tasks/import"
+    )
+    lines = [
+        "## 目的",
+        "現在の実装済み機能をローカル実体ベースで一覧化し、運用可否を即確認できる状態にする。",
+        "",
+        "## 実行可能な提案（優先順）",
+        "1. 主要機能の有効/未検出を確認",
+        "2. 直近パイプライン実行結果を確認",
+        "3. 次アクションを明示して運用判断を即実行",
+        "",
+        "## 現在の主要機能一覧（ローカル検出）",
+    ]
     for label, path in checks:
         status = "有効" if path.exists() else "未検出"
         lines.append(f"- {label}: {status}")
+
+    minutes_last = read_last_jsonl(STATE_DIR / "minutes_runs.jsonl")
+    gmail_last = read_last_jsonl(STATE_DIR / "gmail_triage_runs.jsonl")
+    self_growth_last = read_last_jsonl(STATE_DIR / "self_growth_runs.jsonl")
+
     lines.extend(
         [
             "",
-            "利用可能ルート",
+            "## 実行パイプラインの最新状態",
+            (
+                f"- minutes_sync: tasks={int(((minutes_last or {}).get('summary') or {}).get('tasks', 0))} "
+                f"neuronic_errors={int(((minutes_last or {}).get('summary') or {}).get('neuronic_errors', 0))}"
+            ),
+            (
+                f"- gmail_triage: tasks={int(((gmail_last or {}).get('summary') or {}).get('tasks', 0))} "
+                f"archived={int(((gmail_last or {}).get('summary') or {}).get('archived', 0))} "
+                f"notified={int(((gmail_last or {}).get('summary') or {}).get('notified', 0))}"
+            ),
+            f"- self_growth: patch_status={str((self_growth_last or {}).get('patch_status', 'unknown'))}",
+            "",
+            "## 連携先ステータス",
+            f"- Neuronic endpoint: {neuronic_url}",
+            f"- Neuronic token: {'設定済み' if bool(runtime_env.get('NEURONIC_TOKEN', '').strip()) else '未設定'}",
+        ]
+    )
+
+    lines.extend(
+        [
+            "",
+            "## 利用可能ルート",
             f"- {ROUTE_QA}",
             f"- {ROUTE_QA_LOCAL} ({'有効' if has_ollama else 'ollama未導入'})",
             f"- {ROUTE_CODING}",
@@ -784,6 +826,10 @@ def build_local_capability_summary() -> str:
             f"- {ROUTE_EVAL}",
             f"- {ROUTE_DRILL}",
             f"- {ROUTE_WEEKLY_REPORT}",
+            "",
+            "## 次のアクション",
+            "1. 実行確認したい機能名を指定してください（例: minutes_pipeline）。",
+            "2. 実行が必要なら「実行して」と指示してください。",
         ]
     )
     return "\n".join(lines)
@@ -1975,6 +2021,20 @@ def handle_qa_gemini(
             "mode": "local_status",
             "output": build_runtime_status_summary(qa_env),
         }
+    if is_feature_list_request(message) and bool_from_env(
+        qa_env.get("ROBY_ORCH_FEATURE_LIST_LOCAL_FIRST", "1"),
+        default=True,
+    ):
+        payload = {
+            "route": ROUTE_QA,
+            "executed": True,
+            "ok": True,
+            "mode": "local_capabilities",
+            "output": build_local_capability_summary(qa_env),
+        }
+        if ab_decision:
+            payload["ab_router"] = ab_decision
+        return payload
     if qa_env.get("ROBY_ORCH_GEMINI_QA_NATIVE", "1") == "1":
         qa_prompt = qa_env.get(
             "ROBY_ORCH_GEMINI_QA_PROMPT",
@@ -2007,7 +2067,7 @@ def handle_qa_gemini(
         if isinstance(parsed, (dict, list)):
             text = json.dumps(parsed, ensure_ascii=False)
         if is_feature_list_request(message) and is_low_detail_output(text):
-            text = build_local_capability_summary()
+            text = build_local_capability_summary(qa_env)
         elif is_broken_qa_output(text, message):
             text = (
                 "回答品質が不安定だったため、再質問を推奨します。\n"
