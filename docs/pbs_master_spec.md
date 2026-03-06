@@ -83,6 +83,17 @@
 - 初期状態:
   - 既定は `enabled=false`（安全デフォルト）
   - Arm A=baseline / Arm B=quality_plus（重み付き）
+- 運用ガード（新規）:
+  - `qa_gemini.health_guard` で劣化armを自動退避
+  - 既定:
+    - `guarded_arm_ids=["B"]`
+    - `fallback_arm_id="A"`
+    - `window_runs=50`
+    - `min_samples=3`
+    - `max_fail_rate=0.15`
+    - `max_avg_elapsed_ms=20000`
+  - 目的:
+    - B armの品質/速度劣化時にAへ自動フォールバックし、体感品質を維持
 
 ---
 
@@ -608,6 +619,26 @@
     - `weekly_report.run` の監査イベント payload に鮮度情報を追加
 - 目的:
   - 「評価・ドリルは通っているが定期ジョブが止まり始めている」状態を週次レビューで見落とさない
+
+### 8.30 Completion Update（AB Routerの劣化arm自動退避）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-orchestrator.py`
+    - `qa_gemini.health_guard` を追加実装
+    - 監視対象arm（既定B）の直近実績を参照し、劣化時は `fallback_arm_id`（既定A）へ自動退避
+    - 判定軸:
+      - fail_rate（`max_fail_rate`）
+      - avg_elapsed_ms（`max_avg_elapsed_ms`）
+      - 最低サンプル数（`min_samples`）
+    - AB実行ログへ追加記録:
+      - `guard_applied`
+      - `requested_arm_id`
+      - `guard_reason`
+  - `config/pbs/ab_router.json`
+    - `health_guard` 設定を追加
+- 目的:
+  - A/B検証を継続しつつ、劣化armによるユーザー体験低下を運用時に自動抑止する
 
 ### 8.3 Completion Update（#9 AB Router）
 

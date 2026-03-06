@@ -4,6 +4,15 @@
   "rotate_daily": true,
   "qa_gemini": {
     "enabled": true,
+    "health_guard": {
+      "enabled": true,
+      "guarded_arm_ids": ["B"],
+      "fallback_arm_id": "A",
+      "window_runs": 50,
+      "min_samples": 3,
+      "max_fail_rate": 0.15,
+      "max_avg_elapsed_ms": 20000
+    },
     "arms": [
       {
         "id": "A",

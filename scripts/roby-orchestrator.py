@@ -255,6 +255,136 @@ def choose_weighted_arm(
     return normalized[-1]["arm"], bucket, total
 
 
+def build_qa_overrides_from_arm(selected: Dict[str, Any], env: Dict[str, str]) -> Dict[str, str]:
+    overrides: Dict[str, str] = {}
+    if selected.get("model"):
+        overrides["ROBY_ORCH_GEMINI_MODEL"] = str(selected["model"])
+    if selected.get("length"):
+        overrides["ROBY_ORCH_GEMINI_LENGTH"] = str(selected["length"])
+    if selected.get("qa_max_tokens"):
+        overrides["ROBY_ORCH_QA_MAX_TOKENS"] = str(selected["qa_max_tokens"])
+    if selected.get("qa_retry_max_tokens"):
+        overrides["ROBY_ORCH_QA_RETRY_MAX_TOKENS"] = str(selected["qa_retry_max_tokens"])
+    if selected.get("qa_timeout_sec"):
+        overrides["ROBY_ORCH_QA_TIMEOUT_SEC"] = str(selected["qa_timeout_sec"])
+    if selected.get("prompt"):
+        overrides["ROBY_ORCH_GEMINI_QA_PROMPT"] = str(selected["prompt"])
+    elif selected.get("prompt_env_key"):
+        prompt_env_key = str(selected.get("prompt_env_key"))
+        prompt_env_value = env.get(prompt_env_key, "").strip()
+        if prompt_env_value:
+            overrides["ROBY_ORCH_GEMINI_QA_PROMPT"] = prompt_env_value
+    return overrides
+
+
+def find_arm_by_id(arms: List[Dict[str, Any]], arm_id: str) -> Optional[Dict[str, Any]]:
+    target = str(arm_id or "").strip()
+    if not target:
+        return None
+    for arm in arms:
+        if not isinstance(arm, dict):
+            continue
+        if str(arm.get("id", "")).strip() == target:
+            return arm
+    return None
+
+
+def read_ab_runs(path: Path, max_rows: int = 400) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+    for raw in reversed(lines):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            rows.append(obj)
+            if len(rows) >= max_rows:
+                break
+    rows.reverse()
+    return rows
+
+
+def apply_ab_health_guard(
+    selected: Dict[str, Any],
+    arms: List[Dict[str, Any]],
+    qa_conf: Dict[str, Any],
+    env: Dict[str, str],
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    guard = qa_conf.get("health_guard")
+    if not isinstance(guard, dict):
+        return selected, None
+    if not bool(guard.get("enabled", False)):
+        return selected, None
+
+    fallback_arm_id = str(guard.get("fallback_arm_id", "A")).strip() or "A"
+    guarded_arm_ids = guard.get("guarded_arm_ids")
+    if not isinstance(guarded_arm_ids, list) or not guarded_arm_ids:
+        guarded_arm_ids = ["B"]
+    guarded_arm_ids = [str(x).strip() for x in guarded_arm_ids if str(x).strip()]
+
+    selected_id = str(selected.get("id", "")).strip()
+    if selected_id not in guarded_arm_ids:
+        return selected, None
+
+    window_runs = int(guard.get("window_runs", 50) or 50)
+    min_samples = int(guard.get("min_samples", 8) or 8)
+    max_fail_rate = float(guard.get("max_fail_rate", 0.15) or 0.15)
+    max_avg_elapsed_ms = int(guard.get("max_avg_elapsed_ms", 20000) or 20000)
+
+    rows = read_ab_runs(AB_RUN_LOG_PATH, max_rows=max(window_runs * 3, 120))
+    samples = [x for x in rows if str(x.get("arm_id", "")).strip() == selected_id]
+    samples = samples[-window_runs:]
+    if len(samples) < min_samples:
+        return selected, None
+
+    failures = sum(1 for x in samples if not bool(x.get("ok", False)))
+    fail_rate = failures / max(len(samples), 1)
+    elapsed_vals: List[int] = []
+    for row in samples:
+        try:
+            val = int(row.get("elapsed_ms", 0) or 0)
+        except Exception:
+            val = 0
+        if val > 0:
+            elapsed_vals.append(val)
+    avg_elapsed = int(sum(elapsed_vals) / len(elapsed_vals)) if elapsed_vals else 0
+
+    fail_degraded = fail_rate > max_fail_rate
+    latency_degraded = bool(avg_elapsed and avg_elapsed > max_avg_elapsed_ms)
+    if not (fail_degraded or latency_degraded):
+        return selected, None
+
+    fallback_arm = find_arm_by_id(arms, fallback_arm_id)
+    if not fallback_arm:
+        return selected, None
+
+    reasons: List[str] = []
+    if fail_degraded:
+        reasons.append(f"fail_rate={fail_rate:.3f}>{max_fail_rate:.3f}")
+    if latency_degraded:
+        reasons.append(f"avg_elapsed_ms={avg_elapsed}>{max_avg_elapsed_ms}")
+    guard_meta = {
+        "applied": True,
+        "requested_arm_id": selected_id,
+        "fallback_arm_id": str(fallback_arm.get("id", fallback_arm_id)),
+        "samples": len(samples),
+        "fail_rate": round(fail_rate, 4),
+        "avg_elapsed_ms": avg_elapsed,
+        "reason": " / ".join(reasons),
+        "window_runs": window_runs,
+    }
+    return fallback_arm, guard_meta
+
+
 def pick_ab_router_for_qa(message: str, env: Dict[str, str]) -> Tuple[Dict[str, str], Optional[Dict[str, Any]]]:
     config = load_ab_router_config(env)
     enabled = bool_from_env(env.get("ROBY_ORCH_AB_ROUTER", ""), default=bool(config.get("enabled", False)))
@@ -276,30 +406,14 @@ def pick_ab_router_for_qa(message: str, env: Dict[str, str]) -> Tuple[Dict[str, 
     if not selected:
         return {}, None
 
-    overrides: Dict[str, str] = {}
-    if selected.get("model"):
-        overrides["ROBY_ORCH_GEMINI_MODEL"] = str(selected["model"])
-    if selected.get("length"):
-        overrides["ROBY_ORCH_GEMINI_LENGTH"] = str(selected["length"])
-    if selected.get("qa_max_tokens"):
-        overrides["ROBY_ORCH_QA_MAX_TOKENS"] = str(selected["qa_max_tokens"])
-    if selected.get("qa_retry_max_tokens"):
-        overrides["ROBY_ORCH_QA_RETRY_MAX_TOKENS"] = str(selected["qa_retry_max_tokens"])
-    if selected.get("qa_timeout_sec"):
-        overrides["ROBY_ORCH_QA_TIMEOUT_SEC"] = str(selected["qa_timeout_sec"])
-    if selected.get("prompt"):
-        overrides["ROBY_ORCH_GEMINI_QA_PROMPT"] = str(selected["prompt"])
-    elif selected.get("prompt_env_key"):
-        prompt_env_key = str(selected.get("prompt_env_key"))
-        prompt_env_value = env.get(prompt_env_key, "").strip()
-        if prompt_env_value:
-            overrides["ROBY_ORCH_GEMINI_QA_PROMPT"] = prompt_env_value
+    guarded_selected, guard_meta = apply_ab_health_guard(selected, arms, qa_conf, env)
+    overrides = build_qa_overrides_from_arm(guarded_selected, env)
 
     decision = {
         "enabled": True,
         "route": ROUTE_QA,
-        "arm_id": str(selected.get("id", "unknown")),
-        "label": str(selected.get("label", "")),
+        "arm_id": str(guarded_selected.get("id", "unknown")),
+        "label": str(guarded_selected.get("label", "")),
         "bucket": bucket,
         "total_weight": total,
         "seed": seed,
@@ -307,6 +421,8 @@ def pick_ab_router_for_qa(message: str, env: Dict[str, str]) -> Tuple[Dict[str, 
         "overrides": sorted(list(overrides.keys())),
         "ts": datetime.now(JST).isoformat(),
     }
+    if guard_meta:
+        decision["guard"] = guard_meta
     return overrides, decision
 
 
@@ -2183,6 +2299,7 @@ def main() -> int:
     }
     append_jsonl(RUN_LOG_PATH, result)
     if ab_decision:
+        guard = ab_decision.get("guard") if isinstance(ab_decision.get("guard"), dict) else {}
         append_jsonl(
             AB_RUN_LOG_PATH,
             {
@@ -2195,6 +2312,9 @@ def main() -> int:
                 "total_weight": ab_decision.get("total_weight"),
                 "ok": bool(action.get("ok", False)),
                 "elapsed_ms": result["elapsed_ms"],
+                "guard_applied": bool(guard.get("applied", False)),
+                "requested_arm_id": guard.get("requested_arm_id"),
+                "guard_reason": guard.get("reason", ""),
             },
         )
     if bool_from_env(env.get("ROBY_IMMUTABLE_AUDIT", "1"), default=True):

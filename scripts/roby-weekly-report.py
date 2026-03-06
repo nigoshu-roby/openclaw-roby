@@ -155,8 +155,9 @@ def summarize_freshness_from_drill(drill_summary: Dict[str, Any]) -> Dict[str, A
 
 def summarize_ab(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not items:
-        return {"runs": 0, "arms": {}}
+        return {"runs": 0, "arms": {}, "guard_applied_runs": 0}
     by_arm: Dict[str, Dict[str, Any]] = {}
+    guard_applied_runs = 0
     for row in items:
         arm = str(row.get("arm_id") or "unknown")
         b = by_arm.setdefault(arm, {"runs": 0, "ok": 0, "avg_elapsed_ms": 0.0})
@@ -164,11 +165,13 @@ def summarize_ab(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         if bool(row.get("ok", False)):
             b["ok"] += 1
         b["avg_elapsed_ms"] += float(row.get("elapsed_ms", 0) or 0)
+        if bool(row.get("guard_applied", False)):
+            guard_applied_runs += 1
     for arm, b in by_arm.items():
         runs = int(b["runs"])
         b["ok_rate"] = round((int(b["ok"]) / runs), 4) if runs else 0.0
         b["avg_elapsed_ms"] = int(b["avg_elapsed_ms"] / runs) if runs else 0
-    return {"runs": len(items), "arms": by_arm}
+    return {"runs": len(items), "arms": by_arm, "guard_applied_runs": guard_applied_runs}
 
 
 def summarize_ops_from_audit(items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -237,6 +240,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
         "",
         "## AB Router",
         f"- runs: {ab_s.get('runs', 0)}",
+        f"- guard_applied_runs: {ab_s.get('guard_applied_runs', 0)}",
     ]
     arms = (ab_s.get("arms") or {})
     if arms:
@@ -363,6 +367,10 @@ def main() -> int:
                         "self_growth_runs": int(report["ops"].get("self_growth", {}).get("runs", 0)),
                         "evaluation_harness_runs": int(report["ops"].get("evaluation_harness", {}).get("runs", 0)),
                         "runbook_drill_runs": int(report["ops"].get("runbook_drill", {}).get("runs", 0)),
+                    },
+                    "ab": {
+                        "runs": int(report.get("ab", {}).get("runs", 0)),
+                        "guard_applied_runs": int(report.get("ab", {}).get("guard_applied_runs", 0)),
                     },
                     "slack_notified": bool(report.get("slack_notified", False)),
                     "slack_error": str(report.get("slack_error", "")),
