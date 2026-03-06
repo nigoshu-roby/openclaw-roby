@@ -46,7 +46,7 @@ CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
 ]
 OLLAMA_HINTS = [
-    "ollama", "ローカルllm", "local llm", "ローカルで回答", "ローカル回答"
+    "ollamaで回答", "ollamaで返答", "ローカルllm", "local llm", "ローカルで回答", "ローカル回答"
 ]
 MINUTES_HINTS = [
     "議事録", "notion", "gdocs", "google docs", "googlemeet", "google meet", "タスク抽出", "細分化", "neuronic", "tokiwagi"
@@ -105,6 +105,9 @@ SELF_STATUS_HINTS = [
 ]
 DIRECT_NEURONIC_REGISTER_HINTS = [
     "タスク登録", "登録して", "登録をお願いします", "追加して", "作成して", "入れ子", "親子", "配下", "配列してください",
+]
+TASK_ADD_HINTS = [
+    "タスク追加", "todo追加", "todo add", "task add", "add task",
 ]
 
 
@@ -447,9 +450,24 @@ def extract_latest_user_request(message: str) -> str:
 def is_direct_neuronic_register_request(message: str) -> bool:
     text = extract_latest_user_request(message)
     lower = text.lower()
+    if any(h in text or h in lower for h in TASK_ADD_HINTS):
+        return True
     if ("neuronic" not in lower) and ("ニューロニック" not in text):
         return False
     return any(h in text or h in lower for h in DIRECT_NEURONIC_REGISTER_HINTS)
+
+
+def is_explicit_local_qa_request(message: str) -> bool:
+    text = extract_latest_user_request(message).strip()
+    lower = text.lower()
+    if not text:
+        return False
+    has_engine = ("ollama" in lower) or ("ローカルllm" in lower) or ("local llm" in lower)
+    has_local_intent = any(
+        key in text or key in lower
+        for key in ["ローカルで回答", "ローカル回答", "ローカルで返答", "ollamaで回答", "ollamaで返答", "localで回答"]
+    )
+    return has_engine and has_local_intent
 
 
 def classify_intent_heuristic(message: str) -> str:
@@ -457,7 +475,9 @@ def classify_intent_heuristic(message: str) -> str:
     lower = intent_text.lower()
     if is_direct_neuronic_register_request(intent_text):
         return ROUTE_MINUTES
-    if any(k in lower for k in OLLAMA_HINTS):
+    if is_self_status_request(intent_text):
+        return ROUTE_QA
+    if is_explicit_local_qa_request(intent_text) or any(k in lower for k in OLLAMA_HINTS):
         return ROUTE_QA_LOCAL
     if any(k in lower for k in SELF_GROWTH_HINTS):
         return ROUTE_SELF_GROWTH
@@ -607,6 +627,27 @@ def is_low_detail_output(text: str) -> bool:
     if len(lines) <= 2 and any("目的" in ln or "案" in ln for ln in lines):
         return True
     return False
+
+
+def should_force_detailed_retry(text: str, message: str) -> bool:
+    if prefers_short_answer(message):
+        return False
+    if is_greeting_request(message) or is_self_status_request(message):
+        return False
+    normalized = (text or "").strip()
+    if not normalized:
+        return True
+    if len(normalized) < 220:
+        return True
+    required_sections = [
+        "## 目的",
+        "## 実行可能な提案",
+        "## 判断基準",
+        "## 推奨案",
+        "## 次のアクション",
+    ]
+    present = sum(1 for sec in required_sections if sec in normalized)
+    return present < 3
 
 
 def is_broken_qa_output(text: str, message: str) -> bool:
@@ -1407,9 +1448,59 @@ def _parse_hierarchical_nodes_from_message(message: str) -> List[Dict[str, Any]]
     return nodes
 
 
+def _parse_simple_task_entries(message: str) -> List[str]:
+    text = extract_latest_user_request(message).strip()
+    if not text:
+        return []
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return []
+
+    cmd_prefix = re.compile(r"^(?:タスク追加|todo追加|todo add|task add|add task)\s*[：:]?\s*", re.IGNORECASE)
+    bullet_prefix = re.compile(r"^(?:[-*・●◦▪︎■◆]+|\d+[.)])\s*")
+    entries: List[str] = []
+
+    for idx, line in enumerate(lines):
+        current = line
+        if idx == 0:
+            current = cmd_prefix.sub("", current).strip()
+            if not current:
+                continue
+        current = bullet_prefix.sub("", current).strip()
+        if current:
+            entries.append(current)
+
+    if len(entries) == 1:
+        single = entries[0]
+        if " / " in single:
+            split_vals = [p.strip() for p in single.split(" / ") if p.strip()]
+            if len(split_vals) > 1:
+                entries = split_vals
+        elif "、" in single:
+            split_vals = [p.strip() for p in single.split("、") if p.strip()]
+            if len(split_vals) > 1:
+                entries = split_vals
+
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for item in entries:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped[:50]
+
+
 def _build_direct_neuronic_tasks(message: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    root_title = _extract_root_task_title(message).strip() or "Robyチャット登録タスク"
+    root_title = _extract_root_task_title(message).strip()
+    if not root_title:
+        root_title = "Slack追加タスク" if is_direct_neuronic_register_request(message) else "Robyチャット登録タスク"
     nodes = _parse_hierarchical_nodes_from_message(message)
+    if not nodes:
+        simple_entries = _parse_simple_task_entries(message)
+        if simple_entries:
+            nodes = [{"level": 1, "title": item, "line_no": idx + 1} for idx, item in enumerate(simple_entries)]
     if not nodes:
         return [], {"root_title": root_title, "node_count": 0}
 
@@ -1715,7 +1806,10 @@ def handle_neuronic_direct_register(message: str, env: Dict[str, str], execute: 
     if not tasks:
         result["ok"] = False
         result["error"] = "no_hierarchical_tasks_detected"
-        result["note"] = "階層タスクを抽出できませんでした。箇条書き（■◆・- *）形式で指定してください。"
+        result["note"] = (
+            "タスクを抽出できませんでした。"
+            "『タスク追加: タイトル』または箇条書き（■◆・- *）形式で指定してください。"
+        )
         return result
     if not execute:
         result["ok"] = True
@@ -2066,6 +2160,19 @@ def handle_qa_gemini(
         text = raw
         if isinstance(parsed, (dict, list)):
             text = json.dumps(parsed, ensure_ascii=False)
+        if should_force_detailed_retry(text, message):
+            detailed_prompt = (
+                qa_prompt
+                + "\n回答要件: 実務でそのまま使える具体性で、"
+                  "『## 目的』『## 実行可能な提案（優先順）』『## 判断基準』『## 推奨案』『## 次のアクション』"
+                  "の5見出しを必ず含めてください。提案は最低3件、次のアクションは実行可能な単位で記載してください。"
+            )
+            d_parsed, d_raw = run_qa_generation(detailed_prompt, qa_input, qa_env)
+            d_text = d_raw
+            if isinstance(d_parsed, (dict, list)):
+                d_text = json.dumps(d_parsed, ensure_ascii=False)
+            if d_text and (len(d_text) > len(text) or not should_force_detailed_retry(d_text, message)):
+                text = d_text
         if is_feature_list_request(message) and is_low_detail_output(text):
             text = build_local_capability_summary(qa_env)
         elif is_broken_qa_output(text, message):
@@ -2304,7 +2411,7 @@ def main() -> int:
             print("ERROR: --message is required when --route auto is used.")
             return 2
         route = classify_intent_heuristic(args.message)
-        if env.get("ROBY_ORCH_GEMINI_CLASSIFIER", "0") == "1":
+        if env.get("ROBY_ORCH_GEMINI_CLASSIFIER", "0") == "1" and not is_direct_neuronic_register_request(args.message):
             gemini_cls = classify_intent_gemini(args.message, env)
             if gemini_cls:
                 route = gemini_cls.get("route", route)
