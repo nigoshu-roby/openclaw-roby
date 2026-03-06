@@ -209,7 +209,7 @@ DEFAULT_RULES_TEMPLATE: Dict[str, Dict[str, List[str]]] = {
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
-    env_path = Path.home() / ".openclaw" / ".env"
+    env_path = Path(env.get("ROBY_ENV_FILE", str(Path.home() / ".openclaw" / ".env"))).expanduser()
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -220,7 +220,8 @@ def load_env() -> Dict[str, str]:
             val = v.strip()
             if (val.startswith("\"") and val.endswith("\"")) or (val.startswith("'") and val.endswith("'")):
                 val = val[1:-1]
-            env[key] = val
+            if key not in env or not str(env.get(key, "")).strip():
+                env[key] = val
     return env
 
 

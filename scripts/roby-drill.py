@@ -31,8 +31,9 @@ ROBY_STATE_ROOT = Path.home() / ".openclaw" / "roby"
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
-    if ENV_PATH.exists():
-        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+    env_file = Path(env.get("ROBY_ENV_FILE", str(ENV_PATH))).expanduser()
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -41,7 +42,8 @@ def load_env() -> Dict[str, str]:
             val = v.strip()
             if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
                 val = val[1:-1]
-            env[key] = val
+            if key not in env or not str(env.get(key, "")).strip():
+                env[key] = val
     return env
 
 

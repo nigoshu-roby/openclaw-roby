@@ -319,6 +319,31 @@
   - `ROBY_ORCH_GMAIL_PROFILE=fast`（LLM未使用）
   - 必要時のみ `hybrid` / `quality` へ切替
 
+### 8.11.1 Completion Update（1Password Hybrid Secret Strategy）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-orchestrator.py`
+  - `scripts/roby-minutes.py`
+  - `scripts/roby-self-growth.py`
+  - `scripts/roby-notion-sync.py`
+  - `scripts/roby-drill.py`
+  - `scripts/roby-weekly-report.py`
+  - `skills/roby-mail/scripts/gmail_triage.py`
+  - 以上の `load_env()` を統一し、優先順位を
+    - 1. 実行時の環境変数
+    - 2. `ROBY_ENV_FILE`
+    - 3. 既定 `~/.openclaw/.env`
+         に変更
+  - `scripts/roby-cron-dispatch.sh` に `ROBY_SECRET_WRAPPER` を追加
+    - 例: `op run --env-file="$HOME/.openclaw/.env.1p" --`
+- Runbook:
+  - `docs/roby_1password_hybrid_runbook.md`
+- 方針:
+  - 開発は高速性を維持
+  - 自動運用は非対話認証で secrets を注入
+  - 平文 `.env` は low-risk 設定のみへ縮退
+
 ### 8.12 Completion Update（#5 Recall改善: coverage pass）
 
 - 完了日: 2026-03-06

@@ -54,6 +54,7 @@ LOG_DIR="${HOME}/.openclaw/roby"
 LOG_FILE="${LOG_DIR}/cron_${TASK}.log"
 LOCK_DIR="/tmp/roby-cron-${TASK}.lock"
 ENV_PATH="${HOME}/.openclaw/.env"
+SECRET_WRAPPER="${ROBY_SECRET_WRAPPER:-}"
 
 mkdir -p "$LOG_DIR"
 
@@ -118,7 +119,13 @@ cd "$ROOT_DIR"
 echo "[$(now)] START: task=${TASK} timeout=${TIMEOUT_SEC}s" >>"$LOG_FILE"
 
 (
-  "$PYTHON_BIN" scripts/roby-orchestrator.py --cron-task "$TASK" --execute --json
+  if [[ -n "$SECRET_WRAPPER" ]]; then
+    ROBY_CRON_TASK="$TASK" \
+    ROBY_CRON_PYTHON="$PYTHON_BIN" \
+    bash -lc "$SECRET_WRAPPER \"\$ROBY_CRON_PYTHON\" scripts/roby-orchestrator.py --cron-task \"\$ROBY_CRON_TASK\" --execute --json"
+  else
+    "$PYTHON_BIN" scripts/roby-orchestrator.py --cron-task "$TASK" --execute --json
+  fi
 ) >>"$LOG_FILE" 2>&1 &
 pid=$!
 
