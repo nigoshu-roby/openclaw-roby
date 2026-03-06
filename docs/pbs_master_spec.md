@@ -569,6 +569,17 @@
 - 目的:
   - cronが登録済みでも実行停止している「サイレント停止」をドリルで検知する
 
+### 8.27 Completion Update（Pipeline鮮度監視のepoch時刻対応）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-drill.py`
+    - `pipeline_freshness` の時刻パーサを拡張
+    - `ts` が UNIX epoch（int/float）で記録される JSONL（`*_runs.jsonl`）を正しく解釈
+    - これにより `self_growth/gmail/minutes` が実行済みでも `missing` 判定になる誤検知を解消
+- 目的:
+  - 鮮度監視の誤検知を減らし、実際に stale な系統のみを正確に警告する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

@@ -80,9 +80,19 @@ def _parse_json(raw: str) -> Dict[str, Any]:
 def _parse_ts(value: Any) -> Optional[datetime]:
     if value is None:
         return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=JST)
+        except Exception:
+            return None
     text = str(value).strip()
     if not text:
         return None
+    if text.isdigit():
+        try:
+            return datetime.fromtimestamp(float(text), tz=JST)
+        except Exception:
+            return None
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
