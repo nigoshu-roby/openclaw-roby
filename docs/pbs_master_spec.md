@@ -545,6 +545,30 @@
 - 目的:
   - 「ジョブは動くが cron 登録が壊れていた」を定期ドリルで早期検知する
 
+### 8.26 Completion Update（Pipeline鮮度監視をドリルへ追加）
+
+- 完了日: 2026-03-06
+- 実装:
+  - `scripts/roby-drill.py`
+    - `pipeline_freshness`（任意）を追加
+    - 監視対象:
+      - `self_growth_runs.jsonl`
+      - `minutes_runs.jsonl`
+      - `gmail_triage_runs.jsonl`
+      - `notion_sync_state.json`
+      - `reports/weekly_latest.json`
+    - `ROBY_DRILL_REQUIRE_CRON=1` で鮮度超過をFAIL扱いに可能
+    - 各パイプラインのしきい値を環境変数で調整可能
+      - `ROBY_DRILL_SELF_GROWTH_MAX_MIN`
+      - `ROBY_DRILL_MINUTES_MAX_MIN`
+      - `ROBY_DRILL_GMAIL_MAX_MIN`
+      - `ROBY_DRILL_NOTION_MAX_MIN`
+      - `ROBY_DRILL_WEEKLY_MAX_MIN`
+  - `docs/roby_runbook_drill.md`
+    - 鮮度FAIL時の一次対応を追記
+- 目的:
+  - cronが登録済みでも実行停止している「サイレント停止」をドリルで検知する
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

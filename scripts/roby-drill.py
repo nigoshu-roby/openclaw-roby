@@ -26,6 +26,7 @@ LATEST_PATH = STATE_DIR / "latest.json"
 HISTORY_PATH = STATE_DIR / "history.jsonl"
 LATEST_MD_PATH = STATE_DIR / "latest.md"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
+ROBY_STATE_ROOT = Path.home() / ".openclaw" / "roby"
 
 
 def load_env() -> Dict[str, str]:
@@ -74,6 +75,40 @@ def _parse_json(raw: str) -> Dict[str, Any]:
     except Exception:
         return {}
     return {}
+
+
+def _parse_ts(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=JST)
+        return dt.astimezone(JST)
+    except Exception:
+        return None
+
+
+def _read_last_ts(path: Path) -> Optional[datetime]:
+    if not path.exists():
+        return None
+    lines = [ln.strip() for ln in path.read_text(encoding="utf-8", errors="ignore").splitlines() if ln.strip()]
+    for raw in reversed(lines):
+        try:
+            obj = json.loads(raw)
+            if not isinstance(obj, dict):
+                continue
+            dt = _parse_ts(obj.get("ts") or obj.get("timestamp"))
+            if dt:
+                return dt
+        except Exception:
+            continue
+    return None
 
 
 def check_gateway_status(env: Dict[str, str]) -> Dict[str, Any]:
@@ -361,6 +396,77 @@ def check_orchestrator_cron_status(env: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
+def check_pipeline_freshness(env: Dict[str, str]) -> Dict[str, Any]:
+    require_cron = str(env.get("ROBY_DRILL_REQUIRE_CRON", "0")).strip() == "1"
+    kind = "required" if require_cron else "optional"
+    now = datetime.now(JST)
+    targets = [
+        ("self_growth", ROBY_STATE_ROOT / "self_growth_runs.jsonl", int(env.get("ROBY_DRILL_SELF_GROWTH_MAX_MIN", "180"))),
+        ("minutes_sync", ROBY_STATE_ROOT / "minutes_runs.jsonl", int(env.get("ROBY_DRILL_MINUTES_MAX_MIN", "240"))),
+        ("gmail_triage", ROBY_STATE_ROOT / "gmail_triage_runs.jsonl", int(env.get("ROBY_DRILL_GMAIL_MAX_MIN", "120"))),
+        ("notion_sync", ROBY_STATE_ROOT / "notion_sync_state.json", int(env.get("ROBY_DRILL_NOTION_MAX_MIN", "1440"))),
+        ("weekly_report", ROBY_STATE_ROOT / "reports" / "weekly_latest.json", int(env.get("ROBY_DRILL_WEEKLY_MAX_MIN", "10080"))),
+    ]
+    statuses: List[str] = []
+    stale: List[str] = []
+
+    for name, path, max_min in targets:
+        dt: Optional[datetime] = None
+        if path.name.endswith(".jsonl"):
+            dt = _read_last_ts(path)
+        else:
+            if path.exists():
+                try:
+                    obj = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(obj, dict):
+                        dt = _parse_ts(obj.get("updated_at") or obj.get("generated_at") or obj.get("ts"))
+                except Exception:
+                    dt = None
+
+        if dt is None:
+            stale.append(f"{name}:missing")
+            statuses.append(f"{name}=missing")
+            continue
+
+        age_min = int((now - dt).total_seconds() / 60)
+        statuses.append(f"{name}={age_min}m")
+        if age_min > max_min:
+            stale.append(f"{name}:{age_min}m>{max_min}m")
+
+    detail = ", ".join(statuses) if statuses else "no status"
+    if stale:
+        detail += " / stale: " + ", ".join(stale)
+
+    if not stale:
+        return {
+            "id": "pipeline_freshness",
+            "kind": kind,
+            "ok": True,
+            "elapsed_ms": 0,
+            "detail": detail,
+            "command": "local state files",
+        }
+
+    if require_cron:
+        return {
+            "id": "pipeline_freshness",
+            "kind": kind,
+            "ok": False,
+            "elapsed_ms": 0,
+            "detail": detail,
+            "command": "local state files",
+        }
+
+    return {
+        "id": "pipeline_freshness",
+        "kind": kind,
+        "ok": True,
+        "elapsed_ms": 0,
+        "detail": detail,
+        "command": "local state files",
+    }
+
+
 def check_minutes_neuronic_regression(env: Dict[str, str]) -> Dict[str, Any]:
     run = run_cmd(
         [
@@ -483,6 +589,7 @@ CHECKS = {
     "notion_sync_dry_run": check_notion_sync_dry_run,
     "weekly_report_smoke": check_weekly_report_smoke,
     "orchestrator_cron_status": check_orchestrator_cron_status,
+    "pipeline_freshness": check_pipeline_freshness,
     "gmail_triage_dry_run": check_gmail_dry_run,
 }
 

@@ -37,7 +37,8 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
 9. `notion_sync_dry_run`（任意, Notion token未設定ならSKIP）
 10. `weekly_report_smoke`（任意）
 11. `orchestrator_cron_status`（任意, `ROBY_DRILL_REQUIRE_CRON=1` で必須化）
-12. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
+12. `pipeline_freshness`（任意, `ROBY_DRILL_REQUIRE_CRON=1` で必須化）
+13. `gmail_triage_dry_run`（任意, `GOG_ACCOUNT` 未設定ならSKIP）
 
 ## 部分実行
 
@@ -163,6 +164,23 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
   - `bash /Users/<user>/OpenClaw/scripts/install_roby_orchestrator_cron.sh`
 - cronを必須運用にする場合:
   - `ROBY_DRILL_REQUIRE_CRON=1` を `~/.openclaw/.env` へ設定
+
+### pipeline_freshness FAIL
+
+- 各状態ファイルの最終更新時刻を確認:
+  - `~/.openclaw/roby/self_growth_runs.jsonl`
+  - `~/.openclaw/roby/minutes_runs.jsonl`
+  - `~/.openclaw/roby/gmail_triage_runs.jsonl`
+  - `~/.openclaw/roby/notion_sync_state.json`
+  - `~/.openclaw/roby/reports/weekly_latest.json`
+- cron実行ログ確認:
+  - `~/.openclaw/roby/cron_*.log`
+- しきい値調整（分単位）:
+  - `ROBY_DRILL_SELF_GROWTH_MAX_MIN`
+  - `ROBY_DRILL_MINUTES_MAX_MIN`
+  - `ROBY_DRILL_GMAIL_MAX_MIN`
+  - `ROBY_DRILL_NOTION_MAX_MIN`
+  - `ROBY_DRILL_WEEKLY_MAX_MIN`
 
 ## 監査連携
 
