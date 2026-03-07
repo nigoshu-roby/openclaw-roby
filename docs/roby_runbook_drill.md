@@ -9,13 +9,13 @@
 ## 実行コマンド
 
 ```bash
-python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json
+python3 ./scripts/roby-drill.py --json
 ```
 
 成功時も含めてSlack通知したい場合:
 
 ```bash
-python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
+python3 ./scripts/roby-drill.py --json --notify
 ```
 
 出力:
@@ -43,7 +43,7 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json --notify
 ## 部分実行
 
 ```bash
-python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --check gateway_status --check audit_verify --json
+python3 ./scripts/roby-drill.py --check gateway_status --check audit_verify --json
 ```
 
 ## 失敗時の一次対応
@@ -60,7 +60,7 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --check gateway_status --ch
 確認コマンド:
 
 ```bash
-python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --json
+python3 ./scripts/roby-eval-harness.py --json
 ```
 
 失敗ケースだけ確認:
@@ -72,7 +72,7 @@ jq '.results[] | select(.ok==false) | {id, failures, route, execute, elapsed_ms}
 ケース単体で再現:
 
 ```bash
-python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_status_neuronic --json
+python3 ./scripts/roby-eval-harness.py --case qa_local_status_neuronic --json
 ```
 
 切り分け観点:
@@ -88,13 +88,13 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
 
 ### gateway_status FAIL
 
-- `node /Users/<user>/OpenClaw/openclaw.mjs gateway status`
-- 必要なら `node /Users/<user>/OpenClaw/openclaw.mjs gateway restart`
-- 起動系は `/Users/<user>/OpenClaw/docs/roby_orchestrator_cron_runbook.md` を参照
+- `node ./openclaw.mjs gateway status`
+- 必要なら `node ./openclaw.mjs gateway restart`
+- 起動系は `docs/roby_orchestrator_cron_runbook.md` を参照
 
 ### orchestrator_qa_smoke FAIL
 
-- `python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py --route qa_gemini --message "こんにちは" --execute --json`
+- `python3 ./scripts/roby-orchestrator.py --route qa_gemini --message "こんにちは" --execute --json`
 - `~/.openclaw/roby/orchestrator_runs.jsonl` を確認
 
 ### ollama_health FAIL
@@ -106,29 +106,29 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
 
 ### eval_harness_smoke FAIL
 
-- `python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --json`
+- `python3 ./scripts/roby-eval-harness.py --json`
 - `~/.openclaw/roby/evals/latest.json` の `gates.failures` / `results[].failures` を確認
 
 ### eval_self_awareness_cases FAIL
 
-- `python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_status_ollama --case qa_local_status_neuronic --case qa_feature_list_quality --case qa_no_prompt_leak_for_detailed_question --json`
+- `python3 ./scripts/roby-eval-harness.py --case qa_local_status_ollama --case qa_local_status_neuronic --case qa_feature_list_quality --case qa_no_prompt_leak_for_detailed_question --json`
 - `~/.openclaw/roby/evals/latest.json` で `results[].id` と `failures` を確認
 - 切り分け観点は本書「#3 Evaluationケース（自己把握/プロンプト漏れ）の見方」を参照
 
 ### audit_verify FAIL
 
-- `python3 /Users/<user>/OpenClaw/scripts/roby_audit.py verify --json`
+- `python3 ./scripts/roby_audit.py verify --json`
 - 監査ログ: `~/.openclaw/roby/audit/events.jsonl`
 - 破損行がある場合はファイル退避後、以降を新規作成し、原因調査をIssue化
 
 ### gmail_triage_dry_run FAIL
 
 - OAuth資格情報と `GOG_ACCOUNT` を確認
-- `python3 /Users/<user>/OpenClaw/skills/roby-mail/scripts/gmail_triage.py --account <account> --query "newer_than:1d in:inbox" --max 5 --dry-run --verbose`
+- `python3 ./skills/roby-mail/scripts/gmail_triage.py --account <account> --query "newer_than:1d in:inbox" --max 5 --dry-run --verbose`
 
 ### minutes_neuronic_regression FAIL
 
-- `python3 /Users/<user>/OpenClaw/scripts/tests/test_roby_minutes_neuronic.py`
+- `python3 ./scripts/tests/test_roby_minutes_neuronic.py`
 - 重点確認:
   - `parent_origin_id / sibling_order` 正常系
   - 413分割再送
@@ -136,20 +136,20 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
 
 ### gmail_neuronic_regression FAIL
 
-- `python3 /Users/<user>/OpenClaw/skills/roby-mail/scripts/test_gmail_triage_neuronic.py`
+- `python3 ./skills/roby-mail/scripts/test_gmail_triage_neuronic.py`
 - 重点確認:
   - `/tasks/import` 404時 `/tasks/bulk` フォールバック
   - 413分割再送
 
 ### notion_sync_dry_run FAIL
 
-- `python3 /Users/<user>/OpenClaw/scripts/roby-notion-sync.py --dry-run`
+- `python3 ./scripts/roby-notion-sync.py --dry-run`
 - Notion token（`NOTION_API_KEY` / `~/.config/notion/api_key`）を確認
 - `gh project item-list` の実行権限（`gh auth status`）を確認
 
 ### weekly_report_smoke FAIL
 
-- `python3 /Users/<user>/OpenClaw/scripts/roby-weekly-report.py --json`
+- `python3 ./scripts/roby-weekly-report.py --json`
 - `~/.openclaw/roby/reports/weekly_latest.json` の `eval/drill/audit/ops` を確認
 - `~/.openclaw/roby/audit/events.jsonl` に `weekly_report.run` が追記されるか確認
 
@@ -161,7 +161,7 @@ python3 /Users/<user>/OpenClaw/scripts/roby-eval-harness.py --case qa_local_stat
   - `ROBY_ORCH_CRON_MINUTES_SYNC`
   - `ROBY_ORCH_CRON_GMAIL_TRIAGE`
 - 再インストール:
-  - `bash /Users/<user>/OpenClaw/scripts/install_roby_orchestrator_cron.sh`
+  - `bash ./scripts/install_roby_orchestrator_cron.sh`
 - cronを必須運用にする場合:
   - `ROBY_DRILL_REQUIRE_CRON=1` を `~/.openclaw/.env` へ設定
 

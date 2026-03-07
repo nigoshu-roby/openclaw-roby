@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from roby_audit import append_audit_event
 
 JST = timezone(timedelta(hours=9))
-OPENCLAW_REPO = Path("/Users/<user>/OpenClaw")
+OPENCLAW_REPO = Path(__file__).resolve().parent.parent
 ORCH_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-orchestrator.py"
 DEFAULT_CASES_PATH = OPENCLAW_REPO / "config" / "pbs" / "eval_cases.json"
 DEFAULT_POLICY_PATH = OPENCLAW_REPO / "config" / "pbs" / "eval_policy.json"

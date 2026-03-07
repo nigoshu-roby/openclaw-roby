@@ -31,7 +31,7 @@ Environment variables (recommended in `~/.openclaw/.env`):
 ## Run
 
 ```bash
-python3 /Users/<user>/OpenClaw/skills/roby-mail/scripts/gmail_triage.py   --account <your-work-email>   --query "newer_than:2d in:inbox"   --max 50
+python3 ./skills/roby-mail/scripts/gmail_triage.py --account <your-work-email> --query "newer_than:2d in:inbox" --max 50
 ```
 
 Options:

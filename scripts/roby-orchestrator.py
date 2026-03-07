@@ -20,7 +20,7 @@ ENV_PATH = Path.home() / ".openclaw" / ".env"
 STATE_DIR = Path.home() / ".openclaw" / "roby"
 RUN_LOG_PATH = STATE_DIR / "orchestrator_runs.jsonl"
 JST = timezone(timedelta(hours=9))
-OPENCLAW_REPO = Path("/Users/<user>/OpenClaw")
+OPENCLAW_REPO = Path(__file__).resolve().parent.parent
 MINUTES_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-minutes.py"
 SELF_GROWTH_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-self-growth.py"
 GMAIL_TRIAGE_SCRIPT = OPENCLAW_REPO / "skills" / "roby-mail" / "scripts" / "gmail_triage.py"

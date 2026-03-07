@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict
 from roby_audit import append_audit_event
 
-REPO_DIR = Path("/Users/<user>/OpenClaw")
+REPO_DIR = Path(__file__).resolve().parent.parent
 STATE_DIR = Path.home() / ".openclaw" / "roby"
 RUNS_LOG = STATE_DIR / "self_growth_runs.jsonl"
 ENV_PATH = Path.home() / ".openclaw" / ".env"

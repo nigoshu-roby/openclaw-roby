@@ -52,7 +52,7 @@ ROBY_GH_OWNER=nigoshu-roby
 ROBY_GH_PROJECT_NUMBER=1
 ROBY_ORCH_GEMINI_QA_NATIVE=1
 ROBY_ORCH_OLLAMA_MODEL=qwen2.5:7b
-ROBY_ENV_FILE=/Users/<user>/.openclaw/.env
+ROBY_ENV_FILE=$HOME/.openclaw/.env
 ```
 
 ### `~/.openclaw/.env.1p`
@@ -60,13 +60,13 @@ ROBY_ENV_FILE=/Users/<user>/.openclaw/.env
 Put 1Password references here:
 
 ```dotenv
-OPENAI_API_KEY=op://<vault>/OpenAI/API Key
-GEMINI_API_KEY=op://<vault>/Gemini/API Key
-NOTION_TOKEN=op://<vault>/Notion/Token
-SLACK_WEBHOOK_URL=op://<vault>/Slack/Webhook
-SLACK_BOT_TOKEN=op://<vault>/Slack/Bot Token
-SLACK_SIGNING_SECRET=op://<vault>/Slack/Signing Secret
-NEURONIC_TOKEN=op://<vault>/Neuronic/Token
+OPENAI_API_KEY=op://<vault>/<item>/api_key
+GEMINI_API_KEY=op://<vault>/<item>/api_key
+NOTION_TOKEN=op://<vault>/<item>/token
+SLACK_WEBHOOK_URL=op://<vault>/<item>/webhook_url
+SLACK_BOT_TOKEN=op://<vault>/<item>/bot_token
+SLACK_SIGNING_SECRET=op://<vault>/<item>/signing_secret
+NEURONIC_TOKEN=op://<vault>/<item>/token
 ```
 
 ## Manual development usage
@@ -75,7 +75,7 @@ Example:
 
 ```bash
 op run --env-file="$HOME/.openclaw/.env.1p" -- \
-  python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py \
+  python3 ./scripts/roby-orchestrator.py \
   --message "現在の機能をリスト化してください" --execute --json
 ```
 
@@ -83,7 +83,7 @@ If you want shorthand locally, `opx` is acceptable for manual runs only.
 
 ## Cron / daemon usage
 
-`/Users/<user>/OpenClaw/scripts/roby-cron-dispatch.sh` supports a wrapper:
+`./scripts/roby-cron-dispatch.sh` supports a wrapper:
 
 ```bash
 export ROBY_SECRET_WRAPPER='op run --env-file="$HOME/.openclaw/.env.1p" --'
@@ -121,7 +121,7 @@ Touch ID is acceptable for:
 ## Validation checklist
 
 1. Manual run succeeds with `op run`
-2. `python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py --message "ollama導入できましたか？" --json`
+2. `python3 ./scripts/roby-orchestrator.py --message "ollama導入できましたか？" --json`
    returns expected output under injected env
 3. `roby-cron-dispatch.sh gmail_triage` works with wrapper enabled
 4. Slack notification still sends

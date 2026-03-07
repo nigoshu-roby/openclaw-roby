@@ -32,9 +32,9 @@
 
 ### 2.1 システム境界
 
-- Roby/OpenClaw: `/Users/<user>/OpenClaw`
-- Neuronic API: `/Users/<user>/Documents/New project/taskd`
-- Neuronic UI: `/Users/<user>/Documents/New project/TaskToolMac`
+- Roby/OpenClaw: `<OPENCLAW_REPO>`
+- Neuronic API: `<NEURONIC_TASKD_REPO>`
+- Neuronic UI: `<NEURONIC_UI_REPO>`
 - Neuronic 公開リポジトリ（統合先）:
   - `https://github.com/nigoshu-roby/Neuronic.git`
 
@@ -191,15 +191,15 @@
 ### 5.3 ローカルCLI（実行確認）
 
 - Orchestrator:
-  - `python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py --message "現在の機能をリスト化してください" --execute --json`
+  - `python3 ./scripts/roby-orchestrator.py --message "現在の機能をリスト化してください" --execute --json`
 - Minutes:
-  - `python3 /Users/<user>/OpenClaw/scripts/roby-minutes.py --list`
+  - `python3 ./scripts/roby-minutes.py --list`
 - Gmail:
-  - `python3 /Users/<user>/OpenClaw/skills/roby-mail/scripts/gmail_triage.py --account <MAIL> --query "newer_than:1d in:inbox" --max 20 --dry-run --verbose`
+  - `python3 ./skills/roby-mail/scripts/gmail_triage.py --account <MAIL> --query "newer_than:1d in:inbox" --max 20 --dry-run --verbose`
 - taskd health:
   - `curl -s http://127.0.0.1:5174/health`
 - Drill:
-  - `python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json`
+  - `python3 ./scripts/roby-drill.py --json`
 
 ---
 
@@ -245,7 +245,7 @@
   - `minutes_sync.run`
   - `evaluation_harness.run`
 - 検証コマンド:
-  - `python3 /Users/<user>/OpenClaw/scripts/roby_audit.py verify --json`
+  - `python3 ./scripts/roby_audit.py verify --json`
 - 制御:
   - `ROBY_IMMUTABLE_AUDIT=1`（既定ON）
 
@@ -747,7 +747,7 @@
   - `roby-orchestrator.py` / `roby-self-growth.py` / `roby-minutes.py` / `roby-eval-harness.py`
     から監査イベントを自動記録
 - 運用:
-  - 監査確認: `python3 /Users/<user>/OpenClaw/scripts/roby_audit.py verify --json`
+  - 監査確認: `python3 ./scripts/roby_audit.py verify --json`
 
 ### 8.5 Completion Update（#10 Runbook/Drill）
 
@@ -793,7 +793,7 @@
     - legacyレスポンス互換（`hierarchy_applied/order_applied` 未返却）
     - `Payload Too Large` 時の分割再送（413→分割→成功）
 - 検証:
-  - `python3 /Users/<user>/OpenClaw/scripts/tests/test_roby_minutes_neuronic.py` で `OK`
+  - `python3 ./scripts/tests/test_roby_minutes_neuronic.py` で `OK`
 
 ### 8.8 Completion Update（#5 Minutes抽出精度改善）
 

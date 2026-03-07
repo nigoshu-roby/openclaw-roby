@@ -37,8 +37,8 @@
 ## 初回移行
 
 ```bash
-chmod +x /Users/<user>/OpenClaw/scripts/roby-keychain-*.sh
-PRUNE_ENV=1 /Users/<user>/OpenClaw/scripts/roby-keychain-import.sh
+chmod +x ./scripts/roby-keychain-*.sh
+PRUNE_ENV=1 ./scripts/roby-keychain-import.sh
 ```
 
 これで:
@@ -51,7 +51,7 @@ PRUNE_ENV=1 /Users/<user>/OpenClaw/scripts/roby-keychain-import.sh
 ## 状態確認
 
 ```bash
-/Users/<user>/OpenClaw/scripts/roby-keychain-status.sh
+./scripts/roby-keychain-status.sh
 ```
 
 このスクリプトは値を表示しない。
@@ -59,8 +59,8 @@ PRUNE_ENV=1 /Users/<user>/OpenClaw/scripts/roby-keychain-import.sh
 ## 手動実行
 
 ```bash
-/Users/<user>/OpenClaw/scripts/roby-keychain-run.sh \
-  python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py \
+./scripts/roby-keychain-run.sh \
+  python3 ./scripts/roby-orchestrator.py \
   --message "現在の機能をリスト化してください" --json
 ```
 
@@ -71,7 +71,7 @@ PRUNE_ENV=1 /Users/<user>/OpenClaw/scripts/roby-keychain-import.sh
 必要なら:
 
 ```bash
-export ROBY_SECRET_WRAPPER='/Users/<user>/OpenClaw/scripts/roby-keychain-run.sh'
+export ROBY_SECRET_WRAPPER='./scripts/roby-keychain-run.sh'
 ```
 
 `scripts/roby-cron-dispatch.sh` は Slack 異常通知の webhook も Keychain から参照できる。

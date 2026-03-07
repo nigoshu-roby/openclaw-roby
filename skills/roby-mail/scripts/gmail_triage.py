@@ -196,7 +196,6 @@ DEFAULT_RULES_TEMPLATE: Dict[str, Dict[str, List[str]]] = {
         "sender_contains": [
             "support@crmstyle.com",
             "noreply@autoro.io",
-            "<internal-user-email>",
         ],
         "subject_contains": [
             "定例ミーティング",

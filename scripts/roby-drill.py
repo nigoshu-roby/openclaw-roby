@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from roby_audit import append_audit_event
 
 JST = timezone(timedelta(hours=9))
-OPENCLAW_REPO = Path("/Users/<user>/OpenClaw")
+OPENCLAW_REPO = Path(__file__).resolve().parent.parent
 STATE_DIR = Path.home() / ".openclaw" / "roby" / "drills"
 LATEST_PATH = STATE_DIR / "latest.json"
 HISTORY_PATH = STATE_DIR / "history.jsonl"

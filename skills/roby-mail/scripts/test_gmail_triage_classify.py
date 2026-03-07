@@ -45,7 +45,7 @@ class TestGmailTriageClassify(TestCase):
             sender="external@example.com",
             body="共有です",
             rules={},
-            cc="<your-work-email>",
+            cc="member@tokiwa-gi.com",
         )
         self.assertEqual(category, "needs_review")
         self.assertEqual(rule, "internal_domain_review")

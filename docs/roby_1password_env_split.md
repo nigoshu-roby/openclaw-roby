@@ -121,9 +121,9 @@ ROBY_ORCH_OLLAMA_BASE_URL=http://127.0.0.1:11434
 `~/.openclaw/.env.1p`
 
 ```dotenv
-OPENAI_API_KEY=op://<vault>/OpenAI/api_key
-GEMINI_API_KEY=op://<vault>/Gemini/api_key
-SLACK_BOT_TOKEN=op://<vault>/Slack/bot_token
+OPENAI_API_KEY=op://<vault>/<item>/api_key
+GEMINI_API_KEY=op://<vault>/<item>/api_key
+SLACK_BOT_TOKEN=op://<vault>/<item>/bot_token
 ```
 
 ## 実行方法
@@ -132,7 +132,7 @@ SLACK_BOT_TOKEN=op://<vault>/Slack/bot_token
 
 ```bash
 op run --env-file="$HOME/.openclaw/.env.1p" -- \
-  python3 /Users/<user>/OpenClaw/scripts/roby-orchestrator.py --message "現在の機能をリスト化してください" --json
+  python3 ./scripts/roby-orchestrator.py --message "現在の機能をリスト化してください" --json
 ```
 
 cron / 常駐実行:

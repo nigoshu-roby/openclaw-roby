@@ -18,7 +18,7 @@ All jobs run via:
 ## Install
 
 ```bash
-cd /Users/<user>/OpenClaw
+cd <OPENCLAW_REPO>
 chmod +x scripts/roby-cron-dispatch.sh scripts/install_roby_orchestrator_cron.sh scripts/uninstall_roby_orchestrator_cron.sh
 ./scripts/install_roby_orchestrator_cron.sh
 ```
@@ -34,7 +34,7 @@ cron jobs are installed in Keychain-first mode by default.
 Check current status:
 
 ```bash
-/Users/<user>/OpenClaw/scripts/roby-keychain-status.sh
+./scripts/roby-keychain-status.sh
 ```
 
 ## Default schedule
@@ -91,7 +91,7 @@ ROBY_GH_PROJECT_NUMBER=1
 Reinstall cron:
 
 ```bash
-cd /Users/<user>/OpenClaw
+cd <OPENCLAW_REPO>
 ./scripts/install_roby_orchestrator_cron.sh
 ```
 
@@ -120,7 +120,7 @@ Artifacts:
 ## Custom schedule
 
 ```bash
-cd /Users/<user>/OpenClaw
+cd <OPENCLAW_REPO>
 SELF_GROWTH_CRON="5 * * * *" \
 MINUTES_SYNC_CRON="45 */1 * * *" \
 GMAIL_TRIAGE_CRON="*/20 * * * *" \
@@ -170,7 +170,7 @@ ROBY_ORCH_AB_ROUTER=1
 整合性チェック:
 
 ```bash
-python3 /Users/<user>/OpenClaw/scripts/roby_audit.py verify --json
+python3 ./scripts/roby_audit.py verify --json
 ```
 
 ## Runbook Drill
@@ -178,7 +178,7 @@ python3 /Users/<user>/OpenClaw/scripts/roby_audit.py verify --json
 運用スモークチェック:
 
 ```bash
-python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json
+python3 ./scripts/roby-drill.py --json
 ```
 
 通知仕様:
@@ -193,7 +193,7 @@ python3 /Users/<user>/OpenClaw/scripts/roby-drill.py --json
 ## Manual run
 
 ```bash
-cd /Users/<user>/OpenClaw
+cd <OPENCLAW_REPO>
 ./scripts/roby-cron-dispatch.sh self_growth 900
 ./scripts/roby-cron-dispatch.sh minutes_sync 1800
 ./scripts/roby-cron-dispatch.sh gmail_triage 900
@@ -206,7 +206,7 @@ cd /Users/<user>/OpenClaw
 ## Uninstall
 
 ```bash
-cd /Users/<user>/OpenClaw
+cd <OPENCLAW_REPO>
 ./scripts/uninstall_roby_orchestrator_cron.sh
 ```
 
