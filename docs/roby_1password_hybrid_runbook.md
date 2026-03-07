@@ -1,5 +1,11 @@
 # Roby 1Password Hybrid Runbook
 
+Deprecated:
+
+- This runbook is no longer the recommended PBS path.
+- Current recommendation is macOS Keychain:
+  - `docs/roby_keychain_hybrid_runbook.md`
+
 ## Purpose
 
 This runbook defines a hybrid secrets strategy for Roby/PBS:

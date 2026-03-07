@@ -1,5 +1,10 @@
 # Roby 1Password Env Split
 
+Deprecated:
+
+- This document is kept only as reference.
+- Current PBS secrets strategy uses macOS Keychain.
+
 目的:
 `~/.openclaw/.env` に混在している設定を、`平文で残す設定` と `1Password参照へ移す設定` に分離する。
 

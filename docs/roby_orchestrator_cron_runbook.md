@@ -23,6 +23,20 @@ chmod +x scripts/roby-cron-dispatch.sh scripts/install_roby_orchestrator_cron.sh
 ./scripts/install_roby_orchestrator_cron.sh
 ```
 
+## Secrets policy
+
+cron jobs are installed in Keychain-first mode by default.
+
+- secrets source: macOS Keychain (`service=roby-pbs`)
+- helper wrapper: `scripts/roby-keychain-run.sh`
+- fallback config: `~/.openclaw/.env` (low-risk settings only)
+
+Check current status:
+
+```bash
+/Users/<user>/OpenClaw/scripts/roby-keychain-status.sh
+```
+
 ## Default schedule
 
 - self_growth: `5 * * * *`
@@ -132,7 +146,7 @@ WEEKLY_REPORT_CRON="30 9 * * 1" \
 - Timeout kill for each task (default 900/1800/900 sec).
 - Structured JSON output from orchestrator is preserved in logs.
 - `scripts/roby-cron-dispatch.sh` は失敗時（timeout / non-zero exit）に Slack 通知します。
-  - 通知先: `SLACK_WEBHOOK_URL`（`~/.openclaw/.env`）
+  - 通知先: `SLACK_WEBHOOK_URL`（環境変数 / `.env` / Keychain）
   - 通知内容: `task`, `reason`, `time`, `host`, `log path`
 
 ## QA AB Router (optional)
@@ -207,3 +221,15 @@ cd /Users/<user>/OpenClaw
    ```bash
    crontab -l
    ```
+
+## Launchd scope
+
+Current PBS secret handling does not require changes to the OpenClaw gateway LaunchAgent or the UI LaunchAgent.
+
+- `ai.openclaw.gateway`: unchanged
+- `com.openclaw.ui3000`: unchanged
+
+Reason:
+
+- PBS secrets are consumed by Roby Python jobs and cron dispatch
+- UI and gateway do not need direct secret injection for this path

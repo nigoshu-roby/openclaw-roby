@@ -16,6 +16,8 @@ set -euo pipefail
 #   SELF_GROWTH_CRON="5 * * * *" MINUTES_SYNC_CRON="15 */2 * * *" GMAIL_TRIAGE_CRON="*/30 * * * *" WEEKLY_REPORT_CRON="30 9 * * 1" scripts/install_roby_orchestrator_cron.sh
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+KEYCHAIN_SERVICE="${ROBY_KEYCHAIN_SERVICE:-roby-pbs}"
+SECRET_WRAPPER="${ROBY_SECRET_WRAPPER:-$ROOT_DIR/scripts/roby-keychain-run.sh}"
 
 SELF_GROWTH_CRON="${SELF_GROWTH_CRON:-5 * * * *}"
 MINUTES_SYNC_CRON="${MINUTES_SYNC_CRON:-15 */2 * * *}"
@@ -41,13 +43,14 @@ TAG_DRILL="ROBY_ORCH_CRON_RUNBOOK_DRILL"
 TAG_NOTION="ROBY_ORCH_CRON_NOTION_SYNC"
 TAG_WEEKLY="ROBY_ORCH_CRON_WEEKLY_REPORT"
 
-CMD_SELF="cd \"$ROOT_DIR\" && /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" self_growth ${SELF_GROWTH_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_self_growth.log\" 2>&1"
-CMD_MINUTES="cd \"$ROOT_DIR\" && /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" minutes_sync ${MINUTES_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_minutes_sync.log\" 2>&1"
-CMD_GMAIL="cd \"$ROOT_DIR\" && /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" gmail_triage ${GMAIL_TRIAGE_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_gmail_triage.log\" 2>&1"
-CMD_EVAL="cd \"$ROOT_DIR\" && /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" eval_harness ${EVAL_HARNESS_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_eval_harness.log\" 2>&1"
-CMD_DRILL="cd \"$ROOT_DIR\" && /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" runbook_drill ${RUNBOOK_DRILL_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_runbook_drill.log\" 2>&1"
-CMD_NOTION="cd \"$ROOT_DIR\" && /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" notion_sync ${NOTION_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_notion_sync.log\" 2>&1"
-CMD_WEEKLY="cd \"$ROOT_DIR\" && /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" weekly_report ${WEEKLY_REPORT_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_weekly_report.log\" 2>&1"
+BASE_ENV="ROBY_KEYCHAIN_SERVICE=\"$KEYCHAIN_SERVICE\" ROBY_SECRET_WRAPPER=\"$SECRET_WRAPPER\""
+CMD_SELF="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" self_growth ${SELF_GROWTH_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_self_growth.log\" 2>&1"
+CMD_MINUTES="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" minutes_sync ${MINUTES_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_minutes_sync.log\" 2>&1"
+CMD_GMAIL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" gmail_triage ${GMAIL_TRIAGE_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_gmail_triage.log\" 2>&1"
+CMD_EVAL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" eval_harness ${EVAL_HARNESS_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_eval_harness.log\" 2>&1"
+CMD_DRILL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" runbook_drill ${RUNBOOK_DRILL_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_runbook_drill.log\" 2>&1"
+CMD_NOTION="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" notion_sync ${NOTION_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_notion_sync.log\" 2>&1"
+CMD_WEEKLY="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" weekly_report ${WEEKLY_REPORT_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_weekly_report.log\" 2>&1"
 
 LINE_SELF="${SELF_GROWTH_CRON} ${CMD_SELF} # ${TAG_SELF}"
 LINE_MINUTES="${MINUTES_SYNC_CRON} ${CMD_MINUTES} # ${TAG_MINUTES}"
