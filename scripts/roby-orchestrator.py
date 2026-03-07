@@ -110,6 +110,18 @@ TASK_ADD_HINTS = [
     "タスク追加", "todo追加", "todo add", "task add", "add task",
 ]
 
+KEYCHAIN_SECRET_KEYS = {
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "NOTION_TOKEN",
+    "NOTION_API_KEY",
+    "SLACK_WEBHOOK_URL",
+    "SLACK_SIGNING_SECRET",
+    "SLACK_BOT_TOKEN",
+    "NEURONIC_TOKEN",
+    "OLLAMA_API_KEY",
+}
+
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
@@ -127,6 +139,23 @@ def load_env() -> Dict[str, str]:
             # Keep already-exported values (e.g. op run injected secrets).
             if key not in env or not str(env.get(key, "")).strip():
                 env[key] = val
+    keychain_service = env.get("ROBY_KEYCHAIN_SERVICE", "roby-pbs")
+    for key in KEYCHAIN_SECRET_KEYS:
+        if key in env and str(env.get(key, "")).strip():
+            continue
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", keychain_service, "-a", key, "-w"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode == 0:
+                value = (proc.stdout or "").strip()
+                if value:
+                    env[key] = value
+        except Exception:
+            continue
     return env
 
 

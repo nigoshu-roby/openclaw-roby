@@ -55,6 +55,7 @@ LOG_FILE="${LOG_DIR}/cron_${TASK}.log"
 LOCK_DIR="/tmp/roby-cron-${TASK}.lock"
 ENV_PATH="${HOME}/.openclaw/.env"
 SECRET_WRAPPER="${ROBY_SECRET_WRAPPER:-}"
+KEYCHAIN_SERVICE="${ROBY_KEYCHAIN_SERVICE:-roby-pbs}"
 
 mkdir -p "$LOG_DIR"
 
@@ -81,6 +82,10 @@ if [[ -z "${SLACK_WEBHOOK_URL:-}" && -f "$ENV_PATH" ]]; then
       break
     fi
   done < "$ENV_PATH"
+fi
+
+if [[ -z "${SLACK_WEBHOOK_URL:-}" ]]; then
+  SLACK_WEBHOOK_URL="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a SLACK_WEBHOOK_URL -w 2>/dev/null || true)"
 fi
 
 notify_slack_fail() {

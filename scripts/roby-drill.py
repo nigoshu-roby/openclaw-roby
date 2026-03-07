@@ -27,6 +27,17 @@ HISTORY_PATH = STATE_DIR / "history.jsonl"
 LATEST_MD_PATH = STATE_DIR / "latest.md"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 ROBY_STATE_ROOT = Path.home() / ".openclaw" / "roby"
+KEYCHAIN_SECRET_KEYS = {
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "NOTION_TOKEN",
+    "NOTION_API_KEY",
+    "SLACK_WEBHOOK_URL",
+    "SLACK_SIGNING_SECRET",
+    "SLACK_BOT_TOKEN",
+    "NEURONIC_TOKEN",
+    "OLLAMA_API_KEY",
+}
 
 
 def load_env() -> Dict[str, str]:
@@ -44,6 +55,23 @@ def load_env() -> Dict[str, str]:
                 val = val[1:-1]
             if key not in env or not str(env.get(key, "")).strip():
                 env[key] = val
+    keychain_service = env.get("ROBY_KEYCHAIN_SERVICE", "roby-pbs")
+    for key in KEYCHAIN_SECRET_KEYS:
+        if key in env and str(env.get(key, "")).strip():
+            continue
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", keychain_service, "-a", key, "-w"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode == 0:
+                value = (proc.stdout or "").strip()
+                if value:
+                    env[key] = value
+        except Exception:
+            continue
     return env
 
 

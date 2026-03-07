@@ -13,6 +13,17 @@ REPO_DIR = Path("/Users/<user>/OpenClaw")
 STATE_DIR = Path.home() / ".openclaw" / "roby"
 RUNS_LOG = STATE_DIR / "self_growth_runs.jsonl"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
+KEYCHAIN_SECRET_KEYS = {
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "NOTION_TOKEN",
+    "NOTION_API_KEY",
+    "SLACK_WEBHOOK_URL",
+    "SLACK_SIGNING_SECRET",
+    "SLACK_BOT_TOKEN",
+    "NEURONIC_TOKEN",
+    "OLLAMA_API_KEY",
+}
 
 
 def load_env() -> Dict[str, str]:
@@ -30,6 +41,23 @@ def load_env() -> Dict[str, str]:
                 val = val[1:-1]
             if key not in env or not str(env.get(key, "")).strip():
                 env[key] = val
+    keychain_service = env.get("ROBY_KEYCHAIN_SERVICE", "roby-pbs")
+    for key in KEYCHAIN_SECRET_KEYS:
+        if key in env and str(env.get(key, "")).strip():
+            continue
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", keychain_service, "-a", key, "-w"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode == 0:
+                value = (proc.stdout or "").strip()
+                if value:
+                    env[key] = value
+        except Exception:
+            continue
     return env
 
 
@@ -47,12 +75,38 @@ def run_cmd(cmd, env: Dict[str, str], timeout: int = 60) -> str:
 def extract_patch(text: str) -> str:
     if not text:
         return ""
-    if "NO_CHANGE" in text:
+    normalized = text.strip()
+    if normalized == "NO_CHANGE" or "```NO_CHANGE```" in normalized or "NO_CHANGE" in normalized:
         return "NO_CHANGE"
+    # Unified diff output in fenced block (```diff ... ```)
+    fenced = re.search(r"```(?:diff|patch)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidate = fenced.group(1).strip()
+        if "diff --git " in candidate or ("\n--- " in f"\n{candidate}" and "\n+++ " in f"\n{candidate}" and "\n@@ " in f"\n{candidate}"):
+            return candidate
     m = re.search(r"(diff --git .*?)$", text, flags=re.DOTALL)
     if m:
         return m.group(1).strip()
+    # Unified diff without diff header.
+    if "\n--- " in f"\n{text}" and "\n+++ " in f"\n{text}" and "\n@@ " in f"\n{text}":
+        start = min(idx for idx in [text.find("\n--- "), text.find("--- ")] if idx >= 0)
+        return text[start:].strip()
     return ""
+
+
+def build_agent_cmd(agent_name: str, prompt: str) -> list[str]:
+    return [
+        "node",
+        str(REPO_DIR / "openclaw.mjs"),
+        "agent",
+        "--local",
+        "--agent",
+        agent_name.strip() or "main",
+        "--message",
+        prompt,
+        "--timeout",
+        "900",
+    ]
 
 
 def tail_file(path: Path, max_lines: int = 50) -> str:
@@ -83,7 +137,8 @@ def format_self_growth_slack(
     restart_status: str,
     report: str,
 ) -> str:
-    status = "失敗あり" if any(x in {"failed", "invalid", "apply_failed"} for x in [patch_status, test_status, rollback_status, commit_status, restart_status]) else "正常"
+    failure_states = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response"}
+    status = "失敗あり" if any(x in failure_states for x in [patch_status, test_status, rollback_status, commit_status, restart_status]) else "正常"
     lines = [
         "【Roby 自己成長レポート】",
         f"・実行時刻: {timestamp}",
@@ -115,6 +170,7 @@ def main() -> int:
         "SELF_GROWTH_RESTART_CMD",
         f"node {REPO_DIR / 'openclaw.mjs'} gateway restart",
     )
+    agent_name = env.get("SELF_GROWTH_AGENT", "main").strip() or "main"
 
     git_status = run_cmd(["git", "-C", str(REPO_DIR), "status", "-sb"], env, timeout=30)
     git_dirty = run_cmd(["git", "-C", str(REPO_DIR), "status", "--porcelain"], env, timeout=30)
@@ -156,21 +212,22 @@ def main() -> int:
             "Context:\n"
             f"{context}"
         )
-        agent_cmd = [
-            "node",
-            str(REPO_DIR / "openclaw.mjs"),
-            "agent",
-            "--local",
-            "--message",
-            prompt,
-            "--timeout",
-            "900",
-        ]
+        agent_cmd = build_agent_cmd(agent_name, prompt)
         raw = run_cmd(agent_cmd, env, timeout=920)
-        patch = extract_patch(raw)
-        if patch == "NO_CHANGE" or not patch:
+        if raw.startswith("[error]"):
+            patch_status = "agent_failed"
+            steps.append(f"AGENT: failed\n{raw}")
+        else:
+            patch = extract_patch(raw)
+        if patch_status == "agent_failed":
+            pass
+        elif patch == "NO_CHANGE":
             patch_status = "no_change"
             steps.append("PATCH: no_change")
+        elif not patch:
+            patch_status = "invalid_response"
+            preview = raw[:800].replace("\r", "")
+            steps.append(f"PATCH: invalid_response\n{preview}")
         else:
             patch_path = STATE_DIR / "self_growth.patch"
             patch_path.write_text(patch, encoding="utf-8")

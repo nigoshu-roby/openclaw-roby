@@ -344,6 +344,36 @@
   - 自動運用は非対話認証で secrets を注入
   - 平文 `.env` は low-risk 設定のみへ縮退
 
+### 8.11.2 Completion Update（macOS Keychain Hybrid Secret Strategy）
+
+- 完了日: 2026-03-07
+- 実装:
+  - `scripts/roby-orchestrator.py`
+  - `scripts/roby-minutes.py`
+  - `scripts/roby-self-growth.py`
+  - `scripts/roby-notion-sync.py`
+  - `scripts/roby-drill.py`
+  - `scripts/roby-weekly-report.py`
+  - `skills/roby-mail/scripts/gmail_triage.py`
+  - 上記 `load_env()` に Keychain fallback を追加
+    - 優先順位:
+      - 1. 実行時の環境変数
+      - 2. `ROBY_ENV_FILE`
+      - 3. 既定 `~/.openclaw/.env`
+      - 4. macOS Keychain (`service=roby-pbs`, `account=<ENV_KEY>`)
+  - `scripts/roby-cron-dispatch.sh`
+    - `SLACK_WEBHOOK_URL` を Keychain からも解決可能に変更
+  - 追加スクリプト:
+    - `scripts/roby-keychain-import.sh`
+    - `scripts/roby-keychain-run.sh`
+    - `scripts/roby-keychain-status.sh`
+- Runbook:
+  - `docs/roby_keychain_hybrid_runbook.md`
+- 方針:
+  - 1Password 非依存
+  - 開発効率を落としすぎず、平文 secrets を縮退
+  - 自動運用時も Keychain 参照で継続可能
+
 ### 8.12 Completion Update（#5 Recall改善: coverage pass）
 
 - 完了日: 2026-03-06

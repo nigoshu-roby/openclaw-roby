@@ -16,6 +16,18 @@ STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
+ENV_PATH = Path.home() / ".openclaw" / ".env"
+KEYCHAIN_SECRET_KEYS = {
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "NOTION_TOKEN",
+    "NOTION_API_KEY",
+    "SLACK_WEBHOOK_URL",
+    "SLACK_SIGNING_SECRET",
+    "SLACK_BOT_TOKEN",
+    "NEURONIC_TOKEN",
+    "OLLAMA_API_KEY",
+}
 
 DEFAULT_QUERY = "newer_than:2d in:inbox"
 DEFAULT_MAX = 50
@@ -209,7 +221,7 @@ DEFAULT_RULES_TEMPLATE: Dict[str, Dict[str, List[str]]] = {
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
-    env_path = Path(env.get("ROBY_ENV_FILE", str(Path.home() / ".openclaw" / ".env"))).expanduser()
+    env_path = Path(env.get("ROBY_ENV_FILE", str(ENV_PATH))).expanduser()
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -222,6 +234,23 @@ def load_env() -> Dict[str, str]:
                 val = val[1:-1]
             if key not in env or not str(env.get(key, "")).strip():
                 env[key] = val
+    keychain_service = env.get("ROBY_KEYCHAIN_SERVICE", "roby-pbs")
+    for key in KEYCHAIN_SECRET_KEYS:
+        if key in env and str(env.get(key, "")).strip():
+            continue
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", keychain_service, "-a", key, "-w"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode == 0:
+                value = (proc.stdout or "").strip()
+                if value:
+                    env[key] = value
+        except Exception:
+            continue
     return env
 
 
