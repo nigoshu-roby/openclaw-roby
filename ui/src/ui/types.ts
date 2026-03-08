@@ -613,6 +613,21 @@ export type RobyDrillStatus = RobyOpsHealthSummary & {
   }>;
 };
 
+export type RobyLiveFreshnessStatus = RobyOpsHealthSummary & {
+  staleCount?: number;
+  staleComponents?: string[];
+  allFresh?: boolean;
+  components?: Array<{
+    name: string;
+    ageMinutes: number | null;
+    thresholdMinutes: number;
+    stale: boolean;
+    missing: boolean;
+    ts?: number | null;
+    remedyCommand: string;
+  }>;
+};
+
 export type RobyWeeklyStatus = RobyOpsHealthSummary & {
   evalRuns?: number;
   evalFailedRuns?: number;
@@ -647,6 +662,7 @@ export type RobyOpsStatus = {
   generatedAtMs: number;
   evaluationHarness: RobyEvalStatus;
   runbookDrill: RobyDrillStatus;
+  liveFreshness: RobyLiveFreshnessStatus;
   weeklyReport: RobyWeeklyStatus;
   localFirst: RobyLocalFirstStatus;
 };

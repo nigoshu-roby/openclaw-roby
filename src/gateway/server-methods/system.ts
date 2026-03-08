@@ -41,6 +41,134 @@ async function readJsonFile(filePath: string): Promise<Record<string, unknown> |
   }
 }
 
+function parseTimestampDate(value: unknown): Date | null {
+  const ms = parseTimestampMs(value);
+  if (ms !== null) {
+    return new Date(ms);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const text = value.trim().endsWith("Z") ? value.trim() : value.trim();
+    const parsed = Date.parse(text);
+    if (Number.isFinite(parsed)) {
+      return new Date(parsed);
+    }
+  }
+  return null;
+}
+
+async function readJsonLinesLastTimestamp(filePath: string): Promise<Date | null> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const parsed = JSON.parse(lines[index]) as Record<string, unknown>;
+        const dt = parseTimestampDate(parsed.ts ?? parsed.timestamp);
+        if (dt) {
+          return dt;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function ageMinutesFrom(date: Date | null, nowMs: number): number | null {
+  if (!date) {
+    return null;
+  }
+  return Math.max(0, Math.floor((nowMs - date.getTime()) / 60000));
+}
+
+async function buildLiveFreshness() {
+  const nowMs = Date.now();
+  const targets = [
+    {
+      name: "self_growth",
+      type: "jsonl",
+      path: path.join(ROBY_STATE_ROOT, "self_growth_runs.jsonl"),
+      maxMinutes: Number.parseInt(process.env.ROBY_DRILL_SELF_GROWTH_MAX_MIN ?? "180", 10),
+      remedy: `python3 ${OPENCLAW_REPO}/scripts/roby-self-growth.py`,
+    },
+    {
+      name: "minutes_sync",
+      type: "jsonl",
+      path: path.join(ROBY_STATE_ROOT, "minutes_runs.jsonl"),
+      maxMinutes: Number.parseInt(process.env.ROBY_DRILL_MINUTES_MAX_MIN ?? "240", 10),
+      remedy: `python3 ${OPENCLAW_REPO}/scripts/roby-orchestrator.py --cron-task minutes_sync --execute --json`,
+    },
+    {
+      name: "gmail_triage",
+      type: "jsonl",
+      path: path.join(ROBY_STATE_ROOT, "gmail_triage_runs.jsonl"),
+      maxMinutes: Number.parseInt(process.env.ROBY_DRILL_GMAIL_MAX_MIN ?? "120", 10),
+      remedy: `python3 ${OPENCLAW_REPO}/scripts/roby-orchestrator.py --cron-task gmail_triage --execute --json`,
+    },
+    {
+      name: "notion_sync",
+      type: "json",
+      path: path.join(ROBY_STATE_ROOT, "notion_sync_state.json"),
+      maxMinutes: Number.parseInt(process.env.ROBY_DRILL_NOTION_MAX_MIN ?? "1440", 10),
+      remedy: `python3 ${OPENCLAW_REPO}/scripts/roby-notion-sync.py`,
+    },
+    {
+      name: "weekly_report",
+      type: "json",
+      path: path.join(ROBY_STATE_ROOT, "reports", "weekly_latest.json"),
+      maxMinutes: Number.parseInt(process.env.ROBY_DRILL_WEEKLY_MAX_MIN ?? "10080", 10),
+      remedy: `python3 ${OPENCLAW_REPO}/scripts/roby-weekly-report.py --json`,
+    },
+  ] as const;
+
+  const components = [] as Array<{
+    name: string;
+    ageMinutes: number | null;
+    thresholdMinutes: number;
+    stale: boolean;
+    missing: boolean;
+    ts: number | null;
+    remedyCommand: string;
+  }>;
+
+  for (const target of targets) {
+    let dt: Date | null = null;
+    if (target.type === "jsonl") {
+      dt = await readJsonLinesLastTimestamp(target.path);
+    } else {
+      const payload = await readJsonFile(target.path);
+      dt = parseTimestampDate(payload?.updated_at ?? payload?.generated_at ?? payload?.ts);
+    }
+    const ageMinutes = ageMinutesFrom(dt, nowMs);
+    const stale = ageMinutes === null || ageMinutes > target.maxMinutes;
+    components.push({
+      name: target.name,
+      ageMinutes,
+      thresholdMinutes: target.maxMinutes,
+      stale,
+      missing: ageMinutes === null,
+      ts: dt ? dt.getTime() : null,
+      remedyCommand: target.remedy,
+    });
+  }
+
+  const staleComponents = components.filter((row) => row.stale).map((row) => row.name);
+  return {
+    present: true,
+    ts: nowMs,
+    staleCount: staleComponents.length,
+    staleComponents,
+    allFresh: staleComponents.length === 0,
+    components,
+  };
+}
+
 async function readOllamaStatus() {
   const cliPresent =
     spawnSync("sh", ["-lc", "command -v ollama >/dev/null 2>&1"], {
@@ -90,6 +218,7 @@ async function buildRobyStatus() {
     path.join(ROBY_STATE_ROOT, "reports", "weekly_latest.json"),
   );
   const ollama = await readOllamaStatus();
+  const liveFreshness = await buildLiveFreshness();
   const evalResults = Array.isArray(evalLatest?.results)
     ? (evalLatest.results as Array<Record<string, unknown>>)
     : [];
@@ -193,6 +322,7 @@ async function buildRobyStatus() {
           detail: typeof row.detail === "string" ? row.detail : "",
         })),
     },
+    liveFreshness,
     weeklyReport: {
       present: Boolean(weeklyLatest),
       ts: parseTimestampMs(weeklyLatest?.generated_at),

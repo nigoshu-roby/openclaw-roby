@@ -125,6 +125,7 @@ export function renderRoby(props: RobyProps) {
   const ops = props.robyOpsStatus;
   const evalStatus = ops?.evaluationHarness;
   const drillStatus = ops?.runbookDrill;
+  const liveFreshness = ops?.liveFreshness;
   const weeklyStatus = ops?.weeklyReport;
   const localFirst = ops?.localFirst;
   const weeklyLoaded = Boolean(weeklyStatus);
@@ -246,7 +247,7 @@ export function renderRoby(props: RobyProps) {
         </div>
       </div>
     </section>
-    <section class="grid grid-cols-4" style="margin-top: 18px;">
+    <section class="grid" style="margin-top: 18px; grid-template-columns: repeat(5, minmax(0, 1fr));">
       ${renderOpsCard({
         title: "Evaluation Harness",
         status: formatOpsLabel(evalStatus?.allOk, evalStatus?.present),
@@ -309,7 +310,69 @@ export function renderRoby(props: RobyProps) {
           : nothing,
       })}
       ${renderOpsCard({
-        title: "Weekly Report",
+        title: "現在の稼働状況",
+        status:
+          liveFreshness?.present === false ? "未取得" : liveFreshness?.allFresh ? "正常" : "要対応",
+        tone: liveFreshness?.present === false ? "muted" : liveFreshness?.allFresh ? "ok" : "warn",
+        subtitle: liveFreshness?.present
+          ? `stale ${liveFreshness?.staleCount ?? 0} / ${liveFreshness?.components?.length ?? 0} 系統`
+          : "現在状態未取得",
+        meta: liveFreshness?.ts ? formatRelativeTimestamp(liveFreshness.ts) : "—",
+        details: liveFreshness?.present
+          ? html`
+          <div class="muted">現在の鮮度</div>
+          <div class="muted">- stale component: ${joinList(liveFreshness?.staleComponents, "なし")}</div>
+          ${
+            liveFreshness?.components?.length
+              ? html`
+                  <div class="muted" style="margin-top: 8px;">系統別の状態</div>
+                  ${liveFreshness.components.map(
+                    (row) => html`
+                      <div class="row" style="gap: 8px; align-items: flex-start;">
+                        <span class="pill ${row.stale ? "warn" : "ok"}">${row.name}</span>
+                        <span class="muted" style="flex: 1;">
+                          ${row.missing ? "未実行" : `${row.ageMinutes ?? 0}分前 / 閾値 ${row.thresholdMinutes}分`}
+                        </span>
+                        ${
+                          row.stale
+                            ? html`
+                                <button
+                                  class="btn btn--ghost"
+                                  type="button"
+                                  @click=${async (e: Event) => {
+                                    const button = e.currentTarget as HTMLButtonElement | null;
+                                    if (!button) {
+                                      return;
+                                    }
+                                    const ok = await copyTextToClipboard(row.remedyCommand);
+                                    const original = button.textContent ?? "";
+                                    button.textContent = ok ? "コピー済み" : "失敗";
+                                    window.setTimeout(
+                                      () => {
+                                        if (button.isConnected) {
+                                          button.textContent = original;
+                                        }
+                                      },
+                                      ok ? 1200 : 1800,
+                                    );
+                                  }}
+                                >
+                                  対処コマンドをコピー
+                                </button>
+                              `
+                            : nothing
+                        }
+                      </div>
+                    `,
+                  )}
+                `
+              : nothing
+          }
+        `
+          : nothing,
+      })}
+      ${renderOpsCard({
+        title: "週次集計スナップショット",
         status: !weeklyLoaded
           ? props.robyOpsLoading
             ? "読込中"
@@ -328,71 +391,29 @@ export function renderRoby(props: RobyProps) {
               : "ok",
         subtitle: !weeklyLoaded
           ? props.robyOpsLoading
-            ? "最新レポートを取得中"
-            : "最新レポート未取得"
+            ? "週次スナップショットを取得中"
+            : "週次スナップショット未取得"
           : weeklyStatus?.present
             ? `eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
-            : "最新レポートなし",
+            : "週次レポートなし",
         meta: weeklyLoaded && weeklyStatus?.ts ? formatRelativeTimestamp(weeklyStatus.ts) : "—",
         details: weeklyLoaded
           ? html`
-          <div class="muted">失敗内訳</div>
-          <div class="muted">- eval fail run: ${weeklyStatus?.evalFailedRuns ?? 0}</div>
-          <div class="muted">- drill fail run: ${weeklyStatus?.drillFailedRuns ?? 0}</div>
-          <div class="muted">- audit error: ${weeklyStatus?.auditErrors ?? 0}</div>
-          <div class="muted">
-            - stale component: ${joinList(weeklyStatus?.staleComponents, "なし")}
-          </div>
-          ${
-            weeklyStatus?.remedyCommands?.length
-              ? html`
-                  <div class="muted" style="margin-top: 8px;">対処コマンド</div>
-                  ${weeklyStatus.remedyCommands.map(
-                    (row) => html`
-                      <div class="row" style="gap: 8px; align-items: flex-start;">
-                        <span class="muted" style="min-width: 92px;">${row.name}</span>
-                        <code style="flex: 1; word-break: break-all;">${row.command}</code>
-                        <button
-                          class="btn btn--ghost"
-                          type="button"
-                          @click=${async (e: Event) => {
-                            const button = e.currentTarget as HTMLButtonElement | null;
-                            if (!button) {
-                              return;
-                            }
-                            const ok = await copyTextToClipboard(row.command);
-                            const original = button.textContent ?? "";
-                            button.textContent = ok ? "コピー済み" : "失敗";
-                            window.setTimeout(
-                              () => {
-                                if (button.isConnected) {
-                                  button.textContent = original;
-                                }
-                              },
-                              ok ? 1200 : 1800,
-                            );
-                          }}
-                        >
-                          コピー
-                        </button>
-                      </div>
-                    `,
-                  )}
-                `
-              : html`
-                  <div class="muted">- 対処コマンド: 現在対処不要</div>
-                `
-          }
-          <div class="muted">
-            - ops error: ${
-              weeklyStatus?.opsErrors?.length
-                ? weeklyStatus.opsErrors
-                    .map((row) => `${row.name} ${row.errors}/${row.runs}`)
-                    .join(" / ")
-                : "なし"
-            }
-          </div>
-        `
+              <div class="muted">7日集計の内訳</div>
+              <div class="muted">- eval fail run: ${weeklyStatus?.evalFailedRuns ?? 0}</div>
+              <div class="muted">- drill fail run: ${weeklyStatus?.drillFailedRuns ?? 0}</div>
+              <div class="muted">- audit error: ${weeklyStatus?.auditErrors ?? 0}</div>
+              <div class="muted">- stale component: ${joinList(weeklyStatus?.staleComponents, "なし")}</div>
+              <div class="muted">
+                - ops error: ${
+                  weeklyStatus?.opsErrors?.length
+                    ? weeklyStatus.opsErrors
+                        .map((row) => `${row.name} ${row.errors}/${row.runs}`)
+                        .join(" / ")
+                    : "なし"
+                }
+              </div>
+            `
           : nothing,
       })}
       ${renderOpsCard({
