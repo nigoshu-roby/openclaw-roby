@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from roby_audit import append_audit_event
+from roby_ops_notifications import format_drill_slack
 
 JST = timezone(timedelta(hours=9))
 OPENCLAW_REPO = Path(__file__).resolve().parent.parent
@@ -80,21 +81,6 @@ def send_slack(webhook_url: str, text: str) -> None:
     req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=10) as resp:
         resp.read()
-
-
-def format_drill_slack(report: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
-    failed_checks = [x["id"] for x in rows if (not x.get("ok") and not x.get("skipped"))]
-    status = "FAIL" if int(report.get("failed", 0)) > 0 else "PASS"
-    lines = [
-        f"【PBS Runbook Drill】{status}",
-        f"・実行時刻: {report.get('ts', '-')}",
-        f"・total/passed/failed/skipped: {report.get('total', 0)}/{report.get('passed', 0)}/{report.get('failed', 0)}/{report.get('skipped', 0)}",
-    ]
-    if failed_checks:
-        lines.extend(["", "■失敗チェック", "・" + " / ".join(failed_checks)])
-    else:
-        lines.extend(["", "■失敗チェック", "・なし"])
-    return "\n".join(lines)
 
 
 def run_cmd(cmd: List[str], env: Dict[str, str], timeout: int = 120) -> Dict[str, Any]:

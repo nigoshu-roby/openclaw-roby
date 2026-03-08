@@ -339,6 +339,9 @@ export class OpenClawApp extends LitElement {
   @state() cronRunsSortDir: import("./types.js").CronSortDir = "desc";
   @state() cronModelSuggestions: string[] = [];
   @state() cronBusy = false;
+  @state() robyOpsLoading = false;
+  @state() robyOpsStatus: import("./types.js").RobyOpsStatus | null = null;
+  @state() robyOpsError: string | null = null;
 
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
 

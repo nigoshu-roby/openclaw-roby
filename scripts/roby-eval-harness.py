@@ -13,11 +13,13 @@ import os
 import re
 import subprocess
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from roby_audit import append_audit_event
+from roby_ops_notifications import format_eval_slack
 
 JST = timezone(timedelta(hours=9))
 OPENCLAW_REPO = Path(__file__).resolve().parent.parent
@@ -28,7 +30,11 @@ STATE_DIR = Path.home() / ".openclaw" / "roby" / "evals"
 LATEST_PATH = STATE_DIR / "latest.json"
 HISTORY_PATH = STATE_DIR / "history.jsonl"
 LATEST_MD_PATH = STATE_DIR / "latest.md"
+ENV_PATH = Path.home() / ".openclaw" / ".env"
 REPORT_SCHEMA_VERSION = 2
+KEYCHAIN_SECRET_KEYS = {
+    "SLACK_WEBHOOK_URL",
+}
 
 
 @dataclass
@@ -83,7 +89,50 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--write-markdown", default=str(LATEST_MD_PATH))
     parser.add_argument("--skip-gates", action="store_true", help="Only evaluate checks without policy gating")
     parser.add_argument("--soft-fail", action="store_true", help="Always exit 0")
+    parser.add_argument("--notify", action="store_true", help="Notify Slack regardless of pass/fail")
     return parser.parse_args()
+
+
+def load_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    env_file = Path(env.get("ROBY_ENV_FILE", str(ENV_PATH))).expanduser()
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            key = k.strip()
+            val = v.strip()
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+            if key not in env or not str(env.get(key, "")).strip():
+                env[key] = val
+    keychain_service = env.get("ROBY_KEYCHAIN_SERVICE", "roby-pbs")
+    for key in KEYCHAIN_SECRET_KEYS:
+        if key in env and str(env.get(key, "")).strip():
+            continue
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", keychain_service, "-a", key, "-w"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode == 0:
+                value = (proc.stdout or "").strip()
+                if value:
+                    env[key] = value
+        except Exception:
+            continue
+    return env
+
+
+def send_slack(webhook_url: str, text: str) -> None:
+    data = json.dumps({"text": text}).encode("utf-8")
+    req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
 
 
 def load_json_file(path: Path) -> Any:
@@ -452,6 +501,7 @@ def summarize_routes(results: List[Dict[str, Any]]) -> Dict[str, Dict[str, int]]
 
 def main() -> int:
     args = parse_args()
+    env = load_env()
     cases_path = Path(args.cases)
     policy_path = Path(args.policy)
     all_cases = load_cases(cases_path)
@@ -515,6 +565,19 @@ def main() -> int:
 
     markdown_path = Path(args.write_markdown) if args.write_markdown else None
     write_outputs(report, markdown_path)
+    slack_error = ""
+    webhook = env.get("SLACK_WEBHOOK_URL", "").strip()
+    notify_on_pass = str(env.get("ROBY_EVAL_NOTIFY_ON_PASS", "0")).strip() == "1"
+    should_notify = bool(webhook) and (args.notify or not report["all_ok"] or notify_on_pass)
+    report["slack_notified"] = False
+    if should_notify:
+        try:
+            send_slack(webhook, format_eval_slack(report)[:3500])
+            report["slack_notified"] = True
+        except Exception as exc:
+            slack_error = str(exc)
+            report["slack_error"] = slack_error
+        write_outputs(report, markdown_path)
     if report.get("all_ok") is not None:
         try:
             append_audit_event(
@@ -529,6 +592,8 @@ def main() -> int:
                     "resolved_failures": list(report["gates"].get("resolved_failures", [])),
                     "avg_ms": int(report["latency"]["avg_ms"]),
                     "p95_ms": int(report["latency"]["p95_ms"]),
+                    "slack_notified": bool(report.get("slack_notified", False)),
+                    "slack_error": slack_error,
                 },
                 source="roby-eval-harness",
                 run_id=str(report["ts"]),

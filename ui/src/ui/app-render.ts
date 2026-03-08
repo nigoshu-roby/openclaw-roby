@@ -55,6 +55,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import { loadRobyOpsStatus } from "./controllers/roby.ts";
 import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
@@ -371,10 +372,16 @@ export function renderApp(state: AppViewState) {
                 cronJobs: state.cronJobs,
                 cronRunsJobId: state.cronRunsJobId,
                 cronRuns: state.cronRuns,
+                robyOpsLoading: state.robyOpsLoading,
+                robyOpsStatus: state.robyOpsStatus,
+                robyOpsError: state.robyOpsError,
                 skillsLoading: state.skillsLoading,
                 skillsError: state.skillsError,
                 skillsReport: state.skillsReport,
-                onRefresh: () => loadCron(state),
+                onRefresh: async () => {
+                  await loadCron(state as never);
+                  await loadRobyOpsStatus(state);
+                },
                 onRunJob: (job) => runCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
               })

@@ -575,6 +575,54 @@ export type CronRunsResult = {
   nextOffset?: number | null;
 };
 
+export type RobyOpsHealthSummary = {
+  present: boolean;
+  ts?: number | null;
+};
+
+export type RobyEvalStatus = RobyOpsHealthSummary & {
+  allOk?: boolean;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  p95Ms?: number;
+};
+
+export type RobyDrillStatus = RobyOpsHealthSummary & {
+  allOk?: boolean;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+};
+
+export type RobyWeeklyStatus = RobyOpsHealthSummary & {
+  evalRuns?: number;
+  evalFailedRuns?: number;
+  drillRuns?: number;
+  drillFailedRuns?: number;
+  auditOk?: boolean;
+  staleCount?: number;
+};
+
+export type RobyLocalFirstStatus = {
+  ollamaCli: boolean;
+  ollamaApiOk: boolean;
+  configuredModel: string;
+  modelAvailable: boolean;
+  baseUrl: string;
+  availableModels: string[];
+  error?: string | null;
+};
+
+export type RobyOpsStatus = {
+  generatedAtMs: number;
+  evaluationHarness: RobyEvalStatus;
+  runbookDrill: RobyDrillStatus;
+  weeklyReport: RobyWeeklyStatus;
+  localFirst: RobyLocalFirstStatus;
+};
+
 export type SkillsStatusConfigCheck = {
   path: string;
   satisfied: boolean;

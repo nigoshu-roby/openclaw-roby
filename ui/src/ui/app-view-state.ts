@@ -32,6 +32,7 @@ import type {
   LogLevel,
   NostrProfile,
   PresenceEntry,
+  RobyOpsStatus,
   SessionsUsageResult,
   CostUsageSummary,
   SessionUsageTimeSeries,
@@ -229,6 +230,9 @@ export type AppViewState = {
   cronRunsSortDir: CronSortDir;
   cronModelSuggestions: string[];
   cronBusy: boolean;
+  robyOpsLoading: boolean;
+  robyOpsStatus: RobyOpsStatus | null;
+  robyOpsError: string | null;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;

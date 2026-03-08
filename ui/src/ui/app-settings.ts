@@ -19,6 +19,7 @@ import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import { loadRobyOpsStatus } from "./controllers/roby.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
 import {
@@ -33,6 +34,7 @@ import { saveSettings, type UiSettings } from "./storage.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme.ts";
 import type { AgentsListResult } from "./types.ts";
+import type { CronJob } from "./types.ts";
 
 type SettingsHost = {
   settings: UiSettings;
@@ -43,6 +45,7 @@ type SettingsHost = {
   sessionKey: string;
   tab: Tab;
   connected: boolean;
+  cronJobs?: CronJob[];
   chatHasAutoScrolled: boolean;
   logsAtBottom: boolean;
   eventLog: unknown[];
@@ -185,6 +188,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "roby") {
     await loadCron(host);
     await loadSkills(host as unknown as OpenClawApp);
+    await loadRobyOpsStatus(host as unknown as OpenClawApp);
     const job = host.cronJobs?.find((entry) => entry.name === "Roby Self-Growth Hourly");
     if (job) {
       await loadCronRuns(host as unknown as OpenClawApp, job.id);
