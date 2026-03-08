@@ -18,12 +18,21 @@ const defaultRepoRoot = path.resolve(moduleDir, "../../..");
 const OPENCLAW_REPO = process.env.OPENCLAW_REPO?.trim() || defaultRepoRoot;
 const ROBY_STATE_ROOT = path.join(os.homedir(), ".openclaw", "roby");
 
+function normalizeEpochMs(value: number): number {
+  return value > 0 && value < 1_000_000_000_000 ? value * 1000 : value;
+}
+
 function parseTimestampMs(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+    return normalizeEpochMs(value);
   }
   if (typeof value === "string" && value.trim()) {
-    const parsed = Date.parse(value);
+    const trimmed = value.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+      const numeric = Number(trimmed);
+      return Number.isFinite(numeric) ? normalizeEpochMs(numeric) : null;
+    }
+    const parsed = Date.parse(trimmed);
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
