@@ -33,6 +33,7 @@ apps/android/.cxx/
 apps/macos/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
+apps/shared/ClawdisKit/.build/
 apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
 bin/
@@ -60,6 +61,9 @@ vendor/a2ui/renderers/lit/dist/
 src/canvas-host/a2ui/*.bundle.js
 src/canvas-host/a2ui/*.map
 .bundle.hash
+apps/macos/Sources/Clawdis/Resources/WebChat/webchat.bundle.js
+apps/macos/Sources/Clawdis/Resources/WebChat/vendor/pdfjs-dist/build/pdf.worker.mjs.map
+apps/macos/Sources/Clawdis/Resources/WebChat/vendor/pdfjs-dist/legacy/build/pdf.worker.mjs.map
 
 # fastlane (iOS)
 apps/ios/fastlane/README.md
