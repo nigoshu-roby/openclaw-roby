@@ -322,64 +322,64 @@ export function renderRoby(props: RobyProps) {
           ? `eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
           : "最新レポートなし",
         meta: weeklyStatus?.ts ? formatRelativeTimestamp(weeklyStatus.ts) : "—",
-        details: weeklyStatus?.present
-          ? html`
-              <div class="muted">失敗内訳</div>
-              <div class="muted">- eval fail run: ${weeklyStatus?.evalFailedRuns ?? 0}</div>
-              <div class="muted">- drill fail run: ${weeklyStatus?.drillFailedRuns ?? 0}</div>
-              <div class="muted">- audit error: ${weeklyStatus?.auditErrors ?? 0}</div>
-              <div class="muted">
-                - stale component: ${joinList(weeklyStatus?.staleComponents, "なし")}
-              </div>
-              ${
-                weeklyStatus?.remedyCommands?.length
-                  ? html`
-                      <div class="muted" style="margin-top: 8px;">対処コマンド</div>
-                      ${weeklyStatus.remedyCommands.map(
-                        (row) => html`
-                          <div class="row" style="gap: 8px; align-items: flex-start;">
-                            <span class="muted" style="min-width: 92px;">${row.name}</span>
-                            <code style="flex: 1; word-break: break-all;">${row.command}</code>
-                            <button
-                              class="btn btn--ghost"
-                              type="button"
-                              @click=${async (e: Event) => {
-                                const button = e.currentTarget as HTMLButtonElement | null;
-                                if (!button) {
-                                  return;
+        details: html`
+          <div class="muted">失敗内訳</div>
+          <div class="muted">- eval fail run: ${weeklyStatus?.evalFailedRuns ?? 0}</div>
+          <div class="muted">- drill fail run: ${weeklyStatus?.drillFailedRuns ?? 0}</div>
+          <div class="muted">- audit error: ${weeklyStatus?.auditErrors ?? 0}</div>
+          <div class="muted">
+            - stale component: ${joinList(weeklyStatus?.staleComponents, "なし")}
+          </div>
+          ${
+            weeklyStatus?.remedyCommands?.length
+              ? html`
+                  <div class="muted" style="margin-top: 8px;">対処コマンド</div>
+                  ${weeklyStatus.remedyCommands.map(
+                    (row) => html`
+                      <div class="row" style="gap: 8px; align-items: flex-start;">
+                        <span class="muted" style="min-width: 92px;">${row.name}</span>
+                        <code style="flex: 1; word-break: break-all;">${row.command}</code>
+                        <button
+                          class="btn btn--ghost"
+                          type="button"
+                          @click=${async (e: Event) => {
+                            const button = e.currentTarget as HTMLButtonElement | null;
+                            if (!button) {
+                              return;
+                            }
+                            const ok = await copyTextToClipboard(row.command);
+                            const original = button.textContent ?? "";
+                            button.textContent = ok ? "コピー済み" : "失敗";
+                            window.setTimeout(
+                              () => {
+                                if (button.isConnected) {
+                                  button.textContent = original;
                                 }
-                                const ok = await copyTextToClipboard(row.command);
-                                const original = button.textContent ?? "";
-                                button.textContent = ok ? "コピー済み" : "失敗";
-                                window.setTimeout(
-                                  () => {
-                                    if (button.isConnected) {
-                                      button.textContent = original;
-                                    }
-                                  },
-                                  ok ? 1200 : 1800,
-                                );
-                              }}
-                            >
-                              コピー
-                            </button>
-                          </div>
-                        `,
-                      )}
-                    `
-                  : nothing
-              }
-              <div class="muted">
-                - ops error: ${
-                  weeklyStatus?.opsErrors?.length
-                    ? weeklyStatus.opsErrors
-                        .map((row) => `${row.name} ${row.errors}/${row.runs}`)
-                        .join(" / ")
-                    : "なし"
-                }
-              </div>
-            `
-          : nothing,
+                              },
+                              ok ? 1200 : 1800,
+                            );
+                          }}
+                        >
+                          コピー
+                        </button>
+                      </div>
+                    `,
+                  )}
+                `
+              : html`
+                  <div class="muted">- 対処コマンド: 現在対処不要</div>
+                `
+          }
+          <div class="muted">
+            - ops error: ${
+              weeklyStatus?.opsErrors?.length
+                ? weeklyStatus.opsErrors
+                    .map((row) => `${row.name} ${row.errors}/${row.runs}`)
+                    .join(" / ")
+                : "なし"
+            }
+          </div>
+        `,
       })}
       ${renderOpsCard({
         title: "Local First",
@@ -460,7 +460,7 @@ function renderOpsCard(params: {
         params.details && params.details !== nothing
           ? html`
               <details style="margin-top: 12px;">
-                <summary class="link" style="cursor:pointer;">詳細を開く</summary>
+                <summary class="link" style="cursor:pointer; font-weight: 600;">詳細を見る</summary>
                 <div style="margin-top: 10px; display:grid; gap: 6px;">
                   ${params.details}
                 </div>
