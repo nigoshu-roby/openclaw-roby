@@ -218,6 +218,18 @@ export function renderApp(state: AppViewState) {
       ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
       : rawDeliveryToSuggestions;
 
+  if (
+    state.tab === "roby" &&
+    state.connected &&
+    !state.robyOpsLoading &&
+    !state.robyOpsStatus &&
+    !state.robyOpsError
+  ) {
+    queueMicrotask(() => {
+      void loadRobyOpsStatus(state);
+    });
+  }
+
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
       <header class="topbar">
