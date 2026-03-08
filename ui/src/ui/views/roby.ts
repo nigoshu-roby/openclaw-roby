@@ -400,7 +400,7 @@ export function renderRoby(props: RobyProps) {
           : weeklyStatus?.present === false
             ? "未生成"
             : weeklyNeedsAttention
-              ? "要対応"
+              ? "未対応あり"
               : "正常",
         tone: !weeklyLoaded
           ? "muted"
@@ -414,12 +414,12 @@ export function renderRoby(props: RobyProps) {
             ? "週次スナップショットを取得中"
             : "週次スナップショット未取得"
           : weeklyStatus?.present
-            ? `eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
+            ? `過去7日: eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
             : "週次レポートなし",
         meta: weeklyLoaded && weeklyStatus?.ts ? formatRelativeTimestamp(weeklyStatus.ts) : "—",
         details: weeklyLoaded
           ? html`
-              <div class="muted">7日集計の内訳</div>
+              <div class="muted">7日集計の内訳（履歴）</div>
               <div class="muted">- eval fail run: ${weeklyStatus?.evalFailedRuns ?? 0}</div>
               <div class="muted">- drill fail run: ${weeklyStatus?.drillFailedRuns ?? 0}</div>
               <div class="muted">- audit error: ${weeklyStatus?.auditErrors ?? 0}</div>
