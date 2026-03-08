@@ -863,6 +863,8 @@ def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
     minutes_last = read_last_jsonl(STATE_DIR / "minutes_runs.jsonl")
     gmail_last = read_last_jsonl(STATE_DIR / "gmail_triage_runs.jsonl")
     self_growth_last = read_last_jsonl(STATE_DIR / "self_growth_runs.jsonl")
+    eval_last = read_last_json(STATE_DIR / "evals" / "latest.json")
+    drill_last = read_last_json(STATE_DIR / "drills" / "latest.json")
 
     lines.extend(
         [
@@ -878,6 +880,10 @@ def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
                 f"notified={int(((gmail_last or {}).get('summary') or {}).get('notified', 0))}"
             ),
             f"- self_growth: patch_status={str((self_growth_last or {}).get('patch_status', 'unknown'))}",
+            "",
+            "## 運用品質の最新状態",
+            summarize_health_snapshot("evaluation_harness", eval_last),
+            summarize_health_snapshot("runbook_drill", drill_last),
             "",
             "## 連携先ステータス",
             f"- Neuronic endpoint: {neuronic_url}",
@@ -902,7 +908,8 @@ def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
             "",
             "## 次のアクション",
             "1. 実行確認したい機能名を指定してください（例: minutes_pipeline）。",
-            "2. 実行が必要なら「実行して」と指示してください。",
+            "2. 品質確認が必要なら「evaluation_harnessを実行して」と指示してください。",
+            "3. 実行が必要なら「実行して」と指示してください。",
         ]
     )
     return "\n".join(lines)
@@ -918,6 +925,38 @@ def read_last_jsonl(path: Path) -> Optional[Dict[str, Any]]:
         return json.loads(lines[-1])
     except Exception:
         return None
+
+
+def read_last_json(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def summarize_health_snapshot(name: str, data: Optional[Dict[str, Any]]) -> str:
+    if not data:
+        return f"- {name}: 未実行"
+    if name == "evaluation_harness":
+        gates = data.get("gates") if isinstance(data.get("gates"), dict) else {}
+        latency = data.get("latency") if isinstance(data.get("latency"), dict) else {}
+        return (
+            f"- {name}: gate={'PASS' if gates.get('ok', False) else 'FAIL'} "
+            f"failed={int(data.get('failed', 0))}/{int(data.get('total', 0))} "
+            f"p95={int(latency.get('p95_ms', 0))}ms"
+        )
+    if name == "runbook_drill":
+        return (
+            f"- {name}: all_ok={'YES' if data.get('all_ok', False) else 'NO'} "
+            f"failed={int(data.get('failed', 0))}/{int(data.get('total', 0))} "
+            f"skipped={int(data.get('skipped', 0))}"
+        )
+    return f"- {name}: 状態不明"
 
 
 def build_runtime_status_summary(env: Dict[str, str]) -> str:
@@ -971,6 +1010,14 @@ def build_runtime_status_summary(env: Dict[str, str]) -> str:
             "- 直近 gmail_triage: "
             f"tasks={int(s.get('tasks', 0))}, archived={int(s.get('archived', 0))}, notified={int(s.get('notified', 0))}, run_id={s.get('run_id', '-')}"
         )
+    eval_last = read_last_json(STATE_DIR / "evals" / "latest.json")
+    drill_last = read_last_json(STATE_DIR / "drills" / "latest.json")
+    lines.extend(
+        [
+            summarize_health_snapshot("evaluation_harness", eval_last),
+            summarize_health_snapshot("runbook_drill", drill_last),
+        ]
+    )
 
     lines.extend(
         [

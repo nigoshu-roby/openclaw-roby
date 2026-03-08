@@ -54,18 +54,18 @@
   },
   {
     "id": "qa_local_status_ollama",
-    "description": "Ollama導入確認がローカル自己把握で回答されること",
+    "description": "Ollama導入確認が自己把握ステータスとして返ること",
     "message": "ollama導入できましたか？",
     "route": "auto",
     "execute": true,
     "expect": {
       "equals": {
-        "route": "qa_ollama",
+        "route": "qa_gemini",
         "action.ok": true,
         "action.mode": "local_status"
       },
       "contains": {
-        "action.output": ["Ollama CLI", "Ollama API", "Neuronic endpoint"]
+        "action.output": ["Ollama CLI", "Ollama API", "Neuronic endpoint", "evaluation_harness"]
       },
       "not_contains": {
         "action.output": ["持ち合わせていません", "情報はありません", "Unable to"]

@@ -5,6 +5,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
 
 
 def _load_orchestrator_module():
@@ -93,6 +94,46 @@ class TestRobyOrchestratorRouting(TestCase):
         }
         self.assertTrue(self.mod._is_direct_register_managed_task(task, "ボーネルンドスマレジテスト"))
         self.assertFalse(self.mod._is_direct_register_managed_task(task, "別タイトル"))
+
+    def test_build_runtime_status_summary_includes_eval_and_drill(self):
+        with (
+            patch.object(self.mod, "read_last_jsonl", side_effect=[
+                {"summary": {"tasks": 5, "neuronic_errors": 0, "run_id": "minutes-1"}},
+                {"summary": {"tasks": 2, "archived": 1, "notified": 3, "run_id": "gmail-1"}},
+            ]),
+            patch.object(self.mod, "read_last_json", side_effect=[
+                {"failed": 1, "total": 7, "gates": {"ok": False}, "latency": {"p95_ms": 1200}},
+                {"all_ok": True, "failed": 0, "total": 9, "skipped": 1},
+            ]),
+        ):
+            text = self.mod.build_runtime_status_summary(
+                {
+                    "ROBY_ORCH_OLLAMA_BASE_URL": "http://127.0.0.1:11434",
+                    "NEURONIC_URL": "http://127.0.0.1:5174/api/v1/tasks/import",
+                    "NEURONIC_TOKEN": "dummy",
+                }
+            )
+        self.assertIn("evaluation_harness: gate=FAIL failed=1/7 p95=1200ms", text)
+        self.assertIn("runbook_drill: all_ok=YES failed=0/9 skipped=1", text)
+
+    def test_build_local_capability_summary_includes_health_section(self):
+        with (
+            patch.object(self.mod, "shutil"),
+            patch.object(self.mod, "read_last_jsonl", side_effect=[
+                {"summary": {"tasks": 4, "neuronic_errors": 0}},
+                {"summary": {"tasks": 1, "archived": 2, "notified": 3}},
+                {"patch_status": "no_change"},
+            ]),
+            patch.object(self.mod, "read_last_json", side_effect=[
+                {"failed": 0, "total": 7, "gates": {"ok": True}, "latency": {"p95_ms": 900}},
+                {"all_ok": False, "failed": 2, "total": 8, "skipped": 0},
+            ]),
+        ):
+            self.mod.shutil.which.return_value = "/opt/homebrew/bin/ollama"
+            text = self.mod.build_local_capability_summary({"NEURONIC_TOKEN": "dummy"})
+        self.assertIn("## 運用品質の最新状態", text)
+        self.assertIn("evaluation_harness: gate=PASS failed=0/7 p95=900ms", text)
+        self.assertIn("runbook_drill: all_ok=NO failed=2/8 skipped=0", text)
 
 
 if __name__ == "__main__":

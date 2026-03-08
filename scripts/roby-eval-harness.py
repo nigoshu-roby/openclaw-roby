@@ -28,6 +28,7 @@ STATE_DIR = Path.home() / ".openclaw" / "roby" / "evals"
 LATEST_PATH = STATE_DIR / "latest.json"
 HISTORY_PATH = STATE_DIR / "history.jsonl"
 LATEST_MD_PATH = STATE_DIR / "latest.md"
+REPORT_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -480,6 +481,7 @@ def main() -> int:
     retries_total = sum(int(r.get("transient_retry_used", 0)) for r in case_results)
     cases_with_retry = sum(1 for r in case_results if int(r.get("transient_retry_used", 0)) > 0)
     report: Dict[str, Any] = {
+        "schema_version": REPORT_SCHEMA_VERSION,
         "ts": started.isoformat(),
         "cases_path": str(cases_path),
         "policy_path": str(policy_path),
