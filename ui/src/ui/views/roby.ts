@@ -226,13 +226,13 @@ export function renderRoby(props: RobyProps) {
           <div class="stat">
           <div class="stat-label">スケジューラ</div>
           <div class="stat-value">
-            <a class="link" href=${cronHref}>スケジューラを開く</a>
+            <a class="link" href=${cronHref}>OPEN</a>
           </div>
         </div>
         <div class="stat">
           <div class="stat-label">ゲートウェイログ</div>
           <div class="stat-value">
-            <a class="link" href=${logsHref}>ログを開く</a>
+            <a class="link" href=${logsHref}>OPEN</a>
           </div>
         </div>
         <div class="stat">
@@ -330,10 +330,14 @@ export function renderRoby(props: RobyProps) {
                   ${liveFreshness.components.map(
                     (row) => html`
                       <div class="row" style="gap: 8px; align-items: flex-start;">
-                        <span class="pill ${row.stale ? "warn" : "ok"}">${row.name}</span>
-                        <span class="muted" style="flex: 1;">
-                          ${row.missing ? "未実行" : `${row.ageMinutes ?? 0}分前 / 閾値 ${row.thresholdMinutes}分`}
-                        </span>
+                        <div style="display: grid; gap: 4px; flex: 1; min-width: 0;">
+                          <span class="pill ${row.stale ? "warn" : "ok"}" style="width: fit-content;">
+                            ${row.name}
+                          </span>
+                          <span class="muted">
+                            ${row.missing ? "未実行" : `${row.ageMinutes ?? 0}分前 / 閾値 ${row.thresholdMinutes}分`}
+                          </span>
+                        </div>
                         ${
                           row.stale
                             ? html`
