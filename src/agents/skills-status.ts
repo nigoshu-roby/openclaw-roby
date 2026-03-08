@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
@@ -53,6 +54,31 @@ export type SkillStatusReport = {
   managedSkillsDir: string;
   skills: SkillStatusEntry[];
 };
+
+const keychainEnvPresenceCache = new Map<string, boolean>();
+
+function hasKeychainEnv(envName: string): boolean {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  const cacheKey = envName.trim();
+  if (!cacheKey) {
+    return false;
+  }
+  const cached = keychainEnvPresenceCache.get(cacheKey);
+  if (cached != null) {
+    return cached;
+  }
+  const keychainService = process.env.ROBY_KEYCHAIN_SERVICE?.trim() || "roby-pbs";
+  const result = spawnSync(
+    "security",
+    ["find-generic-password", "-s", keychainService, "-a", cacheKey, "-w"],
+    { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" },
+  );
+  const present = result.status === 0 && result.stdout.trim().length > 0;
+  keychainEnvPresenceCache.set(cacheKey, present);
+  return present;
+}
 
 function resolveSkillKey(entry: SkillEntry): string {
   return entry.metadata?.skillKey ?? entry.skill.name;
@@ -183,7 +209,8 @@ function buildSkillStatus(
     Boolean(
       process.env[envName] ||
       skillConfig?.env?.[envName] ||
-      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) ||
+      hasKeychainEnv(envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
   const bundled =

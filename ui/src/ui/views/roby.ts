@@ -120,9 +120,12 @@ export function renderRoby(props: RobyProps) {
   const skillsHref = pathForTab("skills", props.basePath);
 
   const skills = props.skillsReport?.skills ?? [];
-  const gmailSkill = findSkill(skills, ["roby-mail", "gog"]);
+  const robyMailSkill = findSkill(skills, ["roby-mail"]);
+  const gogSkill = findSkill(skills, ["gog"]);
   const notionSkill = findSkill(skills, ["notion"]);
-  const neuronicSkill = findSkill(skills, ["roby-mail"]);
+  const gmailStatus = resolveCombinedSkillStatus([robyMailSkill, gogSkill], ["roby-mail", "gog"]);
+  const notionStatus = resolveCombinedSkillStatus([notionSkill], ["notion"]);
+  const neuronicStatus = resolveCombinedSkillStatus([robyMailSkill], ["roby-mail"]);
   const ops = props.robyOpsStatus;
   const evalStatus = ops?.evaluationHarness;
   const drillStatus = ops?.runbookDrill;
@@ -464,7 +467,7 @@ export function renderRoby(props: RobyProps) {
       ${renderIntegrationCard({
         title: "Gmail",
         subtitle: "roby-mail + gog",
-        skill: gmailSkill,
+        status: gmailStatus,
         skillsHref,
         loading: props.skillsLoading,
         error: props.skillsError,
@@ -472,7 +475,7 @@ export function renderRoby(props: RobyProps) {
       ${renderIntegrationCard({
         title: "Notion",
         subtitle: "Notion API",
-        skill: notionSkill,
+        status: notionStatus,
         skillsHref,
         loading: props.skillsLoading,
         error: props.skillsError,
@@ -480,7 +483,7 @@ export function renderRoby(props: RobyProps) {
       ${renderIntegrationCard({
         title: "Neuronic",
         subtitle: "タスク同期（roby-mail経由）",
-        skill: neuronicSkill,
+        status: neuronicStatus,
         skillsHref,
         loading: props.skillsLoading,
         error: props.skillsError,
@@ -533,31 +536,64 @@ function findSkill(skills: SkillStatusEntry[], keys: string[]) {
 
 function resolveSkillStatus(skill: SkillStatusEntry | undefined) {
   if (!skill) {
-    return { label: "未インストール", tone: "danger" };
+    return { label: "未インストール", tone: "danger" as const };
   }
   const missing = computeSkillMissing(skill);
   if (missing.length > 0) {
-    return { label: `不足: ${missing.join(", ")}`, tone: "warn" };
+    return { label: `不足: ${missing.join(", ")}`, tone: "warn" as const };
   }
   if (skill.disabled) {
-    return { label: "無効", tone: "warn" };
+    return { label: "無効", tone: "warn" as const };
   }
   if (!skill.eligible) {
-    return { label: "ブロック中", tone: "warn" };
+    return { label: "ブロック中", tone: "warn" as const };
   }
-  return { label: "準備完了", tone: "ok" };
+  return { label: "準備完了", tone: "ok" as const };
+}
+
+function resolveCombinedSkillStatus(
+  skills: Array<SkillStatusEntry | undefined>,
+  requiredNames: string[],
+) {
+  const present = skills.filter((skill): skill is SkillStatusEntry => Boolean(skill));
+  if (present.length === 0) {
+    return { label: "未インストール", tone: "danger" as const };
+  }
+  if (present.length < requiredNames.length) {
+    const presentNames = new Set(present.map((skill) => skill.skillKey));
+    const missingNames = requiredNames.filter((name) => !presentNames.has(name));
+    return { label: `不足: ${missingNames.join(", ")}`, tone: "warn" as const };
+  }
+  const labels = new Set<string>();
+  let hasDanger = false;
+  for (const skill of present) {
+    const status = resolveSkillStatus(skill);
+    if (status.tone === "danger") {
+      hasDanger = true;
+    }
+    if (status.label !== "準備完了") {
+      labels.add(status.label);
+    }
+  }
+  if (labels.size > 0) {
+    return {
+      label: Array.from(labels).join(" / "),
+      tone: hasDanger ? ("danger" as const) : ("warn" as const),
+    };
+  }
+  return { label: "準備完了", tone: "ok" as const };
 }
 
 function renderIntegrationCard(params: {
   title: string;
   subtitle: string;
-  skill?: SkillStatusEntry;
+  status: { label: string; tone: "ok" | "warn" | "danger" };
   skillsHref: string;
   loading: boolean;
   error: string | null;
   requiredHint?: string;
 }) {
-  const status = resolveSkillStatus(params.skill);
+  const status = params.status;
   return html`
     <div class="card">
       <div class="card-title">${params.title}</div>
