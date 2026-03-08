@@ -233,6 +233,8 @@ export type AppViewState = {
   robyOpsLoading: boolean;
   robyOpsStatus: RobyOpsStatus | null;
   robyOpsError: string | null;
+  robyOpsNotifyBusy: boolean;
+  robyOpsNotifyMessage: string | null;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;

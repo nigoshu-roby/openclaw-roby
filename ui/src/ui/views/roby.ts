@@ -25,10 +25,13 @@ export type RobyProps = {
   robyOpsLoading: boolean;
   robyOpsStatus: RobyOpsStatus | null;
   robyOpsError: string | null;
+  robyOpsNotifyBusy: boolean;
+  robyOpsNotifyMessage: string | null;
   skillsLoading: boolean;
   skillsError: string | null;
   skillsReport: SkillStatusReport | null;
   onRefresh: () => void;
+  onNotifyOpsSummary: () => void;
   onRunJob: (job: CronJob) => void;
   onLoadRuns: (jobId: string) => void;
 };
@@ -72,6 +75,31 @@ function joinList(items: string[] | undefined, fallback = "なし") {
     return fallback;
   }
   return items.join(" / ");
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text.trim()) {
+    return false;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.top = "-1000px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return copied;
+    } catch {
+      return false;
+    }
+  }
 }
 
 export function renderRoby(props: RobyProps) {
@@ -145,6 +173,13 @@ export function renderRoby(props: RobyProps) {
                 </button>
                 <button
                   class="btn btn--ghost"
+                  ?disabled=${props.robyOpsNotifyBusy}
+                  @click=${props.onNotifyOpsSummary}
+                >
+                  ${props.robyOpsNotifyBusy ? "Slack再送中…" : "品質サマリーをSlackへ再送"}
+                </button>
+                <button
+                  class="btn btn--ghost"
                   ?disabled=${props.cronBusy || !job}
                   @click=${() => props.onLoadRuns(job.id)}
                 >
@@ -152,6 +187,13 @@ export function renderRoby(props: RobyProps) {
                 </button>
               </div>
               ${props.cronError ? html`<div class="callout danger" style="margin-top: 12px;">${props.cronError}</div>` : nothing}
+              ${
+                props.robyOpsNotifyMessage
+                  ? html`
+                      <div class="callout" style="margin-top: 12px;">${props.robyOpsNotifyMessage}</div>
+                    `
+                  : nothing
+              }
               ${
                 latestRun?.summary
                   ? html`
@@ -289,6 +331,44 @@ export function renderRoby(props: RobyProps) {
               <div class="muted">
                 - stale component: ${joinList(weeklyStatus?.staleComponents, "なし")}
               </div>
+              ${
+                weeklyStatus?.remedyCommands?.length
+                  ? html`
+                      <div class="muted" style="margin-top: 8px;">対処コマンド</div>
+                      ${weeklyStatus.remedyCommands.map(
+                        (row) => html`
+                          <div class="row" style="gap: 8px; align-items: flex-start;">
+                            <span class="muted" style="min-width: 92px;">${row.name}</span>
+                            <code style="flex: 1; word-break: break-all;">${row.command}</code>
+                            <button
+                              class="btn btn--ghost"
+                              type="button"
+                              @click=${async (e: Event) => {
+                                const button = e.currentTarget as HTMLButtonElement | null;
+                                if (!button) {
+                                  return;
+                                }
+                                const ok = await copyTextToClipboard(row.command);
+                                const original = button.textContent ?? "";
+                                button.textContent = ok ? "コピー済み" : "失敗";
+                                window.setTimeout(
+                                  () => {
+                                    if (button.isConnected) {
+                                      button.textContent = original;
+                                    }
+                                  },
+                                  ok ? 1200 : 1800,
+                                );
+                              }}
+                            >
+                              コピー
+                            </button>
+                          </div>
+                        `,
+                      )}
+                    `
+                  : nothing
+              }
               <div class="muted">
                 - ops error: ${
                   weeklyStatus?.opsErrors?.length

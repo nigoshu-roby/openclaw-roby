@@ -621,6 +621,10 @@ export type RobyWeeklyStatus = RobyOpsHealthSummary & {
   auditOk?: boolean;
   staleCount?: number;
   staleComponents?: string[];
+  remedyCommands?: Array<{
+    name: string;
+    command: string;
+  }>;
   auditErrors?: number;
   opsErrors?: Array<{
     name: string;

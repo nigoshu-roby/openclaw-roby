@@ -86,6 +86,7 @@ const BASE_METHODS = [
   "cron.run",
   "cron.runs",
   "system-presence",
+  "roby.notifyOpsSummary",
   "roby.status",
   "system-event",
   "send",

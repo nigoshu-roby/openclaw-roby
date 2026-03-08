@@ -2,15 +2,20 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const defaultRepoRoot = path.resolve(moduleDir, "../../..");
+const OPENCLAW_REPO = process.env.OPENCLAW_REPO?.trim() || defaultRepoRoot;
 const ROBY_STATE_ROOT = path.join(os.homedir(), ".openclaw", "roby");
 
 function parseTimestampMs(value: unknown): number | null {
@@ -102,6 +107,22 @@ async function buildRobyStatus() {
     ? freshness.stale_components
         .map((value) => (typeof value === "string" ? value.trim() : ""))
         .filter(Boolean)
+    : [];
+  const freshnessDetail = typeof freshness.detail === "string" ? freshness.detail : "";
+  const remedyCommands = freshnessDetail.includes("/ remedy:")
+    ? freshnessDetail
+        .split("/ remedy:", 2)[1]
+        .split(";")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => {
+          const [name, command] = entry.split("=>", 2);
+          return {
+            name: (name ?? "").trim(),
+            command: (command ?? "").trim(),
+          };
+        })
+        .filter((row) => row.name && row.command)
     : [];
   const opsErrors = Object.entries(weeklyOps)
     .map(([name, value]) => {
@@ -204,6 +225,7 @@ async function buildRobyStatus() {
           | undefined) ?? 0,
       ),
       staleComponents,
+      remedyCommands,
       auditErrors: Number(audit.errors ?? 0),
       opsErrors,
     },
@@ -216,6 +238,33 @@ async function buildRobyStatus() {
       availableModels: ollama.models,
       error: ollama.error,
     },
+  };
+}
+
+async function runWeeklyNotify() {
+  const scriptPath = path.join(OPENCLAW_REPO, "scripts", "roby-weekly-report.py");
+  const run = await runCommandWithTimeout(["python3", scriptPath, "--json", "--notify"], {
+    cwd: OPENCLAW_REPO,
+    timeoutMs: 60_000,
+    noOutputTimeoutMs: 30_000,
+  });
+  let parsed: Record<string, unknown> | null = null;
+  const stdout = (run.stdout ?? "").trim();
+  try {
+    const raw = JSON.parse(stdout) as unknown;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      parsed = raw as Record<string, unknown>;
+    }
+  } catch {
+    parsed = null;
+  }
+  return {
+    ok: run.code === 0,
+    exitCode: run.code ?? 1,
+    signal: run.signal ?? "",
+    stdout,
+    stderr: (run.stderr ?? "").trim(),
+    report: parsed,
   };
 }
 
@@ -245,6 +294,9 @@ export const systemHandlers: GatewayRequestHandlers = {
   },
   "roby.status": async ({ respond }) => {
     respond(true, await buildRobyStatus(), undefined);
+  },
+  "roby.notifyOpsSummary": async ({ respond }) => {
+    respond(true, await runWeeklyNotify(), undefined);
   },
   "system-event": ({ params, respond, context }) => {
     const text = typeof params.text === "string" ? params.text.trim() : "";

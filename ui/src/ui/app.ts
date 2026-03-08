@@ -342,6 +342,8 @@ export class OpenClawApp extends LitElement {
   @state() robyOpsLoading = false;
   @state() robyOpsStatus: import("./types.js").RobyOpsStatus | null = null;
   @state() robyOpsError: string | null = null;
+  @state() robyOpsNotifyBusy = false;
+  @state() robyOpsNotifyMessage: string | null = null;
 
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
 
