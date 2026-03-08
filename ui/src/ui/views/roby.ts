@@ -127,6 +127,10 @@ export function renderRoby(props: RobyProps) {
   const drillStatus = ops?.runbookDrill;
   const weeklyStatus = ops?.weeklyReport;
   const localFirst = ops?.localFirst;
+  const weeklyLoaded = Boolean(weeklyStatus);
+  const weeklyNeedsAttention =
+    weeklyStatus?.present === true &&
+    (weeklyStatus?.auditOk === false || (weeklyStatus?.staleCount ?? 0) > 0);
 
   return html`
     <section class="grid grid-cols-2">
@@ -306,23 +310,32 @@ export function renderRoby(props: RobyProps) {
       })}
       ${renderOpsCard({
         title: "Weekly Report",
-        status:
-          weeklyStatus?.present === false
+        status: !weeklyLoaded
+          ? props.robyOpsLoading
+            ? "読込中"
+            : "未取得"
+          : weeklyStatus?.present === false
             ? "未生成"
-            : weeklyStatus?.auditOk === false || (weeklyStatus?.staleCount ?? 0) > 0
+            : weeklyNeedsAttention
               ? "要対応"
               : "正常",
-        tone:
-          weeklyStatus?.present === false
+        tone: !weeklyLoaded
+          ? "muted"
+          : weeklyStatus?.present === false
             ? "muted"
-            : weeklyStatus?.auditOk === false || (weeklyStatus?.staleCount ?? 0) > 0
+            : weeklyNeedsAttention
               ? "warn"
               : "ok",
-        subtitle: weeklyStatus?.present
-          ? `eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
-          : "最新レポートなし",
-        meta: weeklyStatus?.ts ? formatRelativeTimestamp(weeklyStatus.ts) : "—",
-        details: html`
+        subtitle: !weeklyLoaded
+          ? props.robyOpsLoading
+            ? "最新レポートを取得中"
+            : "最新レポート未取得"
+          : weeklyStatus?.present
+            ? `eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
+            : "最新レポートなし",
+        meta: weeklyLoaded && weeklyStatus?.ts ? formatRelativeTimestamp(weeklyStatus.ts) : "—",
+        details: weeklyLoaded
+          ? html`
           <div class="muted">失敗内訳</div>
           <div class="muted">- eval fail run: ${weeklyStatus?.evalFailedRuns ?? 0}</div>
           <div class="muted">- drill fail run: ${weeklyStatus?.drillFailedRuns ?? 0}</div>
@@ -379,7 +392,8 @@ export function renderRoby(props: RobyProps) {
                 : "なし"
             }
           </div>
-        `,
+        `
+          : nothing,
       })}
       ${renderOpsCard({
         title: "Local First",
