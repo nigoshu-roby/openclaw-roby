@@ -98,22 +98,60 @@ def notion_request(method: str, url: str, token: str, payload: Optional[Dict[str
         raise RuntimeError(f"Notion API error {e.code}: {body}") from e
 
 
+def gh_current_login() -> Optional[str]:
+    try:
+        out = subprocess.check_output(
+            ["gh", "api", "user", "--jq", ".login"],
+            timeout=15,
+            text=True,
+        )
+        login = (out or "").strip()
+        return login or None
+    except Exception:
+        return None
+
+
+def gh_owner_candidates(owner: str) -> List[str]:
+    desired = (owner or "").strip() or "@me"
+    candidates: List[str] = [desired]
+    current = gh_current_login()
+    if desired != "@me" and current and desired == current:
+        candidates.append("@me")
+    return candidates
+
+
 def gh_project_items(owner: str, number: int, limit: int = 500) -> List[Dict[str, Any]]:
-    cmd = [
-        "gh",
-        "project",
-        "item-list",
-        str(number),
-        "--owner",
-        owner,
-        "--limit",
-        str(limit),
-        "--format",
-        "json",
-    ]
-    out = subprocess.check_output(cmd, timeout=30)
-    data = json.loads(out)
-    return data.get("items", [])
+    last_exc: Optional[Exception] = None
+    for candidate in gh_owner_candidates(owner):
+        cmd = [
+            "gh",
+            "project",
+            "item-list",
+            str(number),
+            "--owner",
+            candidate,
+            "--limit",
+            str(limit),
+            "--format",
+            "json",
+        ]
+        try:
+            out = subprocess.check_output(cmd, timeout=30, text=True)
+            data = json.loads(out)
+            return data.get("items", [])
+        except subprocess.CalledProcessError as exc:
+            stderr = ((exc.stderr or "") if isinstance(exc.stderr, str) else "").strip()
+            stdout = ((exc.stdout or "") if isinstance(exc.stdout, str) else "").strip()
+            message = stderr or stdout or str(exc)
+            last_exc = RuntimeError(
+                f"gh project item-list failed for owner={candidate}: {message}"
+            )
+            if "unknown owner type" in message.lower():
+                continue
+            raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("gh project item-list failed: no owner candidates available")
 
 
 def normalize_item(it: Dict[str, Any]) -> Dict[str, Any]:
