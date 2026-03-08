@@ -78,6 +78,22 @@ class TestRobyFeedbackSync(TestCase):
         self.assertEqual(summary["improvement_targets"][0]["count"], 1)
         self.assertEqual(summary["improvement_targets"][1]["target"], "task_granularity_split")
 
+    def test_email_specific_reason_maps_to_gmail_target(self):
+        tasks = [
+            {
+                "id": "mail-1",
+                "title": "メール確認: お役立ち資料",
+                "source": "roby",
+                "feedback_state": "bad",
+                "feedback_reason_code": "newsletter_false_positive",
+                "updated_at": "2026-03-08T14:00:00Z",
+            }
+        ]
+        summary = self.mod.summarize_feedback(tasks, recent_limit=3)
+        self.assertEqual(summary["actionable_reason_counts"]["newsletter_false_positive"], 1)
+        self.assertEqual(summary["improvement_targets"][0]["target"], "gmail_promo_filtering")
+        self.assertEqual(summary["improvement_targets"][0]["label"], "メルマガ判定")
+
 
 if __name__ == "__main__":
     main()

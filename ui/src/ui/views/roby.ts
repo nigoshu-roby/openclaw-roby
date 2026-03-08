@@ -94,6 +94,16 @@ function feedbackReasonLabel(code?: string | null) {
       return "内容誤り";
     case "unclear":
       return "意図不明";
+    case "newsletter_false_positive":
+      return "メルマガ・広告だった";
+    case "should_be_review_only":
+      return "確認止まりでよい";
+    case "should_be_reply":
+      return "返信対応にすべき";
+    case "important_notice":
+      return "重要通知として扱うべき";
+    case "billing_contract":
+      return "契約・請求系として扱うべき";
     case "quality_mismatch":
       return "品質ミスマッチ";
     case "accepted":

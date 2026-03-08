@@ -70,6 +70,31 @@ FEEDBACK_REASON_RULES: Dict[str, Dict[str, str]] = {
         "label": "表現明確化",
         "recommendation": "抽出後に『誰が何をするか』の書き換えを追加する。",
     },
+    "newsletter_false_positive": {
+        "target": "gmail_promo_filtering",
+        "label": "メルマガ判定",
+        "recommendation": "Gmail仕訳で広告・メルマガ判定を強め、確認/タスク化を抑制する。",
+    },
+    "should_be_review_only": {
+        "target": "gmail_review_vs_task",
+        "label": "確認タスク判定",
+        "recommendation": "メールは『確認のみ』と『実行タスク化』を分け、確認止まりの条件を明確化する。",
+    },
+    "should_be_reply": {
+        "target": "gmail_reply_detection",
+        "label": "返信要否判定",
+        "recommendation": "返信依頼・日程調整・確認依頼の文面を優先して reply 候補へ振り分ける。",
+    },
+    "important_notice": {
+        "target": "gmail_notice_priority",
+        "label": "重要通知判定",
+        "recommendation": "運用通知・承認・発行・失敗通知を review 優先で残すルールを強化する。",
+    },
+    "billing_contract": {
+        "target": "gmail_finance_contract_detection",
+        "label": "契約・請求判定",
+        "recommendation": "請求・見積・契約更新・支払系キーワードを review 優先シグナルとして扱う。",
+    },
 }
 
 
