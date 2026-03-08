@@ -9,6 +9,7 @@ set -euo pipefail
 # - eval_harness: disabled by default (set ROBY_ORCH_ENABLE_EVAL=1)
 # - runbook_drill: disabled by default (set ROBY_ORCH_ENABLE_DRILL=1)
 # - notion_sync: disabled by default (set ROBY_ORCH_ENABLE_NOTION_SYNC=1)
+# - feedback_sync: disabled by default (set ROBY_ORCH_ENABLE_FEEDBACK_SYNC=1)
 # - weekly_report: disabled by default (set ROBY_ORCH_ENABLE_WEEKLY_REPORT=1)
 #
 # Usage:
@@ -25,6 +26,7 @@ GMAIL_TRIAGE_CRON="${GMAIL_TRIAGE_CRON:-*/30 * * * *}"
 EVAL_HARNESS_CRON="${EVAL_HARNESS_CRON:-35 */6 * * *}"
 RUNBOOK_DRILL_CRON="${RUNBOOK_DRILL_CRON:-20 8 * * 1}"
 NOTION_SYNC_CRON="${NOTION_SYNC_CRON:-20 9 * * *}"
+FEEDBACK_SYNC_CRON="${FEEDBACK_SYNC_CRON:-50 9,15,21 * * *}"
 WEEKLY_REPORT_CRON="${WEEKLY_REPORT_CRON:-30 9 * * 1}"
 
 SELF_GROWTH_TIMEOUT="${SELF_GROWTH_TIMEOUT:-900}"
@@ -33,6 +35,7 @@ GMAIL_TRIAGE_TIMEOUT="${GMAIL_TRIAGE_TIMEOUT:-900}"
 EVAL_HARNESS_TIMEOUT="${EVAL_HARNESS_TIMEOUT:-900}"
 RUNBOOK_DRILL_TIMEOUT="${RUNBOOK_DRILL_TIMEOUT:-1200}"
 NOTION_SYNC_TIMEOUT="${NOTION_SYNC_TIMEOUT:-600}"
+FEEDBACK_SYNC_TIMEOUT="${FEEDBACK_SYNC_TIMEOUT:-600}"
 WEEKLY_REPORT_TIMEOUT="${WEEKLY_REPORT_TIMEOUT:-900}"
 
 TAG_SELF="ROBY_ORCH_CRON_SELF_GROWTH"
@@ -41,6 +44,7 @@ TAG_GMAIL="ROBY_ORCH_CRON_GMAIL_TRIAGE"
 TAG_EVAL="ROBY_ORCH_CRON_EVAL_HARNESS"
 TAG_DRILL="ROBY_ORCH_CRON_RUNBOOK_DRILL"
 TAG_NOTION="ROBY_ORCH_CRON_NOTION_SYNC"
+TAG_FEEDBACK="ROBY_ORCH_CRON_FEEDBACK_SYNC"
 TAG_WEEKLY="ROBY_ORCH_CRON_WEEKLY_REPORT"
 
 BASE_ENV="ROBY_KEYCHAIN_SERVICE=\"$KEYCHAIN_SERVICE\" ROBY_SECRET_WRAPPER=\"$SECRET_WRAPPER\""
@@ -50,6 +54,7 @@ CMD_GMAIL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cr
 CMD_EVAL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" eval_harness ${EVAL_HARNESS_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_eval_harness.log\" 2>&1"
 CMD_DRILL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" runbook_drill ${RUNBOOK_DRILL_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_runbook_drill.log\" 2>&1"
 CMD_NOTION="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" notion_sync ${NOTION_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_notion_sync.log\" 2>&1"
+CMD_FEEDBACK="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" feedback_sync ${FEEDBACK_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_feedback_sync.log\" 2>&1"
 CMD_WEEKLY="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" weekly_report ${WEEKLY_REPORT_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_weekly_report.log\" 2>&1"
 
 LINE_SELF="${SELF_GROWTH_CRON} ${CMD_SELF} # ${TAG_SELF}"
@@ -58,10 +63,11 @@ LINE_GMAIL="${GMAIL_TRIAGE_CRON} ${CMD_GMAIL} # ${TAG_GMAIL}"
 LINE_EVAL="${EVAL_HARNESS_CRON} ${CMD_EVAL} # ${TAG_EVAL}"
 LINE_DRILL="${RUNBOOK_DRILL_CRON} ${CMD_DRILL} # ${TAG_DRILL}"
 LINE_NOTION="${NOTION_SYNC_CRON} ${CMD_NOTION} # ${TAG_NOTION}"
+LINE_FEEDBACK="${FEEDBACK_SYNC_CRON} ${CMD_FEEDBACK} # ${TAG_FEEDBACK}"
 LINE_WEEKLY="${WEEKLY_REPORT_CRON} ${CMD_WEEKLY} # ${TAG_WEEKLY}"
 
 current="$(crontab -l 2>/dev/null || true)"
-filtered="$(printf "%s\n" "$current" | sed "/${TAG_SELF}/d;/${TAG_MINUTES}/d;/${TAG_GMAIL}/d;/${TAG_EVAL}/d;/${TAG_DRILL}/d;/${TAG_NOTION}/d;/${TAG_WEEKLY}/d")"
+filtered="$(printf "%s\n" "$current" | sed "/${TAG_SELF}/d;/${TAG_MINUTES}/d;/${TAG_GMAIL}/d;/${TAG_EVAL}/d;/${TAG_DRILL}/d;/${TAG_NOTION}/d;/${TAG_FEEDBACK}/d;/${TAG_WEEKLY}/d")"
 
 {
   printf "%s\n" "$filtered"
@@ -76,6 +82,9 @@ filtered="$(printf "%s\n" "$current" | sed "/${TAG_SELF}/d;/${TAG_MINUTES}/d;/${
   fi
   if [[ "${ROBY_ORCH_ENABLE_NOTION_SYNC:-0}" == "1" ]]; then
     printf "%s\n" "$LINE_NOTION"
+  fi
+  if [[ "${ROBY_ORCH_ENABLE_FEEDBACK_SYNC:-0}" == "1" ]]; then
+    printf "%s\n" "$LINE_FEEDBACK"
   fi
   if [[ "${ROBY_ORCH_ENABLE_WEEKLY_REPORT:-0}" == "1" ]]; then
     printf "%s\n" "$LINE_WEEKLY"
@@ -100,6 +109,11 @@ if [[ "${ROBY_ORCH_ENABLE_NOTION_SYNC:-0}" == "1" ]]; then
   echo "$LINE_NOTION"
 else
   echo "(not installed) notion_sync: set ROBY_ORCH_ENABLE_NOTION_SYNC=1 to enable"
+fi
+if [[ "${ROBY_ORCH_ENABLE_FEEDBACK_SYNC:-0}" == "1" ]]; then
+  echo "$LINE_FEEDBACK"
+else
+  echo "(not installed) feedback_sync: set ROBY_ORCH_ENABLE_FEEDBACK_SYNC=1 to enable"
 fi
 if [[ "${ROBY_ORCH_ENABLE_WEEKLY_REPORT:-0}" == "1" ]]; then
   echo "$LINE_WEEKLY"

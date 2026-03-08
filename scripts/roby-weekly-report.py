@@ -28,6 +28,7 @@ EVAL_HISTORY = STATE_ROOT / "evals" / "history.jsonl"
 DRILL_HISTORY = STATE_ROOT / "drills" / "history.jsonl"
 AB_HISTORY = STATE_ROOT / "ab_router_runs.jsonl"
 AUDIT_FILE = STATE_ROOT / "audit" / "events.jsonl"
+FEEDBACK_HISTORY = STATE_ROOT / "feedback_sync_runs.jsonl"
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
     "OPENAI_API_KEY",
@@ -206,11 +207,39 @@ def summarize_ab(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"runs": len(items), "arms": by_arm, "guard_applied_runs": guard_applied_runs}
 
 
+def summarize_feedback(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not items:
+        return {"runs": 0}
+    latest = items[-1]
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    recent_actionable = summary.get("recent_actionable") if isinstance(summary.get("recent_actionable"), list) else []
+    return {
+        "runs": len(items),
+        "reviewed_count": int(summary.get("reviewed_count", 0)),
+        "actionable_count": int(summary.get("actionable_count", 0)),
+        "good": int(counts.get("good", 0)),
+        "bad": int(counts.get("bad", 0)),
+        "missed": int(counts.get("missed", 0)),
+        "pending": int(counts.get("pending", 0)),
+        "latest": latest,
+        "recent_actionable": [
+            {
+                "title": str((row or {}).get("title") or "").strip(),
+                "feedback_state": str((row or {}).get("feedback_state") or "").strip(),
+            }
+            for row in recent_actionable[:5]
+            if isinstance(row, dict)
+        ],
+    }
+
+
 def summarize_ops_from_audit(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     tracked = {
         "minutes_sync.run": "minutes_sync",
         "gmail_triage.run": "gmail_triage",
         "notion_sync.run": "notion_sync",
+        "feedback_sync.run": "feedback_sync",
         "self_growth.run": "self_growth",
         "evaluation_harness.run": "evaluation_harness",
         "runbook_drill.run": "runbook_drill",
@@ -251,6 +280,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
     eval_s = report["eval"]
     drill_s = report["drill"]
     ab_s = report["ab"]
+    feedback_s = report.get("feedback") or {}
     audit_s = report["audit"]
     lines = [
         "# PBS Weekly Ops Report",
@@ -281,6 +311,17 @@ def build_markdown(report: Dict[str, Any]) -> str:
             lines.append(
                 f"  - {arm}: runs={row.get('runs',0)} ok_rate={row.get('ok_rate',0)} avg_elapsed_ms={row.get('avg_elapsed_ms',0)}"
             )
+    lines.extend(
+        [
+            "",
+            "## Feedback Loop",
+            f"- runs: {feedback_s.get('runs', 0)}",
+            f"- reviewed_count: {feedback_s.get('reviewed_count', 0)}",
+            f"- actionable_count: {feedback_s.get('actionable_count', 0)}",
+            f"- good / bad / missed / pending: {feedback_s.get('good', 0)} / {feedback_s.get('bad', 0)} / {feedback_s.get('missed', 0)} / {feedback_s.get('pending', 0)}",
+            "",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -327,6 +368,7 @@ def main() -> int:
     eval_items = in_window(read_jsonl(EVAL_HISTORY), since)
     drill_items = in_window(read_jsonl(DRILL_HISTORY), since)
     ab_items = in_window(read_jsonl(AB_HISTORY), since)
+    feedback_items = in_window(read_jsonl(FEEDBACK_HISTORY), since)
     audit_events = in_window(read_jsonl(AUDIT_FILE), since)
     audit_report = verify_audit([AUDIT_FILE])
 
@@ -336,6 +378,7 @@ def main() -> int:
         "eval": summarize_eval(eval_items),
         "drill": summarize_drill(drill_items),
         "ab": summarize_ab(ab_items),
+        "feedback": summarize_feedback(feedback_items),
         "audit": audit_report,
         "ops": summarize_ops_from_audit(audit_events),
     }
@@ -386,9 +429,15 @@ def main() -> int:
                         "minutes_sync_runs": int(report["ops"].get("minutes_sync", {}).get("runs", 0)),
                         "gmail_triage_runs": int(report["ops"].get("gmail_triage", {}).get("runs", 0)),
                         "notion_sync_runs": int(report["ops"].get("notion_sync", {}).get("runs", 0)),
+                        "feedback_sync_runs": int(report["ops"].get("feedback_sync", {}).get("runs", 0)),
                         "self_growth_runs": int(report["ops"].get("self_growth", {}).get("runs", 0)),
                         "evaluation_harness_runs": int(report["ops"].get("evaluation_harness", {}).get("runs", 0)),
                         "runbook_drill_runs": int(report["ops"].get("runbook_drill", {}).get("runs", 0)),
+                    },
+                    "feedback": {
+                        "runs": int(report.get("feedback", {}).get("runs", 0)),
+                        "reviewed_count": int(report.get("feedback", {}).get("reviewed_count", 0)),
+                        "actionable_count": int(report.get("feedback", {}).get("actionable_count", 0)),
                     },
                     "ab": {
                         "runs": int(report.get("ab", {}).get("runs", 0)),

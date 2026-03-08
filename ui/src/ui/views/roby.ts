@@ -136,6 +136,7 @@ export function renderRoby(props: RobyProps) {
   const drillStatus = ops?.runbookDrill;
   const liveFreshness = ops?.liveFreshness;
   const weeklyStatus = ops?.weeklyReport;
+  const feedbackLoop = ops?.feedbackLoop;
   const localFirst = ops?.localFirst;
   const weeklyLoaded = Boolean(weeklyStatus);
   const currentIssues = [
@@ -457,6 +458,60 @@ export function renderRoby(props: RobyProps) {
               <div class="muted">base URL: ${localFirst.baseUrl}</div>
               <div class="muted">configured model: ${localFirst.configuredModel}</div>
               <div class="muted">available: ${joinList(localFirst.availableModels, "なし")}</div>
+            `
+          : nothing,
+      })}
+    </section>
+    <section style="margin-top: 18px;">
+      ${renderOpsCard({
+        title: "評価ループ",
+        status:
+          feedbackLoop?.present === false
+            ? "未実行"
+            : (feedbackLoop?.actionableCount ?? 0) > 0
+              ? "要確認"
+              : (feedbackLoop?.reviewedCount ?? 0) > 0
+                ? "正常"
+                : "未評価",
+        tone:
+          feedbackLoop?.present === false
+            ? "muted"
+            : (feedbackLoop?.actionableCount ?? 0) > 0
+              ? "warn"
+              : (feedbackLoop?.reviewedCount ?? 0) > 0
+                ? "ok"
+                : "muted",
+        subtitle: feedbackLoop?.present
+          ? `良い ${feedbackLoop?.counts?.good ?? 0} / 要修正 ${feedbackLoop?.counts?.bad ?? 0} / 見落とし ${feedbackLoop?.counts?.missed ?? 0} / 保留 ${feedbackLoop?.counts?.pending ?? 0}`
+          : "Neuronic評価未取得",
+        meta: feedbackLoop?.ts ? formatRelativeTimestamp(feedbackLoop.ts) : "—",
+        details: feedbackLoop?.present
+          ? html`
+              <div class="muted">reviewed: ${feedbackLoop?.reviewedCount ?? 0} / total: ${feedbackLoop?.totalTasks ?? 0}</div>
+              <div class="muted">actionable: ${feedbackLoop?.actionableCount ?? 0}</div>
+              ${
+                (feedbackLoop?.recentActionable?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted" style="margin-top: 8px;">要確認の最新タスク</div>
+                      ${feedbackLoop?.recentActionable
+                        ?.slice(0, 5)
+                        .map(
+                          (row) =>
+                            html`<div class="muted">- [${row.feedbackState}] ${row.title || row.id}</div>`,
+                        )}
+                    `
+                  : html`
+                      <div class="muted" style="margin-top: 8px;">直近レビュー</div>
+                      ${
+                        feedbackLoop?.recentReviewed
+                          ?.slice(0, 5)
+                          .map(
+                            (row) =>
+                              html`<div class="muted">- [${row.feedbackState}] ${row.title || row.id}</div>`,
+                          ) ?? nothing
+                      }
+                    `
+              }
             `
           : nothing,
       })}

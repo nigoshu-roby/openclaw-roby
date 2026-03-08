@@ -226,6 +226,7 @@ async function buildRobyStatus() {
   const weeklyLatest = await readJsonFile(
     path.join(ROBY_STATE_ROOT, "reports", "weekly_latest.json"),
   );
+  const feedbackLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "feedback_sync_state.json"));
   const ollama = await readOllamaStatus();
   const liveFreshness = await buildLiveFreshness();
   const evalResults = Array.isArray(evalLatest?.results)
@@ -272,6 +273,14 @@ async function buildRobyStatus() {
       };
     })
     .filter((row) => row.errors > 0);
+  const feedbackSummary = (feedbackLatest?.summary as Record<string, unknown> | undefined) ?? {};
+  const feedbackCounts = (feedbackSummary.counts as Record<string, unknown> | undefined) ?? {};
+  const feedbackRecentActionable = Array.isArray(feedbackSummary.recent_actionable)
+    ? (feedbackSummary.recent_actionable as Array<Record<string, unknown>>)
+    : [];
+  const feedbackRecentReviewed = Array.isArray(feedbackSummary.recent_reviewed)
+    ? (feedbackSummary.recent_reviewed as Array<Record<string, unknown>>)
+    : [];
 
   return {
     generatedAtMs: Date.now(),
@@ -367,6 +376,34 @@ async function buildRobyStatus() {
       remedyCommands,
       auditErrors: Number(audit.errors ?? 0),
       opsErrors,
+    },
+    feedbackLoop: {
+      present: Boolean(feedbackLatest),
+      ts: parseTimestampMs(feedbackLatest?.updated_at),
+      totalTasks: Number(feedbackSummary.total_tasks ?? 0),
+      reviewedCount: Number(feedbackSummary.reviewed_count ?? 0),
+      actionableCount: Number(feedbackSummary.actionable_count ?? 0),
+      counts: {
+        good: Number(feedbackCounts.good ?? 0),
+        bad: Number(feedbackCounts.bad ?? 0),
+        missed: Number(feedbackCounts.missed ?? 0),
+        pending: Number(feedbackCounts.pending ?? 0),
+        other: Number(feedbackCounts.other ?? 0),
+      },
+      recentActionable: feedbackRecentActionable.map((row) => ({
+        id: typeof row.id === "string" ? row.id : "",
+        title: typeof row.title === "string" ? row.title : "",
+        feedbackState: typeof row.feedback_state === "string" ? row.feedback_state : "",
+        updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
+        originId: typeof row.origin_id === "string" ? row.origin_id : "",
+      })),
+      recentReviewed: feedbackRecentReviewed.map((row) => ({
+        id: typeof row.id === "string" ? row.id : "",
+        title: typeof row.title === "string" ? row.title : "",
+        feedbackState: typeof row.feedback_state === "string" ? row.feedback_state : "",
+        updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
+        originId: typeof row.origin_id === "string" ? row.origin_id : "",
+      })),
     },
     localFirst: {
       ollamaCli: ollama.cliPresent,

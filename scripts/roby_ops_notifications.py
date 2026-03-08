@@ -89,6 +89,7 @@ def format_drill_slack(report: Dict[str, Any], rows: List[Dict[str, Any]]) -> st
 def format_weekly_slack(report: Dict[str, Any]) -> str:
     eval_s = report.get("eval") or {}
     drill_s = report.get("drill") or {}
+    feedback_s = report.get("feedback") or {}
     audit_s = report.get("audit") or {}
     freshness = report.get("freshness") or {}
     ab_s = report.get("ab") or {}
@@ -102,6 +103,7 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
         ("期間", f"{report.get('window_days', 0)}日"),
         ("Evaluation", f"runs={eval_s.get('runs', 0)} / failed={eval_s.get('failed_runs', 0)}"),
         ("Runbook Drill", f"runs={drill_s.get('runs', 0)} / failed={drill_s.get('failed_runs', 0)}"),
+        ("Feedback Loop", f"runs={feedback_s.get('runs', 0)} / actionable={feedback_s.get('actionable_count', 0)}"),
         ("監査", _to_bool_label(audit_s.get("ok"), "正常", "異常")),
     ]
     ops_rows = []
@@ -113,6 +115,11 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
         f"・stale_components: {', '.join(freshness.get('stale_components', [])) or '-'}",
         f"・AB Router runs: {ab_s.get('runs', 0)} / guard_applied={ab_s.get('guard_applied_runs', 0)}",
     ]
+    feedback_rows = [
+        f"・reviewed: {feedback_s.get('reviewed_count', 0)}",
+        f"・actionable: {feedback_s.get('actionable_count', 0)}",
+        f"・good / bad / missed: {feedback_s.get('good', 0)} / {feedback_s.get('bad', 0)} / {feedback_s.get('missed', 0)}",
+    ]
     return build_slack_message(
         "PBS 週次運用レポート",
         status,
@@ -121,5 +128,6 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
         [
             ("運用実行数", ops_rows),
             ("鮮度とAB Router", freshness_rows),
+            ("Neuronic評価", feedback_rows),
         ],
     )

@@ -648,6 +648,33 @@ export type RobyWeeklyStatus = RobyOpsHealthSummary & {
   }>;
 };
 
+export type RobyFeedbackLoopStatus = RobyOpsHealthSummary & {
+  totalTasks?: number;
+  reviewedCount?: number;
+  actionableCount?: number;
+  counts?: {
+    good: number;
+    bad: number;
+    missed: number;
+    pending: number;
+    other: number;
+  };
+  recentActionable?: Array<{
+    id: string;
+    title: string;
+    feedbackState: string;
+    updatedAt: string;
+    originId: string;
+  }>;
+  recentReviewed?: Array<{
+    id: string;
+    title: string;
+    feedbackState: string;
+    updatedAt: string;
+    originId: string;
+  }>;
+};
+
 export type RobyLocalFirstStatus = {
   ollamaCli: boolean;
   ollamaApiOk: boolean;
@@ -664,6 +691,7 @@ export type RobyOpsStatus = {
   runbookDrill: RobyDrillStatus;
   liveFreshness: RobyLiveFreshnessStatus;
   weeklyReport: RobyWeeklyStatus;
+  feedbackLoop: RobyFeedbackLoopStatus;
   localFirst: RobyLocalFirstStatus;
 };
 

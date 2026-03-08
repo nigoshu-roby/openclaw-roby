@@ -413,6 +413,7 @@ def check_orchestrator_cron_status(env: Dict[str, str]) -> Dict[str, Any]:
         "ROBY_ORCH_CRON_EVAL_HARNESS",
         "ROBY_ORCH_CRON_RUNBOOK_DRILL",
         "ROBY_ORCH_CRON_NOTION_SYNC",
+        "ROBY_ORCH_CRON_FEEDBACK_SYNC",
         "ROBY_ORCH_CRON_WEEKLY_REPORT",
     ]
     missing_required = [tag for tag in required_tags if tag not in text]

@@ -102,6 +102,7 @@ class TestRobyOrchestratorRouting(TestCase):
                 {"summary": {"tasks": 2, "archived": 1, "notified": 3, "run_id": "gmail-1"}},
             ]),
             patch.object(self.mod, "read_last_json", side_effect=[
+                None,
                 {"failed": 1, "total": 7, "gates": {"ok": False}, "latency": {"p95_ms": 1200}},
                 {"all_ok": True, "failed": 0, "total": 9, "skipped": 1},
             ]),
@@ -116,6 +117,27 @@ class TestRobyOrchestratorRouting(TestCase):
         self.assertIn("evaluation_harness: gate=FAIL failed=1/7 p95=1200ms", text)
         self.assertIn("runbook_drill: all_ok=YES failed=0/9 skipped=1", text)
 
+    def test_build_runtime_status_summary_includes_feedback_loop(self):
+        with (
+            patch.object(self.mod, "read_last_jsonl", side_effect=[
+                None,
+                None,
+            ]),
+            patch.object(self.mod, "read_last_json", side_effect=[
+                {"summary": {"reviewed_count": 6, "actionable_count": 2, "counts": {"good": 3, "bad": 1, "missed": 1}}},
+                {"failed": 0, "total": 7, "gates": {"ok": True}, "latency": {"p95_ms": 900}},
+                {"all_ok": True, "failed": 0, "total": 8, "skipped": 0},
+            ]),
+        ):
+            text = self.mod.build_runtime_status_summary(
+                {
+                    "ROBY_ORCH_OLLAMA_BASE_URL": "http://127.0.0.1:11434",
+                    "NEURONIC_URL": "http://127.0.0.1:5174/api/v1/tasks/import",
+                    "NEURONIC_TOKEN": "dummy",
+                }
+            )
+        self.assertIn("feedback_loop: reviewed=6, actionable=2, good=3, bad=1, missed=1", text)
+
     def test_build_local_capability_summary_includes_health_section(self):
         with (
             patch.object(self.mod, "shutil"),
@@ -125,6 +147,7 @@ class TestRobyOrchestratorRouting(TestCase):
                 {"patch_status": "no_change"},
             ]),
             patch.object(self.mod, "read_last_json", side_effect=[
+                None,
                 {"failed": 0, "total": 7, "gates": {"ok": True}, "latency": {"p95_ms": 900}},
                 {"all_ok": False, "failed": 2, "total": 8, "skipped": 0},
             ]),
