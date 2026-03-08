@@ -253,6 +253,84 @@ export function renderRoby(props: RobyProps) {
     </section>
     <section class="grid" style="margin-top: 18px; grid-template-columns: repeat(5, minmax(0, 1fr));">
       ${renderOpsCard({
+        title: "現在の稼働状況",
+        status:
+          liveFreshness?.present === false ? "未取得" : liveFreshness?.allFresh ? "正常" : "要対応",
+        tone: liveFreshness?.present === false ? "muted" : liveFreshness?.allFresh ? "ok" : "warn",
+        subtitle: liveFreshness?.present
+          ? `stale ${liveFreshness?.staleCount ?? 0} / ${liveFreshness?.components?.length ?? 0} 系統`
+          : "現在状態未取得",
+        meta: liveFreshness?.ts ? formatRelativeTimestamp(liveFreshness.ts) : "—",
+        cardStyle:
+          "background: linear-gradient(180deg, rgba(56, 99, 255, 0.16) 0%, rgba(17, 20, 33, 0.98) 100%); border-color: rgba(98, 131, 255, 0.38); box-shadow: inset 0 0 0 1px rgba(98, 131, 255, 0.14);",
+        details: liveFreshness?.present
+          ? html`
+          <div class="muted">現在の鮮度</div>
+          <div class="muted">- stale component: ${joinList(liveFreshness?.staleComponents, "なし")}</div>
+          ${
+            liveFreshness?.components?.length
+              ? html`
+                  <div class="muted" style="margin-top: 8px;">系統別の状態</div>
+                  ${liveFreshness.components.map(
+                    (row) => html`
+                      <div class="row" style="gap: 8px; align-items: flex-start;">
+                        <div style="display: grid; gap: 4px; flex: 1; min-width: 0;">
+                          <span class="pill ${row.stale ? "warn" : row.missing ? "danger" : "ok"}" style="width: fit-content;">
+                            ${row.name}
+                          </span>
+                          <span class="muted">
+                            ${row.missing ? "未実行" : `${row.ageMinutes ?? 0}分前 / 閾値 ${row.thresholdMinutes}分`}
+                          </span>
+                        </div>
+                        ${
+                          row.stale || row.missing
+                            ? html`
+                                <button
+                                  class="btn btn--ghost"
+                                  type="button"
+                                  title="対処コマンドをコピー"
+                                  aria-label="対処コマンドをコピー"
+                                  style="padding: 8px; min-width: 40px;"
+                                  @click=${async (e: Event) => {
+                                    const button = e.currentTarget as HTMLButtonElement | null;
+                                    if (!button) {
+                                      return;
+                                    }
+                                    const ok = await copyTextToClipboard(row.remedyCommand);
+                                    button.classList.toggle("is-success", ok);
+                                    button.classList.toggle("is-danger", !ok);
+                                    button.title = ok ? "コピー済み" : "コピー失敗";
+                                    button.setAttribute(
+                                      "aria-label",
+                                      ok ? "コピー済み" : "コピー失敗",
+                                    );
+                                    window.setTimeout(
+                                      () => {
+                                        if (button.isConnected) {
+                                          button.classList.remove("is-success", "is-danger");
+                                          button.title = "対処コマンドをコピー";
+                                          button.setAttribute("aria-label", "対処コマンドをコピー");
+                                        }
+                                      },
+                                      ok ? 1200 : 1800,
+                                    );
+                                  }}
+                                >
+                                  ${icons.copy}
+                                </button>
+                              `
+                            : nothing
+                        }
+                      </div>
+                    `,
+                  )}
+                `
+              : nothing
+          }
+        `
+          : nothing,
+      })}
+      ${renderOpsCard({
         title: "Evaluation Harness",
         status: formatOpsLabel(evalStatus?.allOk, evalStatus?.present),
         tone: formatOpsTone(evalStatus?.allOk),
@@ -311,82 +389,6 @@ export function renderRoby(props: RobyProps) {
                   : nothing
               }
             `
-          : nothing,
-      })}
-      ${renderOpsCard({
-        title: "現在の稼働状況",
-        status:
-          liveFreshness?.present === false ? "未取得" : liveFreshness?.allFresh ? "正常" : "要対応",
-        tone: liveFreshness?.present === false ? "muted" : liveFreshness?.allFresh ? "ok" : "warn",
-        subtitle: liveFreshness?.present
-          ? `stale ${liveFreshness?.staleCount ?? 0} / ${liveFreshness?.components?.length ?? 0} 系統`
-          : "現在状態未取得",
-        meta: liveFreshness?.ts ? formatRelativeTimestamp(liveFreshness.ts) : "—",
-        details: liveFreshness?.present
-          ? html`
-          <div class="muted">現在の鮮度</div>
-          <div class="muted">- stale component: ${joinList(liveFreshness?.staleComponents, "なし")}</div>
-          ${
-            liveFreshness?.components?.length
-              ? html`
-                  <div class="muted" style="margin-top: 8px;">系統別の状態</div>
-                  ${liveFreshness.components.map(
-                    (row) => html`
-                      <div class="row" style="gap: 8px; align-items: flex-start;">
-                        <div style="display: grid; gap: 4px; flex: 1; min-width: 0;">
-                          <span class="pill ${row.stale ? "warn" : "ok"}" style="width: fit-content;">
-                            ${row.name}
-                          </span>
-                          <span class="muted">
-                            ${row.missing ? "未実行" : `${row.ageMinutes ?? 0}分前 / 閾値 ${row.thresholdMinutes}分`}
-                          </span>
-                        </div>
-                        ${
-                          row.stale
-                            ? html`
-                                <button
-                                  class="btn btn--ghost"
-                                  type="button"
-                                  title="対処コマンドをコピー"
-                                  aria-label="対処コマンドをコピー"
-                                  style="padding: 8px; min-width: 40px;"
-                                  @click=${async (e: Event) => {
-                                    const button = e.currentTarget as HTMLButtonElement | null;
-                                    if (!button) {
-                                      return;
-                                    }
-                                    const ok = await copyTextToClipboard(row.remedyCommand);
-                                    button.classList.toggle("is-success", ok);
-                                    button.classList.toggle("is-danger", !ok);
-                                    button.title = ok ? "コピー済み" : "コピー失敗";
-                                    button.setAttribute(
-                                      "aria-label",
-                                      ok ? "コピー済み" : "コピー失敗",
-                                    );
-                                    window.setTimeout(
-                                      () => {
-                                        if (button.isConnected) {
-                                          button.classList.remove("is-success", "is-danger");
-                                          button.title = "対処コマンドをコピー";
-                                          button.setAttribute("aria-label", "対処コマンドをコピー");
-                                        }
-                                      },
-                                      ok ? 1200 : 1800,
-                                    );
-                                  }}
-                                >
-                                  ${icons.copy}
-                                </button>
-                              `
-                            : nothing
-                        }
-                      </div>
-                    `,
-                  )}
-                `
-              : nothing
-          }
-        `
           : nothing,
       })}
       ${renderOpsCard({
@@ -500,9 +502,10 @@ function renderOpsCard(params: {
   subtitle: string;
   meta: string;
   details?: unknown;
+  cardStyle?: string;
 }) {
   return html`
-    <div class="card">
+    <div class="card" style=${params.cardStyle ?? nothing}>
       <div class="card-title">${params.title}</div>
       <div class="row" style="margin-top: 12px;">
         <span class="pill ${params.tone}">${params.status}</span>
