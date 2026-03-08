@@ -586,6 +586,18 @@ export type RobyEvalStatus = RobyOpsHealthSummary & {
   passed?: number;
   failed?: number;
   p95Ms?: number;
+  retriesTotal?: number;
+  routes?: Array<{
+    route: string;
+    total: number;
+    failed: number;
+  }>;
+  failedCases?: Array<{
+    id: string;
+    description: string;
+    route: string;
+    failures: string[];
+  }>;
 };
 
 export type RobyDrillStatus = RobyOpsHealthSummary & {
@@ -594,6 +606,11 @@ export type RobyDrillStatus = RobyOpsHealthSummary & {
   passed?: number;
   failed?: number;
   skipped?: number;
+  failedChecks?: Array<{
+    id: string;
+    kind: string;
+    detail: string;
+  }>;
 };
 
 export type RobyWeeklyStatus = RobyOpsHealthSummary & {
@@ -603,6 +620,13 @@ export type RobyWeeklyStatus = RobyOpsHealthSummary & {
   drillFailedRuns?: number;
   auditOk?: boolean;
   staleCount?: number;
+  staleComponents?: string[];
+  auditErrors?: number;
+  opsErrors?: Array<{
+    name: string;
+    errors: number;
+    runs: number;
+  }>;
 };
 
 export type RobyLocalFirstStatus = {

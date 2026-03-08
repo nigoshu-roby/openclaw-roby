@@ -85,6 +85,34 @@ async function buildRobyStatus() {
     path.join(ROBY_STATE_ROOT, "reports", "weekly_latest.json"),
   );
   const ollama = await readOllamaStatus();
+  const evalResults = Array.isArray(evalLatest?.results)
+    ? (evalLatest.results as Array<Record<string, unknown>>)
+    : [];
+  const drillChecks = Array.isArray(
+    (drillLatest?.latest as Record<string, unknown> | undefined)?.checks,
+  )
+    ? ((drillLatest?.latest as Record<string, unknown> | undefined)?.checks as Array<
+        Record<string, unknown>
+      >)
+    : [];
+  const weeklyOps = (weeklyLatest?.ops as Record<string, unknown> | undefined) ?? {};
+  const freshness = (weeklyLatest?.freshness as Record<string, unknown> | undefined) ?? {};
+  const audit = (weeklyLatest?.audit as Record<string, unknown> | undefined) ?? {};
+  const staleComponents = Array.isArray(freshness.stale_components)
+    ? freshness.stale_components
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const opsErrors = Object.entries(weeklyOps)
+    .map(([name, value]) => {
+      const row = (value as Record<string, unknown> | undefined) ?? {};
+      return {
+        name,
+        errors: Number(row.errors ?? 0),
+        runs: Number(row.runs ?? 0),
+      };
+    })
+    .filter((row) => row.errors > 0);
 
   return {
     generatedAtMs: Date.now(),
@@ -100,6 +128,33 @@ async function buildRobyStatus() {
           | number
           | undefined) ?? 0,
       ),
+      retriesTotal: Number(
+        ((evalLatest?.retries as Record<string, unknown> | undefined)?.total as
+          | number
+          | undefined) ?? 0,
+      ),
+      routes: Object.entries((evalLatest?.routes as Record<string, unknown> | undefined) ?? {}).map(
+        ([route, value]) => {
+          const row = (value as Record<string, unknown> | undefined) ?? {};
+          return {
+            route,
+            total: Number(row.total ?? 0),
+            failed: Number(row.failed ?? 0),
+          };
+        },
+      ),
+      failedCases: evalResults
+        .filter((row) => row.ok === false)
+        .map((row) => ({
+          id: typeof row.id === "string" ? row.id : "",
+          description: typeof row.description === "string" ? row.description : "",
+          route: typeof row.route === "string" ? row.route : "",
+          failures: Array.isArray(row.failures)
+            ? row.failures
+                .map((value) => (typeof value === "string" ? value.trim() : ""))
+                .filter(Boolean)
+            : [],
+        })),
     },
     runbookDrill: {
       present: Boolean(drillLatest),
@@ -109,6 +164,13 @@ async function buildRobyStatus() {
       passed: Number(drillLatest?.passed ?? 0),
       failed: Number(drillLatest?.failed ?? 0),
       skipped: Number(drillLatest?.skipped ?? 0),
+      failedChecks: drillChecks
+        .filter((row) => row.ok === false)
+        .map((row) => ({
+          id: typeof row.id === "string" ? row.id : "",
+          kind: typeof row.kind === "string" ? row.kind : "",
+          detail: typeof row.detail === "string" ? row.detail : "",
+        })),
     },
     weeklyReport: {
       present: Boolean(weeklyLatest),
@@ -141,6 +203,9 @@ async function buildRobyStatus() {
           | number
           | undefined) ?? 0,
       ),
+      staleComponents,
+      auditErrors: Number(audit.errors ?? 0),
+      opsErrors,
     },
     localFirst: {
       ollamaCli: ollama.cliPresent,

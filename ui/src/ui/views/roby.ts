@@ -67,6 +67,13 @@ function formatOpsLabel(ok?: boolean | null, present?: boolean) {
   return "—";
 }
 
+function joinList(items: string[] | undefined, fallback = "なし") {
+  if (!items || items.length === 0) {
+    return fallback;
+  }
+  return items.join(" / ");
+}
+
 export function renderRoby(props: RobyProps) {
   const job = findSelfGrowthJob(props.cronJobs);
   const isLoaded = job && props.cronRunsJobId === job.id;
@@ -202,6 +209,25 @@ export function renderRoby(props: RobyProps) {
           ? `失敗 ${evalStatus?.failed ?? 0} / ${evalStatus?.total ?? 0} · p95 ${evalStatus?.p95Ms ?? 0}ms`
           : "最新結果なし",
         meta: evalStatus?.ts ? formatRelativeTimestamp(evalStatus.ts) : "—",
+        details: evalStatus?.present
+          ? html`
+              <div class="muted">retry 合計: ${evalStatus?.retriesTotal ?? 0}</div>
+              <div class="muted">route別失敗: ${
+                evalStatus?.routes?.length
+                  ? evalStatus.routes
+                      .map((row) => `${row.route} ${row.failed}/${row.total}`)
+                      .join(" / ")
+                  : "なし"
+              }</div>
+              <div class="muted">直近fail case: ${
+                evalStatus?.failedCases?.length
+                  ? evalStatus.failedCases
+                      .map((row) => row.description || row.id || "unknown")
+                      .join(" / ")
+                  : "なし"
+              }</div>
+            `
+          : nothing,
       })}
       ${renderOpsCard({
         title: "Runbook Drill",
@@ -211,6 +237,30 @@ export function renderRoby(props: RobyProps) {
           ? `失敗 ${drillStatus?.failed ?? 0} / ${drillStatus?.total ?? 0} · skip ${drillStatus?.skipped ?? 0}`
           : "最新結果なし",
         meta: drillStatus?.ts ? formatRelativeTimestamp(drillStatus.ts) : "—",
+        details: drillStatus?.present
+          ? html`
+              <div class="muted">failed check: ${
+                drillStatus?.failedChecks?.length
+                  ? drillStatus.failedChecks
+                      .map((row) => `${row.id}${row.kind ? ` (${row.kind})` : ""}`)
+                      .join(" / ")
+                  : "なし"
+              }</div>
+              ${
+                drillStatus?.failedChecks?.length
+                  ? html`
+                      <div class="muted" style="margin-top: 6px;">
+                        ${joinList(
+                          drillStatus.failedChecks
+                            .map((row) => row.detail)
+                            .filter((detail) => detail.trim().length > 0),
+                        )}
+                      </div>
+                    `
+                  : nothing
+              }
+            `
+          : nothing,
       })}
       ${renderOpsCard({
         title: "Weekly Report",
@@ -230,6 +280,26 @@ export function renderRoby(props: RobyProps) {
           ? `eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
           : "最新レポートなし",
         meta: weeklyStatus?.ts ? formatRelativeTimestamp(weeklyStatus.ts) : "—",
+        details: weeklyStatus?.present
+          ? html`
+              <div class="muted">失敗内訳</div>
+              <div class="muted">- eval fail run: ${weeklyStatus?.evalFailedRuns ?? 0}</div>
+              <div class="muted">- drill fail run: ${weeklyStatus?.drillFailedRuns ?? 0}</div>
+              <div class="muted">- audit error: ${weeklyStatus?.auditErrors ?? 0}</div>
+              <div class="muted">
+                - stale component: ${joinList(weeklyStatus?.staleComponents, "なし")}
+              </div>
+              <div class="muted">
+                - ops error: ${
+                  weeklyStatus?.opsErrors?.length
+                    ? weeklyStatus.opsErrors
+                        .map((row) => `${row.name} ${row.errors}/${row.runs}`)
+                        .join(" / ")
+                    : "なし"
+                }
+              </div>
+            `
+          : nothing,
       })}
       ${renderOpsCard({
         title: "Local First",
@@ -239,6 +309,13 @@ export function renderRoby(props: RobyProps) {
           ? `${localFirst.configuredModel} · ${localFirst.modelAvailable ? "利用可" : "未pull"}`
           : "状態未取得",
         meta: localFirst ? (localFirst.error ? localFirst.error : localFirst.baseUrl) : "—",
+        details: localFirst
+          ? html`
+              <div class="muted">base URL: ${localFirst.baseUrl}</div>
+              <div class="muted">configured model: ${localFirst.configuredModel}</div>
+              <div class="muted">available: ${joinList(localFirst.availableModels, "なし")}</div>
+            `
+          : nothing,
       })}
     </section>
     ${
@@ -289,6 +366,7 @@ function renderOpsCard(params: {
   tone: "ok" | "warn" | "danger" | "muted" | "";
   subtitle: string;
   meta: string;
+  details?: unknown;
 }) {
   return html`
     <div class="card">
@@ -298,6 +376,18 @@ function renderOpsCard(params: {
         <span class="muted" style="margin-left:auto;">${params.meta}</span>
       </div>
       <div class="muted" style="margin-top: 8px;">${params.subtitle}</div>
+      ${
+        params.details && params.details !== nothing
+          ? html`
+              <details style="margin-top: 12px;">
+                <summary class="link" style="cursor:pointer;">詳細を開く</summary>
+                <div style="margin-top: 10px; display:grid; gap: 6px;">
+                  ${params.details}
+                </div>
+              </details>
+            `
+          : nothing
+      }
     </div>
   `;
 }
