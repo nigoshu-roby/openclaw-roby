@@ -123,9 +123,14 @@ export function renderRoby(props: RobyProps) {
   const robyMailSkill = findSkill(skills, ["roby-mail"]);
   const gogSkill = findSkill(skills, ["gog"]);
   const notionSkill = findSkill(skills, ["notion"]);
-  const gmailStatus = resolveCombinedSkillStatus([robyMailSkill, gogSkill], ["roby-mail", "gog"]);
-  const notionStatus = resolveCombinedSkillStatus([notionSkill], ["notion"]);
-  const neuronicStatus = resolveCombinedSkillStatus([robyMailSkill], ["roby-mail"]);
+  const skillsReady = Boolean(props.skillsReport);
+  const gmailStatus = resolveCombinedSkillStatus(
+    [robyMailSkill, gogSkill],
+    ["roby-mail", "gog"],
+    skillsReady,
+  );
+  const notionStatus = resolveCombinedSkillStatus([notionSkill], ["notion"], skillsReady);
+  const neuronicStatus = resolveCombinedSkillStatus([robyMailSkill], ["roby-mail"], skillsReady);
   const ops = props.robyOpsStatus;
   const evalStatus = ops?.evaluationHarness;
   const drillStatus = ops?.runbookDrill;
@@ -540,7 +545,10 @@ function findSkill(skills: SkillStatusEntry[], keys: string[]) {
   });
 }
 
-function resolveSkillStatus(skill: SkillStatusEntry | undefined) {
+function resolveSkillStatus(skill: SkillStatusEntry | undefined, reportLoaded = true) {
+  if (!reportLoaded) {
+    return { label: "未取得", tone: "warn" as const };
+  }
   if (!skill) {
     return { label: "未インストール", tone: "danger" as const };
   }
@@ -560,7 +568,11 @@ function resolveSkillStatus(skill: SkillStatusEntry | undefined) {
 function resolveCombinedSkillStatus(
   skills: Array<SkillStatusEntry | undefined>,
   requiredNames: string[],
+  reportLoaded = true,
 ) {
+  if (!reportLoaded) {
+    return { label: "未取得", tone: "warn" as const };
+  }
   const present = skills.filter((skill): skill is SkillStatusEntry => Boolean(skill));
   if (present.length === 0) {
     return { label: "未インストール", tone: "danger" as const };
@@ -573,7 +585,7 @@ function resolveCombinedSkillStatus(
   const labels = new Set<string>();
   let hasDanger = false;
   for (const skill of present) {
-    const status = resolveSkillStatus(skill);
+    const status = resolveSkillStatus(skill, reportLoaded);
     if (status.tone === "danger") {
       hasDanger = true;
     }

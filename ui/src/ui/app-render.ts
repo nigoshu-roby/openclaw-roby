@@ -229,6 +229,17 @@ export function renderApp(state: AppViewState) {
       void loadRobyOpsStatus(state);
     });
   }
+  if (
+    state.tab === "roby" &&
+    state.connected &&
+    !state.skillsLoading &&
+    !state.skillsReport &&
+    !state.skillsError
+  ) {
+    queueMicrotask(() => {
+      void loadSkills(state);
+    });
+  }
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
