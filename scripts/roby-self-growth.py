@@ -24,6 +24,7 @@ KEYCHAIN_SECRET_KEYS = {
     "NEURONIC_TOKEN",
     "OLLAMA_API_KEY",
 }
+FAILURE_STATES = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response"}
 
 
 def load_env() -> Dict[str, str]:
@@ -137,8 +138,9 @@ def format_self_growth_slack(
     restart_status: str,
     report: str,
 ) -> str:
-    failure_states = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response"}
-    status = "失敗あり" if any(x in failure_states for x in [patch_status, test_status, rollback_status, commit_status, restart_status]) else "正常"
+    status = "失敗あり" if has_failures(
+        patch_status, test_status, rollback_status, commit_status, restart_status
+    ) else "正常"
     lines = [
         "【Roby 自己成長レポート】",
         f"・実行時刻: {timestamp}",
@@ -156,6 +158,10 @@ def format_self_growth_slack(
         lines.extend(["", "■実行ログ（抜粋）"])
         lines.extend(f"・{ln}" for ln in cleaned[:12])
     return "\n".join(lines)
+
+
+def has_failures(*states: str) -> bool:
+    return any(state in FAILURE_STATES for state in states)
 
 
 def main() -> int:
@@ -327,7 +333,9 @@ def main() -> int:
                 },
                 source="roby-self-growth",
                 run_id=timestamp,
-                severity="error" if test_status == "failed" else "info",
+                severity="error" if has_failures(
+                    patch_status, test_status, rollback_status, commit_status, restart_status
+                ) else "info",
             )
         except Exception:
             pass

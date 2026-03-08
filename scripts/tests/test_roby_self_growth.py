@@ -29,6 +29,42 @@ class TestRobySelfGrowth(TestCase):
     def setUp(self):
         self.mod = _load_module()
 
+    def run_main_with(self, env_override, fake_run_cmd):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            runs_log = state_dir / "self_growth_runs.jsonl"
+            stdout = io.StringIO()
+            audit_events = []
+            slack_messages = []
+
+            def fake_append_audit_event(event_name, payload, **kwargs):
+                audit_events.append({"event_name": event_name, "payload": payload, **kwargs})
+
+            def fake_send_slack(webhook_url, text):
+                slack_messages.append({"webhook_url": webhook_url, "text": text})
+
+            env = {"ROBY_IMMUTABLE_AUDIT": "1", **env_override}
+            with (
+                patch.object(self.mod, "STATE_DIR", state_dir),
+                patch.object(self.mod, "RUNS_LOG", runs_log),
+                patch.object(self.mod, "load_env", return_value=env),
+                patch.object(self.mod, "run_cmd", side_effect=fake_run_cmd),
+                patch.object(self.mod, "append_audit_event", side_effect=fake_append_audit_event),
+                patch.object(self.mod, "send_slack", side_effect=fake_send_slack),
+                redirect_stdout(stdout),
+            ):
+                rc = self.mod.main()
+
+            entry = json.loads(runs_log.read_text(encoding="utf-8").strip())
+            return {
+                "rc": rc,
+                "stdout": stdout.getvalue(),
+                "entry": entry,
+                "audit_events": audit_events,
+                "slack_messages": slack_messages,
+                "state_dir": state_dir,
+            }
+
     def test_extract_patch_with_diff_header(self):
         text = "prefix\n\ndiff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
         patch_text = self.mod.extract_patch(text)
@@ -71,68 +107,123 @@ class TestRobySelfGrowth(TestCase):
         self.assertIn("■実行ログ（抜粋）", text)
 
     def test_main_skips_when_git_tree_dirty(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            state_dir = Path(tmp)
-            runs_log = state_dir / "self_growth_runs.jsonl"
-            stdout = io.StringIO()
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return " M scripts/example.py"
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            raise AssertionError(f"Unexpected command: {cmd}")
 
-            def fake_run_cmd(cmd, env, timeout=60):
-                if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
-                    if "--porcelain" in cmd:
-                        return " M scripts/example.py"
-                    return "## main"
-                if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
-                    return "abc123 test"
-                raise AssertionError(f"Unexpected command: {cmd}")
-
-            with (
-                patch.object(self.mod, "STATE_DIR", state_dir),
-                patch.object(self.mod, "RUNS_LOG", runs_log),
-                patch.object(self.mod, "load_env", return_value={}),
-                patch.object(self.mod, "run_cmd", side_effect=fake_run_cmd),
-                patch.object(self.mod, "append_audit_event"),
-                redirect_stdout(stdout),
-            ):
-                rc = self.mod.main()
-
-            self.assertEqual(rc, 0)
-            self.assertIn("SKIP: working tree is dirty", stdout.getvalue())
-            entry = json.loads(runs_log.read_text(encoding="utf-8").strip())
-            self.assertEqual(entry["patch_status"], "skipped")
-            self.assertEqual(entry["test_status"], "skipped")
+        result = self.run_main_with({}, fake_run_cmd)
+        self.assertEqual(result["rc"], 0)
+        self.assertIn("SKIP: working tree is dirty", result["stdout"])
+        self.assertEqual(result["entry"]["patch_status"], "skipped")
+        self.assertEqual(result["entry"]["test_status"], "skipped")
 
     def test_main_records_no_change_without_applying_patch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            state_dir = Path(tmp)
-            runs_log = state_dir / "self_growth_runs.jsonl"
-            stdout = io.StringIO()
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                return "NO_CHANGE"
+            raise AssertionError(f"Unexpected command: {cmd}")
 
-            def fake_run_cmd(cmd, env, timeout=60):
-                if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
-                    if "--porcelain" in cmd:
-                        return ""
-                    return "## main"
-                if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
-                    return "abc123 test"
-                if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
-                    return "NO_CHANGE"
-                raise AssertionError(f"Unexpected command: {cmd}")
+        result = self.run_main_with({}, fake_run_cmd)
+        self.assertEqual(result["rc"], 0)
+        self.assertIn("PATCH: no_change", result["stdout"])
+        self.assertEqual(result["entry"]["patch_status"], "no_change")
+        self.assertEqual(result["entry"]["test_status"], "skipped")
 
-            with (
-                patch.object(self.mod, "STATE_DIR", state_dir),
-                patch.object(self.mod, "RUNS_LOG", runs_log),
-                patch.object(self.mod, "load_env", return_value={}),
-                patch.object(self.mod, "run_cmd", side_effect=fake_run_cmd),
-                patch.object(self.mod, "append_audit_event"),
-                redirect_stdout(stdout),
-            ):
-                rc = self.mod.main()
+    def test_main_records_invalid_patch_and_audits_error(self):
+        patch_text = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
 
-            self.assertEqual(rc, 0)
-            self.assertIn("PATCH: no_change", stdout.getvalue())
-            entry = json.loads(runs_log.read_text(encoding="utf-8").strip())
-            self.assertEqual(entry["patch_status"], "no_change")
-            self.assertEqual(entry["test_status"], "skipped")
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                return patch_text
+            if cmd[:5] == ["git", "-C", str(self.mod.REPO_DIR), "apply", "--check", str(Path(env.get("_patch_path", "")))]:
+                return "[error] exit=1\npatch does not apply"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "--check" in cmd:
+                return "[error] exit=1\npatch does not apply"
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        result = self.run_main_with({"SLACK_WEBHOOK_URL": "https://example.invalid/webhook"}, fake_run_cmd)
+        self.assertEqual(result["entry"]["patch_status"], "invalid")
+        self.assertEqual(result["audit_events"][0]["severity"], "error")
+        self.assertIn("・実行結果: 失敗あり", result["slack_messages"][0]["text"])
+
+    def test_main_rolls_back_on_test_failure_and_audits_error(self):
+        patch_text = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                return patch_text
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "--check" in cmd:
+                return ""
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "-R" not in cmd:
+                return ""
+            if cmd[:3] == ["bash", "-lc", "pnpm -s test:fast"]:
+                return "[error] exit=1\nFAIL example"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "-R" in cmd:
+                return ""
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        result = self.run_main_with({}, fake_run_cmd)
+        self.assertEqual(result["entry"]["patch_status"], "applied")
+        self.assertEqual(result["entry"]["test_status"], "failed")
+        self.assertEqual(result["entry"]["rollback_status"], "ok")
+        self.assertIn("ROLLBACK: ok", result["stdout"])
+        self.assertEqual(result["audit_events"][0]["severity"], "error")
+
+    def test_main_reports_restart_failure_after_successful_run(self):
+        patch_text = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                return patch_text
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "--check" in cmd:
+                return ""
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "-R" not in cmd:
+                return ""
+            if cmd[:3] == ["bash", "-lc", "pnpm -s test:fast"]:
+                return "ok"
+            if cmd[:5] == ["git", "-C", str(self.mod.REPO_DIR), "add", "-A"]:
+                return ""
+            if cmd[:5] == ["git", "-C", str(self.mod.REPO_DIR), "commit", "-m"]:
+                return "[main abc123] test"
+            if cmd[:3] == ["bash", "-lc", f"node {self.mod.REPO_DIR / 'openclaw.mjs'} gateway restart"]:
+                return "[error] exit=1\nrestart failed"
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        result = self.run_main_with({"SLACK_WEBHOOK_URL": "https://example.invalid/webhook"}, fake_run_cmd)
+        self.assertEqual(result["entry"]["test_status"], "passed")
+        self.assertEqual(result["entry"]["commit_status"], "ok")
+        self.assertEqual(result["entry"]["restart_status"], "failed")
+        self.assertEqual(result["audit_events"][0]["severity"], "error")
+        self.assertIn("・再起動: failed", result["slack_messages"][0]["text"])
 
 
 if __name__ == "__main__":
