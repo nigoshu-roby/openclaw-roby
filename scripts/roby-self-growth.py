@@ -25,6 +25,7 @@ KEYCHAIN_SECRET_KEYS = {
     "OLLAMA_API_KEY",
 }
 FAILURE_STATES = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response"}
+RUN_ENTRY_SCHEMA_VERSION = 2
 
 
 def load_env() -> Dict[str, str]:
@@ -164,6 +165,32 @@ def has_failures(*states: str) -> bool:
     return any(state in FAILURE_STATES for state in states)
 
 
+def build_run_entry(
+    timestamp: str,
+    git_status: str,
+    patch_status: str,
+    test_status: str,
+    rollback_status: str,
+    commit_status: str,
+    restart_status: str,
+    slack_status: str,
+    report: str,
+) -> Dict[str, object]:
+    return {
+        "schema_version": RUN_ENTRY_SCHEMA_VERSION,
+        "ts": int(time.time()),
+        "timestamp": timestamp,
+        "git_status": git_status,
+        "patch_status": patch_status,
+        "test_status": test_status,
+        "rollback_status": rollback_status,
+        "commit_status": commit_status,
+        "restart_status": restart_status,
+        "slack_status": slack_status,
+        "report": report,
+    }
+
+
 def main() -> int:
     env = load_env()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -203,6 +230,7 @@ def main() -> int:
     restart_status = "skipped"
     commit_status = "skipped"
     rollback_status = "skipped"
+    slack_status = "skipped"
 
     if git_dirty and not allow_dirty:
         steps.append("SKIP: working tree is dirty (set SELF_GROWTH_ALLOW_DIRTY=1 to override).")
@@ -302,20 +330,40 @@ def main() -> int:
     if slack_url:
         try:
             send_slack(slack_url, slack_text[:3800])
+            slack_status = "ok"
         except Exception as e:
+            slack_status = "failed"
             report = f"{report}\n\n[slack_error] {e}"
+            if env.get("ROBY_IMMUTABLE_AUDIT", "1") == "1":
+                try:
+                    append_audit_event(
+                        "self_growth.slack_error",
+                        {
+                            "patch_status": patch_status,
+                            "test_status": test_status,
+                            "rollback_status": rollback_status,
+                            "commit_status": commit_status,
+                            "restart_status": restart_status,
+                            "error": str(e),
+                        },
+                        source="roby-self-growth",
+                        run_id=timestamp,
+                        severity="error",
+                    )
+                except Exception:
+                    pass
 
-    entry = {
-        "ts": int(time.time()),
-        "timestamp": timestamp,
-        "git_status": git_status,
-        "patch_status": patch_status,
-        "test_status": test_status,
-        "rollback_status": rollback_status,
-        "commit_status": commit_status,
-        "restart_status": restart_status,
-        "report": report,
-    }
+    entry = build_run_entry(
+        timestamp=timestamp,
+        git_status=git_status,
+        patch_status=patch_status,
+        test_status=test_status,
+        rollback_status=rollback_status,
+        commit_status=commit_status,
+        restart_status=restart_status,
+        slack_status=slack_status,
+        report=report,
+    )
     with RUNS_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 

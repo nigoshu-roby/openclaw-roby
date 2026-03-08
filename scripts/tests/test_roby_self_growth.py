@@ -106,6 +106,23 @@ class TestRobySelfGrowth(TestCase):
         self.assertIn("・テスト: failed", text)
         self.assertIn("■実行ログ（抜粋）", text)
 
+    def test_build_run_entry_uses_fixed_schema(self):
+        entry = self.mod.build_run_entry(
+            timestamp="2026-03-08 15:00:00",
+            git_status="## main",
+            patch_status="applied",
+            test_status="passed",
+            rollback_status="skipped",
+            commit_status="ok",
+            restart_status="ok",
+            slack_status="ok",
+            report="TEST: passed",
+        )
+        self.assertEqual(entry["schema_version"], 2)
+        self.assertEqual(entry["patch_status"], "applied")
+        self.assertEqual(entry["slack_status"], "ok")
+        self.assertIn("ts", entry)
+
     def test_main_skips_when_git_tree_dirty(self):
         def fake_run_cmd(cmd, env, timeout=60):
             if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
@@ -224,6 +241,81 @@ class TestRobySelfGrowth(TestCase):
         self.assertEqual(result["entry"]["restart_status"], "failed")
         self.assertEqual(result["audit_events"][0]["severity"], "error")
         self.assertIn("・再起動: failed", result["slack_messages"][0]["text"])
+
+    def test_main_records_commit_failure_and_still_marks_audit_error(self):
+        patch_text = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                return patch_text
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "--check" in cmd:
+                return ""
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "-R" not in cmd:
+                return ""
+            if cmd[:3] == ["bash", "-lc", "pnpm -s test:fast"]:
+                return "ok"
+            if cmd[:5] == ["git", "-C", str(self.mod.REPO_DIR), "add", "-A"]:
+                return ""
+            if cmd[:5] == ["git", "-C", str(self.mod.REPO_DIR), "commit", "-m"]:
+                return "[error] exit=1\ncommit failed"
+            if cmd[:3] == ["bash", "-lc", f"node {self.mod.REPO_DIR / 'openclaw.mjs'} gateway restart"]:
+                return "restart ok"
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        result = self.run_main_with({}, fake_run_cmd)
+        self.assertEqual(result["entry"]["patch_status"], "applied")
+        self.assertEqual(result["entry"]["test_status"], "passed")
+        self.assertEqual(result["entry"]["commit_status"], "failed")
+        self.assertEqual(result["entry"]["restart_status"], "ok")
+        self.assertEqual(result["audit_events"][0]["severity"], "error")
+
+    def test_main_records_slack_failure_and_emits_audit_event(self):
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return " M scripts/example.py"
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            runs_log = state_dir / "self_growth_runs.jsonl"
+            stdout = io.StringIO()
+            audit_events = []
+
+            def fake_append_audit_event(event_name, payload, **kwargs):
+                audit_events.append({"event_name": event_name, "payload": payload, **kwargs})
+
+            def failing_send_slack(webhook_url, text):
+                raise RuntimeError("slack unavailable")
+
+            env = {"ROBY_IMMUTABLE_AUDIT": "1", "SLACK_WEBHOOK_URL": "https://example.invalid/webhook"}
+            with (
+                patch.object(self.mod, "STATE_DIR", state_dir),
+                patch.object(self.mod, "RUNS_LOG", runs_log),
+                patch.object(self.mod, "load_env", return_value=env),
+                patch.object(self.mod, "run_cmd", side_effect=fake_run_cmd),
+                patch.object(self.mod, "append_audit_event", side_effect=fake_append_audit_event),
+                patch.object(self.mod, "send_slack", side_effect=failing_send_slack),
+                redirect_stdout(stdout),
+            ):
+                rc = self.mod.main()
+
+            self.assertEqual(rc, 0)
+            entry = json.loads(runs_log.read_text(encoding="utf-8").strip())
+            self.assertEqual(entry["slack_status"], "failed")
+            self.assertIn("[slack_error] slack unavailable", entry["report"])
+            slack_error_events = [event for event in audit_events if event["event_name"] == "self_growth.slack_error"]
+            self.assertEqual(len(slack_error_events), 1)
+            self.assertEqual(slack_error_events[0]["severity"], "error")
 
 
 if __name__ == "__main__":
