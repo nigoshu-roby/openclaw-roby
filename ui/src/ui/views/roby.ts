@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
+import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule } from "../presenter.ts";
 import type {
@@ -339,25 +340,35 @@ export function renderRoby(props: RobyProps) {
                                 <button
                                   class="btn btn--ghost"
                                   type="button"
+                                  title="対処コマンドをコピー"
+                                  aria-label="対処コマンドをコピー"
+                                  style="padding: 8px; min-width: 40px;"
                                   @click=${async (e: Event) => {
                                     const button = e.currentTarget as HTMLButtonElement | null;
                                     if (!button) {
                                       return;
                                     }
                                     const ok = await copyTextToClipboard(row.remedyCommand);
-                                    const original = button.textContent ?? "";
-                                    button.textContent = ok ? "コピー済み" : "失敗";
+                                    button.classList.toggle("is-success", ok);
+                                    button.classList.toggle("is-danger", !ok);
+                                    button.title = ok ? "コピー済み" : "コピー失敗";
+                                    button.setAttribute(
+                                      "aria-label",
+                                      ok ? "コピー済み" : "コピー失敗",
+                                    );
                                     window.setTimeout(
                                       () => {
                                         if (button.isConnected) {
-                                          button.textContent = original;
+                                          button.classList.remove("is-success", "is-danger");
+                                          button.title = "対処コマンドをコピー";
+                                          button.setAttribute("aria-label", "対処コマンドをコピー");
                                         }
                                       },
                                       ok ? 1200 : 1800,
                                     );
                                   }}
                                 >
-                                  対処コマンドをコピー
+                                  ${icons.copy}
                                 </button>
                               `
                             : nothing
