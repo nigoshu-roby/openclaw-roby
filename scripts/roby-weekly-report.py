@@ -213,6 +213,7 @@ def summarize_feedback(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     latest = items[-1]
     summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
     counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    reason_counts = summary.get("actionable_reason_counts") if isinstance(summary.get("actionable_reason_counts"), dict) else {}
     recent_actionable = summary.get("recent_actionable") if isinstance(summary.get("recent_actionable"), list) else []
     return {
         "runs": len(items),
@@ -222,11 +223,13 @@ def summarize_feedback(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "bad": int(counts.get("bad", 0)),
         "missed": int(counts.get("missed", 0)),
         "pending": int(counts.get("pending", 0)),
+        "actionable_reason_counts": reason_counts,
         "latest": latest,
         "recent_actionable": [
             {
                 "title": str((row or {}).get("title") or "").strip(),
                 "feedback_state": str((row or {}).get("feedback_state") or "").strip(),
+                "feedback_reason_code": str((row or {}).get("feedback_reason_code") or "").strip(),
             }
             for row in recent_actionable[:5]
             if isinstance(row, dict)
@@ -322,6 +325,12 @@ def build_markdown(report: Dict[str, Any]) -> str:
             "",
         ]
     )
+    reason_counts = feedback_s.get("actionable_reason_counts") or {}
+    if isinstance(reason_counts, dict) and reason_counts:
+        lines.append("- bad reasons:")
+        for reason_code, count in sorted(reason_counts.items(), key=lambda item: (-int(item[1]), str(item[0]))):
+            lines.append(f"  - {reason_code}: {count}")
+        lines.append("")
     lines.extend(
         [
             "",

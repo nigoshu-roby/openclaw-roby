@@ -275,6 +275,8 @@ async function buildRobyStatus() {
     .filter((row) => row.errors > 0);
   const feedbackSummary = (feedbackLatest?.summary as Record<string, unknown> | undefined) ?? {};
   const feedbackCounts = (feedbackSummary.counts as Record<string, unknown> | undefined) ?? {};
+  const feedbackReasonCounts =
+    (feedbackSummary.actionable_reason_counts as Record<string, unknown> | undefined) ?? {};
   const feedbackRecentActionable = Array.isArray(feedbackSummary.recent_actionable)
     ? (feedbackSummary.recent_actionable as Array<Record<string, unknown>>)
     : [];
@@ -390,10 +392,16 @@ async function buildRobyStatus() {
         pending: Number(feedbackCounts.pending ?? 0),
         other: Number(feedbackCounts.other ?? 0),
       },
+      actionableReasonCounts: Object.entries(feedbackReasonCounts).map(([reasonCode, count]) => ({
+        reasonCode,
+        count: Number(count ?? 0),
+      })),
       recentActionable: feedbackRecentActionable.map((row) => ({
         id: typeof row.id === "string" ? row.id : "",
         title: typeof row.title === "string" ? row.title : "",
         feedbackState: typeof row.feedback_state === "string" ? row.feedback_state : "",
+        feedbackReasonCode:
+          typeof row.feedback_reason_code === "string" ? row.feedback_reason_code : "",
         updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
         originId: typeof row.origin_id === "string" ? row.origin_id : "",
       })),
@@ -401,6 +409,8 @@ async function buildRobyStatus() {
         id: typeof row.id === "string" ? row.id : "",
         title: typeof row.title === "string" ? row.title : "",
         feedbackState: typeof row.feedback_state === "string" ? row.feedback_state : "",
+        feedbackReasonCode:
+          typeof row.feedback_reason_code === "string" ? row.feedback_reason_code : "",
         updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
         originId: typeof row.origin_id === "string" ? row.origin_id : "",
       })),

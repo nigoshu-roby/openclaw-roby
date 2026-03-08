@@ -193,13 +193,17 @@ def normalize_feedback_state(task: Dict[str, Any]) -> str:
 
 def summarize_feedback(tasks: List[Dict[str, Any]], recent_limit: int) -> Dict[str, Any]:
     counts = {"good": 0, "bad": 0, "missed": 0, "pending": 0, "other": 0}
+    actionable_reasons: Dict[str, int] = {}
     rows: List[Dict[str, Any]] = []
     for task in tasks:
         state = normalize_feedback_state(task)
+        reason_code = str(task.get("feedback_reason_code") or task.get("feedbackReasonCode") or "").strip().lower()
         if state in counts:
             counts[state] += 1
         else:
             counts["other"] += 1
+        if state in ACTIONABLE_STATES and reason_code:
+            actionable_reasons[reason_code] = actionable_reasons.get(reason_code, 0) + 1
         rows.append(
             {
                 "id": str(task.get("id") or "").strip(),
@@ -207,6 +211,7 @@ def summarize_feedback(tasks: List[Dict[str, Any]], recent_limit: int) -> Dict[s
                 "status": str(task.get("status") or "").strip(),
                 "origin_id": str(task.get("origin_id") or "").strip(),
                 "feedback_state": state,
+                "feedback_reason_code": reason_code,
                 "updated_at": str(task.get("updated_at") or "").strip(),
                 "created_at": str(task.get("created_at") or "").strip(),
             }
@@ -227,6 +232,7 @@ def summarize_feedback(tasks: List[Dict[str, Any]], recent_limit: int) -> Dict[s
         "reviewed_count": reviewed_count,
         "actionable_count": actionable_count,
         "counts": counts,
+        "actionable_reason_counts": dict(sorted(actionable_reasons.items(), key=lambda item: (-item[1], item[0]))),
         "recent_reviewed": recent_reviewed,
         "recent_actionable": recent_actionable,
     }

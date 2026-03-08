@@ -78,6 +78,31 @@ function joinList(items: string[] | undefined, fallback = "なし") {
   return items.join(" / ");
 }
 
+function feedbackReasonLabel(code?: string | null) {
+  switch ((code ?? "").trim()) {
+    case "not_actionable":
+      return "タスク化不要";
+    case "wrong_project":
+      return "案件違い";
+    case "too_broad":
+      return "粒度が粗い";
+    case "too_granular":
+      return "細かすぎる";
+    case "duplicate":
+      return "重複";
+    case "factually_wrong":
+      return "内容誤り";
+    case "unclear":
+      return "意図不明";
+    case "quality_mismatch":
+      return "品質ミスマッチ";
+    case "accepted":
+      return "採用";
+    default:
+      return code?.trim() || "未分類";
+  }
+}
+
 async function copyTextToClipboard(text: string): Promise<boolean> {
   if (!text.trim()) {
     return false;
@@ -490,6 +515,19 @@ export function renderRoby(props: RobyProps) {
               <div class="muted">reviewed: ${feedbackLoop?.reviewedCount ?? 0} / total: ${feedbackLoop?.totalTasks ?? 0}</div>
               <div class="muted">actionable: ${feedbackLoop?.actionableCount ?? 0}</div>
               ${
+                (feedbackLoop?.actionableReasonCounts?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted" style="margin-top: 8px;">Bad理由の内訳</div>
+                      ${feedbackLoop?.actionableReasonCounts
+                        ?.slice(0, 6)
+                        .map(
+                          (row) =>
+                            html`<div class="muted">- ${feedbackReasonLabel(row.reasonCode)}: ${row.count}</div>`,
+                        )}
+                    `
+                  : nothing
+              }
+              ${
                 (feedbackLoop?.recentActionable?.length ?? 0) > 0
                   ? html`
                       <div class="muted" style="margin-top: 8px;">要確認の最新タスク</div>
@@ -497,7 +535,7 @@ export function renderRoby(props: RobyProps) {
                         ?.slice(0, 5)
                         .map(
                           (row) =>
-                            html`<div class="muted">- [${row.feedbackState}] ${row.title || row.id}</div>`,
+                            html`<div class="muted">- [${row.feedbackState}${row.feedbackReasonCode ? ` / ${feedbackReasonLabel(row.feedbackReasonCode)}` : ""}] ${row.title || row.id}</div>`,
                         )}
                     `
                   : html`
@@ -507,7 +545,7 @@ export function renderRoby(props: RobyProps) {
                           ?.slice(0, 5)
                           .map(
                             (row) =>
-                              html`<div class="muted">- [${row.feedbackState}] ${row.title || row.id}</div>`,
+                              html`<div class="muted">- [${row.feedbackState}${row.feedbackReasonCode ? ` / ${feedbackReasonLabel(row.feedbackReasonCode)}` : ""}] ${row.title || row.id}</div>`,
                           ) ?? nothing
                       }
                     `

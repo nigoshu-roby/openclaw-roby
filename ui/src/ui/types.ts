@@ -659,10 +659,15 @@ export type RobyFeedbackLoopStatus = RobyOpsHealthSummary & {
     pending: number;
     other: number;
   };
+  actionableReasonCounts?: Array<{
+    reasonCode: string;
+    count: number;
+  }>;
   recentActionable?: Array<{
     id: string;
     title: string;
     feedbackState: string;
+    feedbackReasonCode?: string;
     updatedAt: string;
     originId: string;
   }>;
@@ -670,6 +675,7 @@ export type RobyFeedbackLoopStatus = RobyOpsHealthSummary & {
     id: string;
     title: string;
     feedbackState: string;
+    feedbackReasonCode?: string;
     updatedAt: string;
     originId: string;
   }>;

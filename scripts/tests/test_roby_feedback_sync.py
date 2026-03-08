@@ -51,6 +51,7 @@ class TestRobyFeedbackSync(TestCase):
                 "title": "C",
                 "source": "roby",
                 "feedback_state": "bad",
+                "feedback_reason_code": "too_broad",
                 "updated_at": "2026-03-08T12:00:00Z",
             },
             {
@@ -58,6 +59,7 @@ class TestRobyFeedbackSync(TestCase):
                 "title": "D",
                 "source": "roby",
                 "feedback_state": "missed",
+                "feedback_reason_code": "not_actionable",
                 "updated_at": "2026-03-08T13:00:00Z",
             },
         ]
@@ -69,6 +71,8 @@ class TestRobyFeedbackSync(TestCase):
         self.assertEqual(summary["counts"]["bad"], 1)
         self.assertEqual(summary["counts"]["missed"], 1)
         self.assertEqual(summary["counts"]["pending"], 1)
+        self.assertEqual(summary["actionable_reason_counts"]["too_broad"], 1)
+        self.assertEqual(summary["actionable_reason_counts"]["not_actionable"], 1)
         self.assertEqual([x["title"] for x in summary["recent_actionable"]], ["D", "C"])
 
 
