@@ -663,6 +663,16 @@ export type RobyFeedbackLoopStatus = RobyOpsHealthSummary & {
     reasonCode: string;
     count: number;
   }>;
+  improvementTargets?: Array<{
+    target: string;
+    label: string;
+    count: number;
+    recommendation?: string;
+    reasons?: Array<{
+      reasonCode: string;
+      count: number;
+    }>;
+  }>;
   recentActionable?: Array<{
     id: string;
     title: string;

@@ -528,6 +528,24 @@ export function renderRoby(props: RobyProps) {
                   : nothing
               }
               ${
+                (feedbackLoop?.improvementTargets?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted" style="margin-top: 8px;">次に直すべき処理</div>
+                      ${feedbackLoop?.improvementTargets?.slice(0, 4).map(
+                        (row) =>
+                          html`
+                              <div class="muted">- ${row.label || row.target}: ${row.count}</div>
+                              ${
+                                row.recommendation
+                                  ? html`<div class="muted" style="padding-left: 12px;">${row.recommendation}</div>`
+                                  : nothing
+                              }
+                            `,
+                      )}
+                    `
+                  : nothing
+              }
+              ${
                 (feedbackLoop?.recentActionable?.length ?? 0) > 0
                   ? html`
                       <div class="muted" style="margin-top: 8px;">要確認の最新タスク</div>

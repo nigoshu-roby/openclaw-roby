@@ -214,6 +214,7 @@ def summarize_feedback(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
     counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
     reason_counts = summary.get("actionable_reason_counts") if isinstance(summary.get("actionable_reason_counts"), dict) else {}
+    improvement_targets = summary.get("improvement_targets") if isinstance(summary.get("improvement_targets"), list) else []
     recent_actionable = summary.get("recent_actionable") if isinstance(summary.get("recent_actionable"), list) else []
     return {
         "runs": len(items),
@@ -224,6 +225,7 @@ def summarize_feedback(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "missed": int(counts.get("missed", 0)),
         "pending": int(counts.get("pending", 0)),
         "actionable_reason_counts": reason_counts,
+        "improvement_targets": [row for row in improvement_targets if isinstance(row, dict)][:5],
         "latest": latest,
         "recent_actionable": [
             {
@@ -330,6 +332,19 @@ def build_markdown(report: Dict[str, Any]) -> str:
         lines.append("- bad reasons:")
         for reason_code, count in sorted(reason_counts.items(), key=lambda item: (-int(item[1]), str(item[0]))):
             lines.append(f"  - {reason_code}: {count}")
+        lines.append("")
+    improvement_targets = feedback_s.get("improvement_targets") or []
+    if isinstance(improvement_targets, list) and improvement_targets:
+        lines.append("- improvement targets:")
+        for row in improvement_targets[:3]:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label") or row.get("target") or "-").strip()
+            count = int(row.get("count", 0) or 0)
+            recommendation = str(row.get("recommendation") or "").strip()
+            lines.append(f"  - {label}: {count}")
+            if recommendation:
+                lines.append(f"    - {recommendation}")
         lines.append("")
     lines.extend(
         [

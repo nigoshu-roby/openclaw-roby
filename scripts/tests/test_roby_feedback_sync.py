@@ -74,6 +74,9 @@ class TestRobyFeedbackSync(TestCase):
         self.assertEqual(summary["actionable_reason_counts"]["too_broad"], 1)
         self.assertEqual(summary["actionable_reason_counts"]["not_actionable"], 1)
         self.assertEqual([x["title"] for x in summary["recent_actionable"]], ["D", "C"])
+        self.assertEqual(summary["improvement_targets"][0]["target"], "task_filtering")
+        self.assertEqual(summary["improvement_targets"][0]["count"], 1)
+        self.assertEqual(summary["improvement_targets"][1]["target"], "task_granularity_split")
 
 
 if __name__ == "__main__":

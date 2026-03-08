@@ -128,6 +128,16 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
         )
         if feedback_s.get("actionable_reason_counts")
         else "・top bad reasons: なし",
+        (
+            "・next improvements: "
+            + " / ".join(
+                f"{str(row.get('label') or row.get('target') or '-')}:{int(row.get('count', 0) or 0)}"
+                for row in list((feedback_s.get("improvement_targets") or []))[:3]
+                if isinstance(row, dict)
+            )
+        )
+        if feedback_s.get("improvement_targets")
+        else "・next improvements: なし",
     ]
     return build_slack_message(
         "PBS 週次運用レポート",

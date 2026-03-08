@@ -277,6 +277,9 @@ async function buildRobyStatus() {
   const feedbackCounts = (feedbackSummary.counts as Record<string, unknown> | undefined) ?? {};
   const feedbackReasonCounts =
     (feedbackSummary.actionable_reason_counts as Record<string, unknown> | undefined) ?? {};
+  const feedbackImprovementTargets = Array.isArray(feedbackSummary.improvement_targets)
+    ? (feedbackSummary.improvement_targets as Array<Record<string, unknown>>)
+    : [];
   const feedbackRecentActionable = Array.isArray(feedbackSummary.recent_actionable)
     ? (feedbackSummary.recent_actionable as Array<Record<string, unknown>>)
     : [];
@@ -395,6 +398,21 @@ async function buildRobyStatus() {
       actionableReasonCounts: Object.entries(feedbackReasonCounts).map(([reasonCode, count]) => ({
         reasonCode,
         count: Number(count ?? 0),
+      })),
+      improvementTargets: feedbackImprovementTargets.map((row) => ({
+        target: typeof row.target === "string" ? row.target : "",
+        label: typeof row.label === "string" ? row.label : "",
+        count: Number(row.count ?? 0),
+        recommendation: typeof row.recommendation === "string" ? row.recommendation : "",
+        reasons: Array.isArray(row.reasons)
+          ? row.reasons.map((reason) => ({
+              reasonCode:
+                typeof (reason as Record<string, unknown>).reason_code === "string"
+                  ? ((reason as Record<string, unknown>).reason_code as string)
+                  : "",
+              count: Number((reason as Record<string, unknown>).count ?? 0),
+            }))
+          : [],
       })),
       recentActionable: feedbackRecentActionable.map((row) => ({
         id: typeof row.id === "string" ? row.id : "",

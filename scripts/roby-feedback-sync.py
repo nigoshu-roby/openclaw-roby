@@ -34,6 +34,44 @@ KEYCHAIN_SECRET_KEYS = {
 REVIEWED_STATES = {"good", "bad", "missed"}
 ACTIONABLE_STATES = {"bad", "missed"}
 
+FEEDBACK_REASON_RULES: Dict[str, Dict[str, str]] = {
+    "not_actionable": {
+        "target": "task_filtering",
+        "label": "タスク抽出閾値",
+        "recommendation": "議事録/Gmail抽出で『依頼・期限・担当・次アクション』が弱い文を除外する。",
+    },
+    "wrong_project": {
+        "target": "project_classification",
+        "label": "案件判定",
+        "recommendation": "projectタグ付けと案件名推定のルールを見直す。",
+    },
+    "too_broad": {
+        "target": "task_granularity_split",
+        "label": "タスク分解",
+        "recommendation": "抽出後の細分化を強め、1タスク1アクションへ寄せる。",
+    },
+    "too_granular": {
+        "target": "task_granularity_merge",
+        "label": "タスク統合",
+        "recommendation": "隣接タスクをまとめ、実行単位で再構成する。",
+    },
+    "duplicate": {
+        "target": "deduplication",
+        "label": "重複除去",
+        "recommendation": "origin_id・類似タイトル・同一議事録内の重複検知を強化する。",
+    },
+    "factually_wrong": {
+        "target": "source_grounding",
+        "label": "原文忠実性",
+        "recommendation": "要約/OCR後の原文根拠を優先し、推測的な補完を抑制する。",
+    },
+    "unclear": {
+        "target": "task_rewrite",
+        "label": "表現明確化",
+        "recommendation": "抽出後に『誰が何をするか』の書き換えを追加する。",
+    },
+}
+
 
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
@@ -194,6 +232,7 @@ def normalize_feedback_state(task: Dict[str, Any]) -> str:
 def summarize_feedback(tasks: List[Dict[str, Any]], recent_limit: int) -> Dict[str, Any]:
     counts = {"good": 0, "bad": 0, "missed": 0, "pending": 0, "other": 0}
     actionable_reasons: Dict[str, int] = {}
+    target_counts: Dict[str, Dict[str, Any]] = {}
     rows: List[Dict[str, Any]] = []
     for task in tasks:
         state = normalize_feedback_state(task)
@@ -204,6 +243,21 @@ def summarize_feedback(tasks: List[Dict[str, Any]], recent_limit: int) -> Dict[s
             counts["other"] += 1
         if state in ACTIONABLE_STATES and reason_code:
             actionable_reasons[reason_code] = actionable_reasons.get(reason_code, 0) + 1
+            rule = FEEDBACK_REASON_RULES.get(reason_code)
+            if rule:
+                bucket = target_counts.setdefault(
+                    rule["target"],
+                    {
+                        "target": rule["target"],
+                        "label": rule["label"],
+                        "recommendation": rule["recommendation"],
+                        "count": 0,
+                        "reasons": {},
+                    },
+                )
+                bucket["count"] += 1
+                reasons = bucket["reasons"]
+                reasons[reason_code] = reasons.get(reason_code, 0) + 1
         rows.append(
             {
                 "id": str(task.get("id") or "").strip(),
@@ -226,6 +280,21 @@ def summarize_feedback(tasks: List[Dict[str, Any]], recent_limit: int) -> Dict[s
     recent_actionable = [row for row in rows if row["feedback_state"] in ACTIONABLE_STATES][:recent_limit]
     reviewed_count = counts["good"] + counts["bad"] + counts["missed"]
     actionable_count = counts["bad"] + counts["missed"]
+    improvement_targets = []
+    for bucket in sorted(target_counts.values(), key=lambda item: (-int(item["count"]), str(item["target"]))):
+        reasons = bucket.get("reasons") or {}
+        improvement_targets.append(
+            {
+                "target": bucket["target"],
+                "label": bucket["label"],
+                "count": int(bucket["count"]),
+                "recommendation": bucket["recommendation"],
+                "reasons": [
+                    {"reason_code": key, "count": int(value)}
+                    for key, value in sorted(reasons.items(), key=lambda item: (-int(item[1]), str(item[0])))
+                ],
+            }
+        )
 
     return {
         "total_tasks": len(tasks),
@@ -233,6 +302,7 @@ def summarize_feedback(tasks: List[Dict[str, Any]], recent_limit: int) -> Dict[s
         "actionable_count": actionable_count,
         "counts": counts,
         "actionable_reason_counts": dict(sorted(actionable_reasons.items(), key=lambda item: (-item[1], item[0]))),
+        "improvement_targets": improvement_targets,
         "recent_reviewed": recent_reviewed,
         "recent_actionable": recent_actionable,
     }
