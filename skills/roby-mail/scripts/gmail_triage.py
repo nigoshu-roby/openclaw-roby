@@ -60,9 +60,17 @@ IMPORTANT_KEYWORDS = [
     "expire",
     "失効",
     "請求",
+    "請求書",
     "支払い",
+    "支払",
+    "入金",
+    "未払い",
     "見積",
+    "見積もり",
+    "見積書",
     "契約",
+    "発注",
+    "申込",
     "申請",
     "承認",
     "確認",
@@ -77,6 +85,22 @@ IMPORTANT_KEYWORDS = [
     "ご返信",
     "ご回答",
     "お手数",
+]
+
+BUSINESS_REVIEW_KEYWORDS = [
+    "請求",
+    "請求書",
+    "支払",
+    "支払い",
+    "入金",
+    "未払い",
+    "見積",
+    "見積もり",
+    "見積書",
+    "契約",
+    "更新",
+    "発注",
+    "申込",
 ]
 
 AD_HINTS = [
@@ -122,6 +146,12 @@ ACTIONABLE_NOTICE_HINTS = [
     "アカウント発行",
     "アカウント発行のお知らせ",
     "スケジュールエラー通知",
+    "請求",
+    "請求書",
+    "見積",
+    "見積書",
+    "契約更新",
+    "更新手続き",
     "pipeline",
     "etl結果",
     "定例ミーティング",
@@ -835,6 +865,7 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
     is_ad_hint = any(h in text for h in AD_HINTS)
     is_promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
     is_actionable_notice = any(h.lower() in text for h in ACTIONABLE_NOTICE_HINTS)
+    has_business_review_signal = any(k in text for k in BUSINESS_REVIEW_KEYWORDS)
 
     is_marketing_sender = any(x in sender_lower for x in [
         "seminar",
@@ -850,6 +881,8 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
     # Sender-domain blacklist is authoritative for known promotional sources.
     # Their bodies often contain words like "更新", "確認", "reply-to" that trigger false positives.
     if is_promo_sender_domain:
+        if has_business_review_signal or is_actionable_notice or is_alert:
+            return "needs_review", tags, needs_reply, None
         return "archive", tags, False, None
 
     # Tool-specific operational notifications we still want to see.
@@ -866,13 +899,15 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
 
     # Frequent ad-platform auto notices (approval/budget consumed/news) are noisy by default.
     if ("line.me" in sender_lower or "mail.yahoo.co.jp" in sender_lower) and is_noreply:
+        if has_business_review_signal or is_actionable_notice or is_alert:
+            return "needs_review", tags, needs_reply, None
         if any(k in (subject or "") for k in ["広告が承認されました", "広告アカウントが承認されました", "予算が消化されました"]):
             return "archive", tags, needs_reply, None
         if "ads update" in subject_lower or "新着情報" in (subject or ""):
             return "archive", tags, needs_reply, None
 
     # Strong promotional signals override reply heuristics to reduce false positives.
-    if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice:
+    if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice and not has_business_review_signal:
         return "archive", tags, False, None
 
     reply_text = re.sub(r"reply-to", " ", text)

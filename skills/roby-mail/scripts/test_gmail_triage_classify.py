@@ -70,6 +70,24 @@ class TestGmailTriageClassify(TestCase):
         )
         self.assertEqual(category, "needs_review")
 
+    def test_promo_sender_with_invoice_signal_is_not_archived(self):
+        category, _, _, _ = self.mod.classify_message(
+            subject="【重要】請求書のご案内",
+            sender="Mapbox Billing <hello@mapbox.com>",
+            body="請求書をご確認ください",
+            rules={},
+        )
+        self.assertEqual(category, "needs_review")
+
+    def test_marketing_like_subject_with_estimate_signal_stays_reviewable(self):
+        category, _, _, _ = self.mod.classify_message(
+            subject="【無料で試せる】見積書をご確認ください",
+            sender="Sales Team <info@example.com>",
+            body="見積書を送付します。内容をご確認ください。",
+            rules={},
+        )
+        self.assertEqual(category, "needs_review")
+
     def test_line_approval_noreply_is_archived(self):
         category, _, _, _ = self.mod.classify_message(
             subject="広告が承認されました",
