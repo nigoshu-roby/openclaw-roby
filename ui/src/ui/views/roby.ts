@@ -133,9 +133,12 @@ export function renderRoby(props: RobyProps) {
   const weeklyStatus = ops?.weeklyReport;
   const localFirst = ops?.localFirst;
   const weeklyLoaded = Boolean(weeklyStatus);
-  const weeklyNeedsAttention =
-    weeklyStatus?.present === true &&
-    (weeklyStatus?.auditOk === false || (weeklyStatus?.staleCount ?? 0) > 0);
+  const currentIssues = [
+    evalStatus?.present === true && evalStatus?.allOk === false,
+    drillStatus?.present === true && drillStatus?.allOk === false,
+    liveFreshness?.present === true && (liveFreshness?.staleCount ?? 0) > 0,
+  ].some(Boolean);
+  const weeklyNeedsAttention = weeklyStatus?.present === true && currentIssues;
 
   return html`
     <section class="grid grid-cols-2">
@@ -414,7 +417,7 @@ export function renderRoby(props: RobyProps) {
             ? "週次スナップショットを取得中"
             : "週次スナップショット未取得"
           : weeklyStatus?.present
-            ? `過去7日: eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}`
+            ? `過去7日: eval ${weeklyStatus?.evalRuns ?? 0}件 / drill ${weeklyStatus?.drillRuns ?? 0}件 / stale ${weeklyStatus?.staleCount ?? 0}（履歴）`
             : "週次レポートなし",
         meta: weeklyLoaded && weeklyStatus?.ts ? formatRelativeTimestamp(weeklyStatus.ts) : "—",
         details: weeklyLoaded
