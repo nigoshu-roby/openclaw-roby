@@ -12,6 +12,12 @@ from html import unescape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+OPENCLAW_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
+if str(OPENCLAW_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(OPENCLAW_SCRIPTS_DIR))
+
+from roby_local_first import env_flag as shared_env_flag, int_from_env as shared_int_from_env, run_ollama_json
+
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
@@ -799,6 +805,57 @@ def llm_triage_decision(subject: str, sender: str, cc: str, body: str, env: Dict
     return None, ""
 
 
+def local_preclassify_email(
+    subject: str,
+    sender: str,
+    cc: str,
+    body: str,
+    env: Dict[str, str],
+) -> Tuple[Optional[str], str, Dict[str, Any]]:
+    if not shared_env_flag(env, "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE", False):
+        return None, "", {"enabled": False, "reason": "disabled"}
+
+    model = (env.get("GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL", "ollama/llama3.2:3b") or "").strip()
+    if not model:
+        return None, "", {"enabled": False, "reason": "missing_model"}
+
+    body_trim = (body or "")[: shared_int_from_env(env, "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MAX_INPUT_CHARS", 3500)]
+    prompt = (
+        "You do a local-first preclassification pass for Japanese business email triage. "
+        "Return ONLY JSON object with keys: category, reason, confidence, signals. "
+        "category must be one of archive, later_check, needs_review, needs_reply. "
+        "Use archive only for clear newsletters, promotions, webinar notices, or auto-generated low-value alerts. "
+        "Use later_check for tool/platform notices worth checking later. "
+        "Use needs_review for important notices, billing, contracts, approvals, failures, internal coordination, or anything that should stay visible. "
+        "Use needs_reply only when the recipient is explicitly expected to respond or take immediate action. "
+        "Be conservative: when uncertain, prefer needs_review over archive."
+    )
+    source_text = (
+        f"Subject: {subject}\n"
+        f"From: {sender}\n"
+        f"CC: {cc}\n\n"
+        f"Body:\n{body_trim}\n"
+    )
+    parsed, meta = run_ollama_json(
+        prompt=prompt,
+        source_text=source_text,
+        env=env,
+        model=model,
+        timeout_sec=shared_int_from_env(env, "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_TIMEOUT_SEC", 30),
+        num_predict=shared_int_from_env(env, "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_NUM_PREDICT", 220),
+        temperature=0.1,
+        top_p=0.9,
+        repeat_penalty=1.03,
+    )
+    if not isinstance(parsed, dict):
+        return None, "", meta
+    category = str(parsed.get("category") or "").strip()
+    if category not in {"archive", "later_check", "needs_review", "needs_reply"}:
+        return None, "", {**meta, "error": "invalid_category"}
+    reason = str(parsed.get("reason") or "").strip()
+    return category, reason, meta
+
+
 def should_apply_llm_override(
     current_category: str,
     llm_category: str,
@@ -826,11 +883,48 @@ def should_apply_llm_override(
     return True
 
 
-def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any] | None = None, cc: str = "") -> Tuple[str, List[str], bool, str | None]:
+def should_apply_local_override(
+    current_category: str,
+    local_category: str,
+    sender: str,
+    subject: str,
+) -> bool:
+    if local_category == current_category:
+        return False
+    sender_lower = (sender or "").lower()
+    subject_lower = (subject or "").lower()
+
+    if local_category == "archive":
+        is_noreply = ("no-reply" in sender_lower) or ("noreply" in sender_lower)
+        promo_domain = any(dom in sender_lower for dom in PROMO_SENDER_DOMAINS)
+        promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
+        has_business_keyword = any(k.lower() in subject_lower for k in BUSINESS_REVIEW_KEYWORDS)
+        if has_business_keyword:
+            return False
+        return is_noreply or promo_domain or promo_subject
+
+    if current_category == "archive" and local_category in {"needs_review", "needs_reply"}:
+        return True
+    if current_category == "later_check" and local_category in {"needs_review", "needs_reply"}:
+        return True
+    if current_category == "needs_review" and local_category == "needs_reply":
+        return True
+    return False
+
+
+def classify_message(
+    subject: str,
+    sender: str,
+    body: str,
+    rules: Dict[str, Any] | None = None,
+    cc: str = "",
+    env: Dict[str, str] | None = None,
+) -> Tuple[str, List[str], bool, str | None, Dict[str, Any]]:
     text = f"{subject} {sender} {cc} {body}".lower()
     header_text = f"{subject} {sender} {cc}".lower()
     tags = []
     needs_reply = False
+    meta: Dict[str, Any] = {}
     sender_lower = (sender or "").lower()
     cc_lower = (cc or "").lower()
     subject_lower = (subject or "").lower()
@@ -854,11 +948,11 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
 
     override_category, override_rule = match_user_override(subject, sender, rules or {}, cc=cc)
     if override_category:
-        return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule
+        return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule, meta
 
     # Internal company domain in sender/CC should always be reviewed.
     if "tokiwa-gi.com" in sender_lower or "tokiwa-gi.com" in cc_lower:
-        return "needs_review", _dedupe_tags(tags + ["rule:internal_domain_review"]), needs_reply, "internal_domain_review"
+        return "needs_review", _dedupe_tags(tags + ["rule:internal_domain_review"]), needs_reply, "internal_domain_review", meta
 
     urgent = any(k in text for k in IMPORTANT_KEYWORDS)
     is_alert = any(k in text for k in ALERT_HINTS)
@@ -882,33 +976,57 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
     # Their bodies often contain words like "更新", "確認", "reply-to" that trigger false positives.
     if is_promo_sender_domain:
         if has_business_review_signal or is_actionable_notice or is_alert:
-            return "needs_review", tags, needs_reply, None
-        return "archive", tags, False, None
+            category = "needs_review"
+        else:
+            category = "archive"
+            needs_reply = False
+        if env:
+            local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
+            meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
+            if local_category and should_apply_local_override(category, local_category, sender, subject):
+                category = local_category
+                tags = _dedupe_tags(tags + ["local:override"])
+                if local_category == "needs_reply":
+                    needs_reply = True
+                if local_reason:
+                    meta["local_reason"] = local_reason
+        return category, tags, needs_reply, None, meta
 
     # Tool-specific operational notifications we still want to see.
     if ("support@crmstyle.com" in sender_lower or "synergy" in text) and "アカウント発行" in (subject or ""):
-        return "needs_review", tags, needs_reply, None
+        return "needs_review", tags, needs_reply, None, meta
 
     # AWS / batch job notifications are operationally important even on success.
     if "aws" in text and ("pipeline" in text or "etl" in text):
-        return "needs_review", tags, needs_reply, None
+        return "needs_review", tags, needs_reply, None, meta
 
     # Meeting / coordination mails should remain visible.
     if any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"]):
-        return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None
+        return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None, meta
 
     # Frequent ad-platform auto notices (approval/budget consumed/news) are noisy by default.
     if ("line.me" in sender_lower or "mail.yahoo.co.jp" in sender_lower) and is_noreply:
         if has_business_review_signal or is_actionable_notice or is_alert:
-            return "needs_review", tags, needs_reply, None
+            return "needs_review", tags, needs_reply, None, meta
         if any(k in (subject or "") for k in ["広告が承認されました", "広告アカウントが承認されました", "予算が消化されました"]):
-            return "archive", tags, needs_reply, None
+            return "archive", tags, needs_reply, None, meta
         if "ads update" in subject_lower or "新着情報" in (subject or ""):
-            return "archive", tags, needs_reply, None
+            return "archive", tags, needs_reply, None, meta
 
     # Strong promotional signals override reply heuristics to reduce false positives.
     if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice and not has_business_review_signal:
-        return "archive", tags, False, None
+        category = "archive"
+        if env:
+            local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
+            meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
+            if local_category and should_apply_local_override(category, local_category, sender, subject):
+                category = local_category
+                tags = _dedupe_tags(tags + ["local:override"])
+                if local_category == "needs_reply":
+                    needs_reply = True
+                if local_reason:
+                    meta["local_reason"] = local_reason
+        return category, tags, needs_reply, None, meta
 
     reply_text = re.sub(r"reply-to", " ", text)
     has_reply_phrase = any(k in reply_text for k in ["返信", "ご返信", "ご回答", "ご対応"])
@@ -919,19 +1037,55 @@ def classify_message(subject: str, sender: str, body: str, rules: Dict[str, Any]
     if related:
         if is_noreply:
             if is_alert:
-                return "needs_review", tags, needs_reply, None
-            return "later_check", tags, needs_reply, None
+                category = "needs_review"
+            else:
+                category = "later_check"
+            if env:
+                local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
+                meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
+                if local_category and should_apply_local_override(category, local_category, sender, subject):
+                    category = local_category
+                    tags = _dedupe_tags(tags + ["local:override"])
+                    if local_category == "needs_reply":
+                        needs_reply = True
+                    if local_reason:
+                        meta["local_reason"] = local_reason
+            return category, tags, needs_reply, None, meta
         if urgent:
-            return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None
-        return ("needs_reply" if needs_reply else "later_check"), tags, needs_reply, None
+            category = "needs_reply" if needs_reply else "needs_review"
+        else:
+            category = "needs_reply" if needs_reply else "later_check"
+        if env:
+            local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
+            meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
+            if local_category and should_apply_local_override(category, local_category, sender, subject):
+                category = local_category
+                tags = _dedupe_tags(tags + ["local:override"])
+                if local_category == "needs_reply":
+                    needs_reply = True
+                if local_reason:
+                    meta["local_reason"] = local_reason
+        return category, tags, needs_reply, None, meta
 
     if urgent:
-        return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None
+        category = "needs_reply" if needs_reply else "needs_review"
+    elif is_ad_hint and is_noreply:
+        category = "archive"
+    else:
+        category = "needs_review"
 
-    if is_ad_hint and is_noreply:
-        return "archive", tags, needs_reply, None
+    if env:
+        local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
+        meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
+        if local_category and should_apply_local_override(category, local_category, sender, subject):
+            category = local_category
+            tags = _dedupe_tags(tags + ["local:override"])
+            if local_category == "needs_reply":
+                needs_reply = True
+            if local_reason:
+                meta["local_reason"] = local_reason
 
-    return "needs_review", tags, needs_reply, None
+    return category, tags, needs_reply, None, meta
 
 
 def build_tasks(
@@ -1054,6 +1208,8 @@ def main() -> int:
         "neuronic_errors": 0,
         "llm_reviewed": 0,
         "llm_overrides": 0,
+        "local_preclassified": 0,
+        "local_overrides": 0,
     }
     run_id = build_run_id("gmail")
     summary["run_id"] = run_id
@@ -1080,7 +1236,19 @@ def main() -> int:
         sender = msg.get("from", "")
 
         cc = msg.get("cc", "") or msg.get("ccs", "") or ""
-        category, tags, needs_reply, rule_applied = classify_message(subject, sender, body, rules=rules, cc=cc)
+        category, tags, needs_reply, rule_applied, classify_meta = classify_message(
+            subject,
+            sender,
+            body,
+            rules=rules,
+            cc=cc,
+            env=env,
+        )
+        local_meta = classify_meta.get("local_preclassify") if isinstance(classify_meta, dict) else None
+        if isinstance(local_meta, dict) and local_meta.get("enabled") is not False:
+            summary["local_preclassified"] += 1
+        if "local:override" in tags:
+            summary["local_overrides"] += 1
         llm_category = None
         llm_reason = ""
         if llm_enabled and llm_max_reviews > 0 and llm_review_count < llm_max_reviews and not rule_applied and category in ("needs_review", "later_check", "needs_reply"):
@@ -1177,6 +1345,8 @@ def main() -> int:
                 row["llm_category"] = llm_category
             if llm_reason:
                 row["llm_reason"] = llm_reason
+            if isinstance(classify_meta, dict) and classify_meta.get("local_reason"):
+                row["local_reason"] = classify_meta.get("local_reason")
             print(json.dumps(row, ensure_ascii=False))
 
         if not args.dry_run:

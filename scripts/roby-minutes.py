@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import time
 import hashlib
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
 import urllib.error
 from roby_audit import append_audit_event
+from roby_local_first import env_flag, int_from_env, run_ollama_json
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "minutes_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_runs.jsonl"
@@ -26,6 +28,10 @@ DEFAULT_DAYS = 14
 DEFAULT_MAX = 200
 
 JST = timezone(timedelta(hours=9))
+
+
+class MinutesDocTimeout(RuntimeError):
+    pass
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
     "OPENAI_API_KEY",
@@ -863,10 +869,10 @@ def _task_key_for_merge(item: Dict[str, Any]) -> str:
     ])
 
 
-def _merge_tasks(base: List[Dict[str, Any]], extra: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+def _merge_tasks(*task_lists: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen = set()
-    for src in (base, extra):
+    for src in task_lists:
         for item in src:
             if not isinstance(item, dict):
                 continue
@@ -890,6 +896,21 @@ def _run_gemini_json_prompt(
     length: str,
     timeout_sec: int,
 ) -> Tuple[Any, str]:
+    if "/" in model and model.split("/", 1)[0].strip().lower() == "ollama":
+        parsed, meta = run_ollama_json(
+            prompt=prompt,
+            source_text=text,
+            env=env,
+            model=model,
+            timeout_sec=timeout_sec,
+            num_predict=int(max_output_tokens or "1200"),
+            temperature=float(env.get("MINUTES_OLLAMA_TEMPERATURE", "0.15") or "0.15"),
+            top_p=float(env.get("MINUTES_OLLAMA_TOP_P", "0.9") or "0.9"),
+            repeat_penalty=float(env.get("MINUTES_OLLAMA_REPEAT_PENALTY", "1.05") or "1.05"),
+        )
+        raw = json.dumps(parsed, ensure_ascii=False) if parsed is not None else json.dumps(meta, ensure_ascii=False)
+        return parsed, raw
+
     cmd = [
         "summarize",
         "-",
@@ -914,7 +935,7 @@ def _run_gemini_json_prompt(
 
 
 def _candidate_models(env: Dict[str, str], list_key: str, fallback: List[str]) -> List[str]:
-    supported_providers = {"xai", "openai", "google", "anthropic", "zai"}
+    supported_providers = {"xai", "openai", "google", "anthropic", "zai", "ollama"}
 
     def _is_supported(model: str) -> bool:
         m = (model or "").strip()
@@ -939,6 +960,127 @@ def _candidate_models(env: Dict[str, str], list_key: str, fallback: List[str]) -
         seen.add(m)
         uniq.append(m)
     return uniq
+
+
+def minutes_local_preprocess_would_run(text: str, env: Dict[str, str]) -> bool:
+    if not env_flag(env, "MINUTES_LOCAL_PREPROCESS_ENABLE", True):
+        return False
+    min_chars = int_from_env(env, "MINUTES_LOCAL_PREPROCESS_MIN_CHARS", 1200)
+    return len(text) >= min_chars
+
+
+def local_preprocess_minutes(
+    text: str,
+    env: Dict[str, str],
+    default_project: str,
+    known_projects: List[str],
+    today: str,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    if not env_flag(env, "MINUTES_LOCAL_PREPROCESS_ENABLE", True):
+        return None, {"enabled": False, "reason": "disabled"}
+    min_chars = int_from_env(env, "MINUTES_LOCAL_PREPROCESS_MIN_CHARS", 1200)
+    if len(text) < min_chars:
+        return None, {"enabled": False, "reason": "short_input", "min_chars": min_chars}
+
+    known = ", ".join(sorted(set([p for p in known_projects if p]))[:25])
+    prompt = (
+        "You are doing a local-first preprocessing pass for Japanese meeting minutes. "
+        "Return ONLY JSON object with keys: cleaned_text, primary_project, project_hints, action_candidates, noise_notes. "
+        "cleaned_text should preserve concrete requests, deadlines, owners, and decisions, while removing filler, repeated context, and retrospective commentary. "
+        "primary_project should be a specific project if strongly indicated, otherwise empty string. "
+        "project_hints must be an array of likely project names. "
+        "action_candidates must be an array of short concrete action lines only. "
+        "noise_notes must be an array of memo/status lines that should not become tasks. "
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
+    )
+    model = (env.get("MINUTES_LOCAL_PREPROCESS_MODEL") or env.get("ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL") or "qwen2.5:7b").strip()
+    parsed, meta = run_ollama_json(
+        prompt=prompt,
+        source_text=text[: int_from_env(env, "MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS", 18000)],
+        env=env,
+        model=model,
+        timeout_sec=int_from_env(env, "MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC", 70),
+        num_predict=int_from_env(env, "MINUTES_LOCAL_PREPROCESS_NUM_PREDICT", 2200),
+        temperature=float(env.get("MINUTES_LOCAL_PREPROCESS_TEMPERATURE", "0.15") or "0.15"),
+        top_p=float(env.get("MINUTES_LOCAL_PREPROCESS_TOP_P", "0.9") or "0.9"),
+        repeat_penalty=float(env.get("MINUTES_LOCAL_PREPROCESS_REPEAT_PENALTY", "1.05") or "1.05"),
+    )
+    if not isinstance(parsed, dict):
+        return None, meta
+
+    cleaned_text = str(parsed.get("cleaned_text") or "").strip()
+    if not cleaned_text:
+        return None, {**meta, "error": "minutes_local_preprocess_empty"}
+
+    project_hints = [str(x).strip() for x in (parsed.get("project_hints") or []) if str(x).strip()]
+    action_candidates = [str(x).strip() for x in (parsed.get("action_candidates") or []) if str(x).strip()]
+    noise_notes = [str(x).strip() for x in (parsed.get("noise_notes") or []) if str(x).strip()]
+    return {
+        "cleaned_text": cleaned_text,
+        "primary_project": str(parsed.get("primary_project") or "").strip(),
+        "project_hints": project_hints[:8],
+        "action_candidates": action_candidates[:20],
+        "noise_notes": noise_notes[:20],
+    }, meta
+
+
+def run_with_doc_timeout(timeout_sec: int, fn, *args, **kwargs):
+    if timeout_sec <= 0 or os.name == "nt":
+        return fn(*args, **kwargs)
+
+    def _handle_timeout(signum, frame):
+        raise MinutesDocTimeout(f"minutes_doc_timeout:{timeout_sec}")
+
+    previous = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(timeout_sec))
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def tasks_from_local_preprocess(
+    local_preprocess: Dict[str, Any],
+    default_project: str,
+    known_projects: List[str],
+    max_items: int = 8,
+) -> List[Dict[str, Any]]:
+    candidates = local_preprocess.get("action_candidates") or []
+    if not isinstance(candidates, list):
+        return []
+    fallback_project = str(local_preprocess.get("primary_project") or "").strip() or default_project
+    tasks: List[Dict[str, Any]] = []
+    seen = set()
+    for raw in candidates:
+        title = _clean_line(str(raw or ""))
+        if not title or _looks_noise_task_title(title):
+            continue
+        project = _resolve_project_name(
+            "",
+            title,
+            "",
+            "",
+            fallback_project,
+            known_projects,
+        )
+        key = f"{title.lower()}|{project.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        tasks.append(
+            {
+                "title": title[:120],
+                "due_date": "",
+                "project": project,
+                "assignee": "私",
+                "note": "local_preprocess.action_candidates",
+            }
+        )
+        if max_items > 0 and len(tasks) >= max_items:
+            break
+    return tasks
 
 
 def _run_gemini_json_prompt_with_retry(
@@ -1181,39 +1323,105 @@ def local_recall_boost_tasks(
 
 
 def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_projects: List[str], today: str) -> Tuple[List[Dict[str, Any]], str]:
-    known = ", ".join(sorted(set([p for p in known_projects if p]))[:25])
+    working_text = text
+    working_default_project = default_project
+    working_known_projects = list(known_projects)
+    local_hint_tasks: List[Dict[str, Any]] = []
+    local_meta: Dict[str, Any] = {"enabled": False}
+
+    local_preprocess, local_preprocess_meta = local_preprocess_minutes(
+        text,
+        env,
+        default_project,
+        known_projects,
+        today,
+    )
+    local_meta = {
+        "enabled": True,
+        "result": local_preprocess_meta,
+    }
+    if isinstance(local_preprocess, dict):
+        cleaned_text = str(local_preprocess.get("cleaned_text") or "").strip()
+        if cleaned_text:
+            working_text = cleaned_text
+        primary_project = str(local_preprocess.get("primary_project") or "").strip()
+        if primary_project:
+            working_default_project = primary_project
+        project_hints = [
+            str(x).strip()
+            for x in (local_preprocess.get("project_hints") or [])
+            if str(x).strip()
+        ]
+        if project_hints:
+            working_known_projects = list(dict.fromkeys(working_known_projects + project_hints))
+        local_hint_tasks = tasks_from_local_preprocess(
+            local_preprocess,
+            working_default_project,
+            working_known_projects,
+            max_items=int(env.get("MINUTES_LOCAL_PREPROCESS_MAX_TASKS", "8")),
+        )
+        local_meta["preprocess"] = {
+            "primary_project": working_default_project,
+            "project_hints": project_hints[:8],
+            "action_candidates": (
+                local_preprocess.get("action_candidates")[:20]
+                if isinstance(local_preprocess.get("action_candidates"), list)
+                else []
+            ),
+            "noise_notes": (
+                local_preprocess.get("noise_notes")[:20]
+                if isinstance(local_preprocess.get("noise_notes"), list)
+                else []
+            ),
+            "hint_task_count": len(local_hint_tasks),
+        }
+
+    known = ", ".join(sorted(set([p for p in working_known_projects if p]))[:25])
     min_tasks_if_long = int(env.get("MINUTES_MIN_TASKS_IF_LONG", "4"))
     long_doc_chars = int(env.get("MINUTES_LONG_DOC_CHARS", "1200"))
-    review, review_raw = review_minutes_with_gemini(text, env, default_project, known_projects, today)
+    review, review_raw = review_minutes_with_gemini(
+        working_text,
+        env,
+        working_default_project,
+        working_known_projects,
+        today,
+    )
     if review:
-        llm_tasks, task_raw = extract_tasks_with_gemini_from_review(review, env, default_project, known_projects, today)
+        llm_tasks, task_raw = extract_tasks_with_gemini_from_review(
+            review,
+            env,
+            working_default_project,
+            working_known_projects,
+            today,
+        )
         review_tasks = tasks_from_review_object(
             review,
-            default_project,
-            known_projects,
+            working_default_project,
+            working_known_projects,
             max_per_project=int(env.get("MINUTES_REVIEW_MAX_PER_PROJECT", "8")),
             max_cross_project=int(env.get("MINUTES_REVIEW_MAX_CROSS_PROJECT", "8")),
         )
         merged_review_tasks = _merge_tasks(
+            local_hint_tasks,
             llm_tasks,
             review_tasks,
-            int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+            limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
         )
         coverage_raw = ""
-        if len(text) >= long_doc_chars and len(merged_review_tasks) < min_tasks_if_long:
+        if len(working_text) >= long_doc_chars and len(merged_review_tasks) < min_tasks_if_long:
             coverage_tasks, coverage_raw = extract_coverage_tasks_from_review(
                 review,
                 merged_review_tasks,
                 env,
-                default_project,
-                known_projects,
+                working_default_project,
+                working_known_projects,
                 today,
             )
             if coverage_tasks:
                 merged_review_tasks = _merge_tasks(
                     merged_review_tasks,
                     coverage_tasks,
-                    int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                    limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
                 )
         if merged_review_tasks:
             return merged_review_tasks, json.dumps(
@@ -1222,11 +1430,11 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
                     "review_raw": review_raw[:1200],
                     "task_raw": task_raw[:1200],
                     "coverage_raw": coverage_raw[:1200],
+                    "local_preprocess": local_meta,
                 },
                 ensure_ascii=False,
             )
 
-    # Fallback: one-stage extraction (existing behavior) if two-stage fails/truncates.
     prompt = (
         "Extract actionable tasks from the meeting minutes. "
         "Ignore pure status notes, commentary, criticism, retrospective feedback, and context-only memo lines. "
@@ -1235,13 +1443,13 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         "Each subtask uses the same schema (title, due_date, project, assignee, note). "
         "due_date must be YYYY-MM-DD or empty string. "
         f"Today is {today} (JST). "
-        f"Default project: {default_project}. "
+        f"Default project: {working_default_project}. "
         f"Known projects: {known}. "
         "Use the most appropriate project name if indicated. If not sure, use the default project. "
         "Prefer fewer high-quality actionable tasks over many vague bullets."
     )
     parsed, raw = _run_gemini_json_prompt_with_retry(
-        text,
+        working_text,
         prompt,
         env,
         model_list_key="MINUTES_SUMMARY_MODELS",
@@ -1257,9 +1465,13 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
     )
     coerced = _coerce_task_array(parsed)
     if coerced:
-        tasks = coerced
+        tasks = _merge_tasks(
+            local_hint_tasks,
+            coerced,
+            limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+        )
     else:
-        tasks = []
+        tasks = list(local_hint_tasks)
 
     compact_prompt = (
         "Extract only high-confidence actionable tasks from the meeting minutes. "
@@ -1268,10 +1480,10 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         "Do not include subtasks in this compact mode. "
         "Ignore pure status notes and background explanations. "
         "Prefer concise verb-led tasks. "
-        f"Today is {today} (JST). Default project: {default_project}. Known projects: {known}."
+        f"Today is {today} (JST). Default project: {working_default_project}. Known projects: {known}."
     )
     parsed_compact, raw_compact = _run_gemini_json_prompt_with_retry(
-        text,
+        working_text,
         compact_prompt,
         env,
         model_list_key="MINUTES_COMPACT_MODELS",
@@ -1290,10 +1502,9 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         tasks = _merge_tasks(
             tasks,
             coerced_compact,
-            int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+            limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
         )
 
-    # Repair pass: when model output is non-empty but malformed JSON, try converting once.
     malformed_source = (raw_compact or raw or "").strip()
     repair_raw = ""
     if malformed_source and (not _is_explicit_empty_tasks(malformed_source)):
@@ -1323,31 +1534,30 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
             tasks = _merge_tasks(
                 tasks,
                 coerced_repair,
-                int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
             )
         else:
-            partial_tasks = _extract_tasks_from_partial_json_text(raw_repair or malformed_source, default_project)
+            partial_tasks = _extract_tasks_from_partial_json_text(raw_repair or malformed_source, working_default_project)
             if partial_tasks:
                 tasks = _merge_tasks(
                     tasks,
                     partial_tasks,
-                    int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                    limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
                 )
         repair_raw = raw_repair or malformed_source
 
-    # Recall補強: 長文なのに抽出件数が少ない場合、追加抽出を一回だけ実施
     final_raw = repair_raw or raw_compact or raw
-    if len(text) >= long_doc_chars and len(tasks) < min_tasks_if_long:
+    if len(working_text) >= long_doc_chars and len(tasks) < min_tasks_if_long:
         existing_titles = ", ".join([str(x.get("title") or "") for x in tasks][:20])
         enrich_prompt = (
             "Extract additional high-confidence actionable tasks that are missing from current extraction. "
             "Return ONLY JSON array. Each item: title, due_date, project, assignee, note. "
             "Avoid duplicates against existing titles. "
             f"Existing titles: {existing_titles}. "
-            f"Today is {today} (JST). Default project: {default_project}. Known projects: {known}."
+            f"Today is {today} (JST). Default project: {working_default_project}. Known projects: {known}."
         )
         parsed_enrich, raw_enrich = _run_gemini_json_prompt_with_retry(
-            text,
+            working_text,
             enrich_prompt,
             env,
             model_list_key="MINUTES_ENRICH_MODELS",
@@ -1366,16 +1576,15 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
             tasks = _merge_tasks(
                 tasks,
                 enrich_tasks,
-                int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
             )
             final_raw = raw_enrich or final_raw
 
-    # 最後のRecall補強: ローカルの保守的抽出を低上限でマージ
-    if len(text) >= long_doc_chars and len(tasks) < min_tasks_if_long:
+    if len(working_text) >= long_doc_chars and len(tasks) < min_tasks_if_long:
         boost = local_recall_boost_tasks(
-            text,
-            default_project,
-            known_projects,
+            working_text,
+            working_default_project,
+            working_known_projects,
             max_projects=int(env.get("MINUTES_RECALL_BOOST_MAX_PROJECTS", "4")),
             max_items_per_project=int(env.get("MINUTES_RECALL_BOOST_MAX_ITEMS_PER_PROJECT", "5")),
         )
@@ -1383,14 +1592,34 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
             tasks = _merge_tasks(
                 tasks,
                 boost,
-                int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
             )
-            return tasks, final_raw
+            return tasks, json.dumps(
+                {
+                    "pipeline": "fallback_with_local_boost",
+                    "raw": (final_raw or "")[:1200],
+                    "local_preprocess": local_meta,
+                },
+                ensure_ascii=False,
+            )
 
     if tasks:
-        return tasks, final_raw
-    return [], final_raw
-
+        return tasks, json.dumps(
+            {
+                "pipeline": "fallback_single_stage",
+                "raw": (final_raw or "")[:1200],
+                "local_preprocess": local_meta,
+            },
+            ensure_ascii=False,
+        )
+    return [], json.dumps(
+        {
+            "pipeline": "fallback_empty",
+            "raw": (final_raw or "")[:1200],
+            "local_preprocess": local_meta,
+        },
+        ensure_ascii=False,
+    )
 
 def _stable_origin_id(task: Dict[str, Any], source_id: str) -> str:
     raw = "|".join([
@@ -2122,6 +2351,7 @@ def main() -> int:
         "candidate_items_capped": 0,
         "task_run_capped": 0,
         "task_run_cap_reached": False,
+        "timed_out_docs": 0,
     }
 
     candidates: List[Dict[str, Any]] = []
@@ -2213,6 +2443,9 @@ def main() -> int:
     run_id = build_run_id("minutes")
     include_legacy_group_tag = env.get("NEURONIC_LEGACY_GROUP_TAG", "0") == "1"
     max_tasks_per_run = int(env.get("MINUTES_MAX_TASKS_PER_RUN", "120") or "120")
+    local_preprocess_budget = int(env.get("MINUTES_LOCAL_PREPROCESS_MAX_DOCS_PER_RUN", "1") or "1")
+    doc_timeout_sec = int(env.get("MINUTES_DOC_TIMEOUT_SEC", "90") or "90")
+    local_preprocess_used = 0
 
     for item in selected:
         reached_task_cap = False
@@ -2228,11 +2461,34 @@ def main() -> int:
                 source_title=item.get("title", ""),
                 fallback_project=item.get("project") or "TOKIWAGI",
             )
-            extracted, raw_summary = summarize_tasks(
-                text, env, default_project, known_projects, today_str
-            )
+            effective_env = env
+            if minutes_local_preprocess_would_run(text, env):
+                if local_preprocess_budget >= 0 and local_preprocess_used >= local_preprocess_budget:
+                    effective_env = dict(env)
+                    effective_env["MINUTES_LOCAL_PREPROCESS_ENABLE"] = "0"
+                else:
+                    local_preprocess_used += 1
+            timed_out = False
+            try:
+                extracted, raw_summary = run_with_doc_timeout(
+                    doc_timeout_sec,
+                    summarize_tasks,
+                    text,
+                    effective_env,
+                    default_project,
+                    known_projects,
+                    today_str,
+                )
+            except MinutesDocTimeout:
+                timed_out = True
+                extracted, raw_summary = [], json.dumps(
+                    {"pipeline": "doc_timeout", "timeout_sec": doc_timeout_sec},
+                    ensure_ascii=False,
+                )
             fallback_used = False
-            if (not extracted) and (not _is_explicit_empty_tasks(raw_summary)):
+            if timed_out:
+                summary["timed_out_docs"] += 1
+            if timed_out or ((not extracted) and (not _is_explicit_empty_tasks(raw_summary))):
                 extracted = heuristic_tasks_from_text(
                     text,
                     default_project,
@@ -2262,6 +2518,7 @@ def main() -> int:
                     "tasks": len(extracted),
                     "tasks_sanitized": len(sanitized),
                     "fallback": "heuristic" if fallback_used else "",
+                    "timed_out": timed_out,
                 })
             tasks = build_neuronic_tasks(
                 sanitized,
@@ -2297,9 +2554,34 @@ def main() -> int:
                 source_title=item.get("title", ""),
                 fallback_project="TOKIWAGI",
             )
-            extracted, raw_summary = summarize_tasks(text, env, default_project, known_projects, today_str)
+            effective_env = env
+            if minutes_local_preprocess_would_run(text, env):
+                if local_preprocess_budget >= 0 and local_preprocess_used >= local_preprocess_budget:
+                    effective_env = dict(env)
+                    effective_env["MINUTES_LOCAL_PREPROCESS_ENABLE"] = "0"
+                else:
+                    local_preprocess_used += 1
+            timed_out = False
+            try:
+                extracted, raw_summary = run_with_doc_timeout(
+                    doc_timeout_sec,
+                    summarize_tasks,
+                    text,
+                    effective_env,
+                    default_project,
+                    known_projects,
+                    today_str,
+                )
+            except MinutesDocTimeout:
+                timed_out = True
+                extracted, raw_summary = [], json.dumps(
+                    {"pipeline": "doc_timeout", "timeout_sec": doc_timeout_sec},
+                    ensure_ascii=False,
+                )
             fallback_used = False
-            if (not extracted) and (not _is_explicit_empty_tasks(raw_summary)):
+            if timed_out:
+                summary["timed_out_docs"] += 1
+            if timed_out or ((not extracted) and (not _is_explicit_empty_tasks(raw_summary))):
                 extracted = heuristic_tasks_from_text(
                     text,
                     default_project,
@@ -2329,6 +2611,7 @@ def main() -> int:
                     "tasks": len(extracted),
                     "tasks_sanitized": len(sanitized),
                     "fallback": "heuristic" if fallback_used else "",
+                    "timed_out": timed_out,
                 })
             tasks = build_neuronic_tasks(
                 sanitized,
@@ -2359,6 +2642,8 @@ def main() -> int:
 
     summary["tasks"] = len(all_tasks)
     summary["heuristic_used_docs"] = heuristic_used_docs
+    summary["local_preprocess_docs"] = local_preprocess_used
+    summary["local_preprocess_budget"] = local_preprocess_budget
     summary["run_id"] = run_id
 
     if not args.dry_run:

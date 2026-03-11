@@ -40,7 +40,7 @@ class TestGmailTriageClassify(TestCase):
             self.assertIn("tokiwa-gi.com", [x.lower() for x in rules["force_review"]["sender_domains"]])
 
     def test_internal_domain_in_cc_forces_review(self):
-        category, tags, needs_reply, rule = self.mod.classify_message(
+        category, tags, needs_reply, rule, _meta = self.mod.classify_message(
             subject="FYI",
             sender="external@example.com",
             body="共有です",
@@ -53,7 +53,7 @@ class TestGmailTriageClassify(TestCase):
         self.assertTrue(any("internal_domain_review" in x for x in tags))
 
     def test_promo_sender_domain_is_archived(self):
-        category, _, _, _ = self.mod.classify_message(
+        category, _, _, _, _meta = self.mod.classify_message(
             subject="Not sure where to start with Mapbox?",
             sender="Team Mapbox <hello@mapbox.com>",
             body="イベントのご案内です",
@@ -62,7 +62,7 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(category, "archive")
 
     def test_actionable_notice_kept_for_review(self):
-        category, _, _, _ = self.mod.classify_message(
+        category, _, _, _, _meta = self.mod.classify_message(
             subject="【重要】Synergy!アカウント発行のお知らせ",
             sender="Synergy!カスタマーサポート <support@crmstyle.com>",
             body="アカウント発行のご連絡です",
@@ -71,7 +71,7 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(category, "needs_review")
 
     def test_promo_sender_with_invoice_signal_is_not_archived(self):
-        category, _, _, _ = self.mod.classify_message(
+        category, _, _, _, _meta = self.mod.classify_message(
             subject="【重要】請求書のご案内",
             sender="Mapbox Billing <hello@mapbox.com>",
             body="請求書をご確認ください",
@@ -80,7 +80,7 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(category, "needs_review")
 
     def test_marketing_like_subject_with_estimate_signal_stays_reviewable(self):
-        category, _, _, _ = self.mod.classify_message(
+        category, _, _, _, _meta = self.mod.classify_message(
             subject="【無料で試せる】見積書をご確認ください",
             sender="Sales Team <info@example.com>",
             body="見積書を送付します。内容をご確認ください。",
@@ -89,7 +89,7 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(category, "needs_review")
 
     def test_line_approval_noreply_is_archived(self):
-        category, _, _, _ = self.mod.classify_message(
+        category, _, _, _, _meta = self.mod.classify_message(
             subject="広告が承認されました",
             sender="no-reply@line.me",
             body="広告アカウントが承認されました",
@@ -103,7 +103,7 @@ class TestGmailTriageClassify(TestCase):
             "force_review": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
             "force_reply": {"sender_domains": ["example.com"], "sender_contains": [], "subject_contains": [], "subject_regex": []},
         }
-        category, _, needs_reply, rule = self.mod.classify_message(
+        category, _, needs_reply, rule, _meta = self.mod.classify_message(
             subject="確認お願いします",
             sender="foo@example.com",
             body="返信お願いします",
@@ -124,6 +124,47 @@ class TestGmailTriageClassify(TestCase):
         rows = [{"title": f"t{i}"} for i in range(3)]
         capped = self.mod.cap_extracted_actions(rows, 0)
         self.assertEqual(len(capped), 3)
+
+    def test_local_preclassify_can_promote_archive_to_review(self):
+        original = self.mod.local_preclassify_email
+        try:
+            self.mod.local_preclassify_email = lambda *args, **kwargs: (
+                "needs_review",
+                "billing notice",
+                {"enabled": True, "ok": True},
+            )
+            category, tags, _, _, meta = self.mod.classify_message(
+                subject="Mapbox webinar",
+                sender="hello@mapbox.com",
+                body="event notice",
+                rules={},
+                env={"GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1"},
+            )
+            self.assertEqual(category, "needs_review")
+            self.assertIn("local:override", tags)
+            self.assertEqual(meta.get("local_reason"), "billing notice")
+        finally:
+            self.mod.local_preclassify_email = original
+
+    def test_local_preclassify_cannot_archive_billing_notice(self):
+        original = self.mod.local_preclassify_email
+        try:
+            self.mod.local_preclassify_email = lambda *args, **kwargs: (
+                "archive",
+                "promo",
+                {"enabled": True, "ok": True},
+            )
+            category, tags, _, _, _meta = self.mod.classify_message(
+                subject="【重要】請求書のご案内",
+                sender="Mapbox Billing <hello@mapbox.com>",
+                body="請求書をご確認ください",
+                rules={},
+                env={"GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1"},
+            )
+            self.assertEqual(category, "needs_review")
+            self.assertNotIn("local:override", tags)
+        finally:
+            self.mod.local_preclassify_email = original
 
 
 if __name__ == "__main__":

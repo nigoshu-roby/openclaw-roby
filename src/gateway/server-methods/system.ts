@@ -65,6 +65,28 @@ function parseTimestampDate(value: unknown): Date | null {
   return null;
 }
 
+function resolveMinutesLocalPreprocessModel(): string {
+  const profile = (process.env.ROBY_ORCH_MINUTES_LLM_PROFILE ?? "hybrid").trim().toLowerCase();
+  const explicit = process.env.MINUTES_LOCAL_PREPROCESS_MODEL?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const fast = (process.env.ROBY_ORCH_MINUTES_LOCAL_FAST_MODEL ?? "ollama/llama3.2:3b").trim();
+  const quality = (process.env.ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL ?? "ollama/qwen2.5:7b").trim();
+  const cloud = (
+    process.env.ROBY_ORCH_MINUTES_CLOUD_MODEL ??
+    process.env.MINUTES_GEMINI_MODEL ??
+    "google/gemini-3-flash-preview"
+  ).trim();
+  if (profile === "local") {
+    return quality || fast || cloud;
+  }
+  if (profile === "cloud") {
+    return fast || quality || cloud;
+  }
+  return fast || quality || cloud;
+}
+
 async function readJsonLinesLastTimestamp(filePath: string): Promise<Date | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
@@ -440,6 +462,32 @@ async function buildRobyStatus() {
       modelAvailable: ollama.modelAvailable,
       baseUrl: ollama.baseUrl,
       availableModels: ollama.models,
+      minutesProfile: (process.env.ROBY_ORCH_MINUTES_LLM_PROFILE ?? "hybrid").trim(),
+      minutesLocalPreprocessEnabled:
+        String(
+          process.env.MINUTES_LOCAL_PREPROCESS_ENABLE ??
+            (process.env.ROBY_ORCH_MINUTES_LLM_PROFILE ?? "hybrid").trim().toLowerCase() !==
+              "cloud",
+        )
+          .trim()
+          .toLowerCase()
+          .match(/^(1|true|yes|on)$/) !== null,
+      minutesLocalPreprocessModel: resolveMinutesLocalPreprocessModel().trim(),
+      gmailProfile: (process.env.ROBY_ORCH_GMAIL_PROFILE ?? "hybrid").trim(),
+      gmailLocalPreclassifyEnabled:
+        String(
+          process.env.GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE ??
+            process.env.ROBY_ORCH_GMAIL_LOCAL_PRECLASSIFY_FAST ??
+            "1",
+        )
+          .trim()
+          .toLowerCase()
+          .match(/^(1|true|yes|on)$/) !== null,
+      gmailLocalPreclassifyModel: (
+        process.env.GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL ??
+        process.env.ROBY_ORCH_GMAIL_LLM_FAST_MODEL ??
+        "ollama/llama3.2:3b"
+      ).trim(),
       error: ollama.error,
     },
   };

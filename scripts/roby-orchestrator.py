@@ -200,6 +200,12 @@ def apply_minutes_llm_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]
     overrides: Dict[str, str] = {}
     if profile == "local":
         overrides = {
+            "MINUTES_LOCAL_PREPROCESS_ENABLE": "1",
+            "MINUTES_LOCAL_PREPROCESS_MODEL": local_quality or local_fast or cloud,
+            "MINUTES_LOCAL_PREPROCESS_MIN_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MIN_CHARS", "1800"),
+            "MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS", "12000"),
+            "MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC": env.get("MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC", "45"),
+            "MINUTES_LOCAL_PREPROCESS_NUM_PREDICT": env.get("MINUTES_LOCAL_PREPROCESS_NUM_PREDICT", "1400"),
             "MINUTES_REVIEW_MODELS": _csv(local_quality, local_fast, cloud),
             "MINUTES_TASKS_MODELS": _csv(local_quality, local_fast, cloud),
             "MINUTES_SUMMARY_MODELS": _csv(local_quality, local_fast, cloud),
@@ -209,6 +215,12 @@ def apply_minutes_llm_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]
         }
     elif profile == "cloud":
         overrides = {
+            "MINUTES_LOCAL_PREPROCESS_ENABLE": env.get("ROBY_ORCH_MINUTES_LOCAL_PREPROCESS_IN_CLOUD", "0"),
+            "MINUTES_LOCAL_PREPROCESS_MODEL": local_fast or local_quality or cloud,
+            "MINUTES_LOCAL_PREPROCESS_MIN_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MIN_CHARS", "1800"),
+            "MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS", "12000"),
+            "MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC": env.get("MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC", "30"),
+            "MINUTES_LOCAL_PREPROCESS_NUM_PREDICT": env.get("MINUTES_LOCAL_PREPROCESS_NUM_PREDICT", "900"),
             "MINUTES_REVIEW_MODELS": _csv(cloud, local_quality),
             "MINUTES_TASKS_MODELS": _csv(cloud, local_quality),
             "MINUTES_SUMMARY_MODELS": _csv(cloud, local_quality),
@@ -219,29 +231,39 @@ def apply_minutes_llm_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]
     else:  # hybrid
         profile = "hybrid"
         overrides = {
-            "MINUTES_REVIEW_MODELS": _csv(local_quality, cloud),
-            "MINUTES_TASKS_MODELS": _csv(cloud, local_quality),
-            "MINUTES_SUMMARY_MODELS": _csv(cloud, local_quality),
+            "MINUTES_LOCAL_PREPROCESS_ENABLE": "1",
+            "MINUTES_LOCAL_PREPROCESS_MODEL": local_fast or local_quality or cloud,
+            "MINUTES_LOCAL_PREPROCESS_MIN_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MIN_CHARS", "1800"),
+            "MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS", "12000"),
+            "MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC": env.get("MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC", "30"),
+            "MINUTES_LOCAL_PREPROCESS_NUM_PREDICT": env.get("MINUTES_LOCAL_PREPROCESS_NUM_PREDICT", "900"),
+            "MINUTES_REVIEW_MODELS": _csv(cloud, local_quality, local_fast),
+            "MINUTES_TASKS_MODELS": _csv(cloud, local_quality, local_fast),
+            "MINUTES_SUMMARY_MODELS": _csv(cloud, local_quality, local_fast),
             "MINUTES_COMPACT_MODELS": _csv(local_fast, cloud),
-            "MINUTES_REPAIR_MODELS": _csv(cloud, local_quality),
+            "MINUTES_REPAIR_MODELS": _csv(cloud, local_quality, local_fast),
             "MINUTES_ENRICH_MODELS": _csv(local_fast, cloud),
         }
     return profile, overrides
 
 
 def apply_gmail_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
-    profile = (env.get("ROBY_ORCH_GMAIL_PROFILE", "fast") or "fast").strip().lower()
+    profile = (env.get("ROBY_ORCH_GMAIL_PROFILE", "hybrid") or "hybrid").strip().lower()
     fast_model = (env.get("ROBY_ORCH_GMAIL_LLM_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
     quality_model = (env.get("ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
     overrides: Dict[str, str] = {}
     if profile == "quality":
         overrides = {
+            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
+            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": quality_model or fast_model,
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
             "GMAIL_TRIAGE_LLM_MODEL": quality_model or fast_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_QUALITY", "30"),
         }
     elif profile == "hybrid":
         overrides = {
+            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
+            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
             "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_HYBRID", "10"),
@@ -249,6 +271,8 @@ def apply_gmail_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
     else:  # fast
         profile = "fast"
         overrides = {
+            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": env.get("ROBY_ORCH_GMAIL_LOCAL_PRECLASSIFY_FAST", "1"),
+            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_ENABLE": "0",
             "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_FAST", "0"),
@@ -999,6 +1023,14 @@ def build_runtime_status_summary(env: Dict[str, str]) -> str:
     lines.append(f"- Ollama API: {'接続OK' if ollama_api_ok else '未接続'} ({base_url})")
     if ollama_models:
         lines.append(f"- Ollama models: {', '.join(ollama_models)}")
+    minutes_profile, minutes_overrides = apply_minutes_llm_profile(env)
+    gmail_profile, gmail_overrides = apply_gmail_profile(env)
+    lines.append(
+        f"- Local First (minutes): profile={minutes_profile}, preprocess={'ON' if (minutes_overrides.get('MINUTES_LOCAL_PREPROCESS_ENABLE', '0').lower() in {'1','true','yes','on'}) else 'OFF'}, model={minutes_overrides.get('MINUTES_LOCAL_PREPROCESS_MODEL', '-')}"
+    )
+    lines.append(
+        f"- Local First (gmail): profile={gmail_profile}, preclassify={'ON' if (gmail_overrides.get('GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE', '0').lower() in {'1','true','yes','on'}) else 'OFF'}, model={gmail_overrides.get('GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL', '-')}"
+    )
 
     # Neuronic status (from env + latest run logs)
     neuronic_url = (
@@ -1966,7 +1998,10 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
     if select_val:
         cmd.extend(["--select", select_val])
     elif run_mode == "run":
+        cron_context = env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1"
         policy = env.get("ROBY_ORCH_MINUTES_POLICY", "").strip()
+        if not policy and cron_context:
+            policy = "ops_default"
         if policy:
             cmd.extend(["--policy", policy])
         if env.get("ROBY_ORCH_MINUTES_FORCE", "0") == "1":
@@ -1979,14 +2014,22 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
             cmd.append("--skip-gdocs")
         if env.get("ROBY_ORCH_MINUTES_DAYS", "").strip():
             cmd.extend(["--days", env["ROBY_ORCH_MINUTES_DAYS"].strip()])
-        if env.get("ROBY_ORCH_MINUTES_MAX", "").strip():
-            cmd.extend(["--max", env["ROBY_ORCH_MINUTES_MAX"].strip()])
+        max_items = env.get("ROBY_ORCH_MINUTES_MAX", "").strip()
+        if not max_items and cron_context:
+            max_items = env.get("ROBY_ORCH_MINUTES_CRON_MAX", "4").strip()
+        if max_items:
+            cmd.extend(["--max", max_items])
     if verbose:
         cmd.append("--debug")
 
     profile, profile_env = apply_minutes_llm_profile(env)
     child_env = dict(env)
     child_env.update(profile_env)
+    if child_env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1" and "MINUTES_LOCAL_PREPROCESS_ENABLE" not in env:
+        # Cron prioritizes freshness. Manual runs can still opt into local preprocessing.
+        child_env["MINUTES_LOCAL_PREPROCESS_ENABLE"] = child_env.get("ROBY_ORCH_MINUTES_CRON_LOCAL_PREPROCESS", "0") or "0"
+    if child_env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1" and "MINUTES_DOC_TIMEOUT_SEC" not in env:
+        child_env["MINUTES_DOC_TIMEOUT_SEC"] = child_env.get("ROBY_ORCH_MINUTES_CRON_DOC_TIMEOUT_SEC", "45") or "45"
 
     result = {
         "route": ROUTE_MINUTES,
@@ -2484,6 +2527,7 @@ def main() -> int:
             classify_meta = {"method": "cron_task", "cron_task": "self_growth"}
         elif args.cron_task == "minutes_sync":
             route = ROUTE_MINUTES
+            env["ROBY_ORCH_CRON_CONTEXT"] = "1"
             if not args.message:
                 args.message = env.get(
                     "ROBY_ORCH_MINUTES_CRON_MESSAGE",

@@ -138,6 +138,22 @@ class TestRobyOrchestratorRouting(TestCase):
             )
         self.assertIn("feedback_loop: reviewed=6, actionable=2, good=3, bad=1, missed=1", text)
 
+    def test_apply_minutes_llm_profile_hybrid_prefers_fast_local_preprocess(self):
+        profile, overrides = self.mod.apply_minutes_llm_profile(
+            {
+                "ROBY_ORCH_MINUTES_LLM_PROFILE": "hybrid",
+                "ROBY_ORCH_MINUTES_LOCAL_FAST_MODEL": "ollama/llama3.2:3b",
+                "ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL": "ollama/qwen2.5:7b",
+                "ROBY_ORCH_MINUTES_CLOUD_MODEL": "google/gemini-3-flash-preview",
+            }
+        )
+        self.assertEqual(profile, "hybrid")
+        self.assertEqual(overrides["MINUTES_LOCAL_PREPROCESS_MODEL"], "ollama/llama3.2:3b")
+        self.assertEqual(
+            overrides["MINUTES_REVIEW_MODELS"],
+            "google/gemini-3-flash-preview,ollama/qwen2.5:7b,ollama/llama3.2:3b",
+        )
+
     def test_build_local_capability_summary_includes_health_section(self):
         with (
             patch.object(self.mod, "shutil"),
@@ -157,6 +173,37 @@ class TestRobyOrchestratorRouting(TestCase):
         self.assertIn("## 運用品質の最新状態", text)
         self.assertIn("evaluation_harness: gate=PASS failed=0/7 p95=900ms", text)
         self.assertIn("runbook_drill: all_ok=NO failed=2/8 skipped=0", text)
+
+    def test_handle_minutes_pipeline_cron_defaults_disable_local_preprocess_and_cap_max(self):
+        captured = {}
+
+        def fake_run(cmd, cwd=None, env=None, capture_output=None, text=None):
+            captured["cmd"] = cmd
+            captured["env"] = dict(env or {})
+
+            class Proc:
+                returncode = 0
+                stdout = "{}"
+                stderr = ""
+
+            return Proc()
+
+        env = {"ROBY_ORCH_CRON_CONTEXT": "1"}
+        with patch.object(self.mod.subprocess, "run", side_effect=fake_run):
+            result = self.mod.handle_minutes_pipeline(
+                "TOKIWAGIの議事録からタスク抽出して実行して",
+                env=env,
+                execute=True,
+                verbose=False,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertIn("--policy", captured["cmd"])
+        self.assertIn("ops_default", captured["cmd"])
+        self.assertIn("--max", captured["cmd"])
+        self.assertIn("4", captured["cmd"])
+        self.assertEqual(captured["env"].get("MINUTES_LOCAL_PREPROCESS_ENABLE"), "0")
+        self.assertEqual(captured["env"].get("MINUTES_DOC_TIMEOUT_SEC"), "45")
 
 
 if __name__ == "__main__":

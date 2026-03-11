@@ -698,6 +698,12 @@ export type RobyLocalFirstStatus = {
   modelAvailable: boolean;
   baseUrl: string;
   availableModels: string[];
+  minutesProfile?: string;
+  minutesLocalPreprocessEnabled?: boolean;
+  minutesLocalPreprocessModel?: string;
+  gmailProfile?: string;
+  gmailLocalPreclassifyEnabled?: boolean;
+  gmailLocalPreclassifyModel?: string;
   error?: string | null;
 };
 

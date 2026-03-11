@@ -485,7 +485,7 @@ export function renderRoby(props: RobyProps) {
         status: localFirst?.ollamaApiOk ? "準備完了" : localFirst?.ollamaCli ? "API待ち" : "未導入",
         tone: localFirst?.ollamaApiOk ? "ok" : localFirst?.ollamaCli ? "warn" : "muted",
         subtitle: localFirst
-          ? `${localFirst.configuredModel} · ${localFirst.modelAvailable ? "利用可" : "未pull"}`
+          ? `minutes:${localFirst.minutesProfile ?? "hybrid"} / gmail:${localFirst.gmailProfile ?? "hybrid"}`
           : "状態未取得",
         meta: localFirst ? (localFirst.error ? localFirst.error : localFirst.baseUrl) : "—",
         details: localFirst
@@ -493,6 +493,10 @@ export function renderRoby(props: RobyProps) {
               <div class="muted">base URL: ${localFirst.baseUrl}</div>
               <div class="muted">configured model: ${localFirst.configuredModel}</div>
               <div class="muted">available: ${joinList(localFirst.availableModels, "なし")}</div>
+              <div class="muted" style="margin-top: 8px;">minutes: ${localFirst.minutesProfile ?? "hybrid"} / ${localFirst.minutesLocalPreprocessEnabled ? "前処理ON" : "前処理OFF"}</div>
+              <div class="muted">minutes model: ${localFirst.minutesLocalPreprocessModel ?? "—"}</div>
+              <div class="muted" style="margin-top: 8px;">gmail: ${localFirst.gmailProfile ?? "hybrid"} / ${localFirst.gmailLocalPreclassifyEnabled ? "一次判定ON" : "一次判定OFF"}</div>
+              <div class="muted">gmail model: ${localFirst.gmailLocalPreclassifyModel ?? "—"}</div>
             `
           : nothing,
       })}
