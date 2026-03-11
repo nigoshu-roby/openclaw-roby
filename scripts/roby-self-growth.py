@@ -6,7 +6,7 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, List
 from roby_audit import append_audit_event
 
 REPO_DIR = Path(__file__).resolve().parent.parent
@@ -26,6 +26,110 @@ KEYCHAIN_SECRET_KEYS = {
 }
 FAILURE_STATES = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response"}
 RUN_ENTRY_SCHEMA_VERSION = 2
+
+
+def read_json(path: Path) -> Dict[str, Any]:
+    try:
+        if not path.exists():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _format_growth_target(target: Dict[str, Any]) -> str:
+    label = str(target.get("label") or target.get("target") or "不明").strip()
+    recommendation = str(target.get("recommendation") or "").strip()
+    count = target.get("count")
+    line = f"- {label}"
+    if count is not None:
+        line += f" ({count})"
+    if recommendation:
+        line += f": {recommendation}"
+    return line
+
+
+def summarize_growth_focus(
+    memory_latest: Dict[str, Any],
+    feedback_latest: Dict[str, Any],
+    eval_latest: Dict[str, Any],
+    drill_latest: Dict[str, Any],
+) -> str:
+    lines: List[str] = ["GROWTH FOCUS"]
+
+    feedback_summary = feedback_latest.get("summary") if isinstance(feedback_latest.get("summary"), dict) else {}
+    improvement_targets = (
+        feedback_summary.get("improvement_targets")
+        if isinstance(feedback_summary.get("improvement_targets"), list)
+        else []
+    )
+    actionable_reason_counts = (
+        feedback_summary.get("actionable_reason_counts")
+        if isinstance(feedback_summary.get("actionable_reason_counts"), dict)
+        else {}
+    )
+    recent_reviewed = (
+        feedback_summary.get("recent_reviewed")
+        if isinstance(feedback_summary.get("recent_reviewed"), list)
+        else []
+    )
+
+    if improvement_targets:
+        lines.append("Priority targets:")
+        for target in improvement_targets[:3]:
+            if isinstance(target, dict):
+                lines.append(_format_growth_target(target))
+
+    unresolved = memory_latest.get("unresolved") if isinstance(memory_latest.get("unresolved"), list) else []
+    if unresolved:
+        lines.append("Unresolved heartbeat:")
+        for item in unresolved[:3]:
+            lines.append(f"- {str(item).strip()}")
+
+    eval_failed = int(eval_latest.get("failed") or 0)
+    eval_total = int(eval_latest.get("total") or 0)
+    eval_routes = eval_latest.get("routes") if isinstance(eval_latest.get("routes"), dict) else {}
+    if eval_total:
+        route_failures = []
+        for route, stats in eval_routes.items():
+            if isinstance(stats, dict) and int(stats.get("failed") or 0) > 0:
+                route_failures.append(f"{route}:{int(stats.get('failed') or 0)}")
+        line = f"Evaluation: {eval_failed}/{eval_total} failed"
+        if route_failures:
+            line += f" | routes={', '.join(route_failures[:4])}"
+        lines.append(line)
+
+    drill_failed = int(drill_latest.get("failed") or 0)
+    drill_total = int(drill_latest.get("total") or 0)
+    if drill_total:
+        lines.append(f"Runbook drill: {drill_failed}/{drill_total} failed")
+
+    if actionable_reason_counts:
+        ordered_reasons = sorted(
+            actionable_reason_counts.items(),
+            key=lambda item: (-int(item[1]), item[0]),
+        )
+        lines.append("Top feedback reasons:")
+        for reason, count in ordered_reasons[:5]:
+            lines.append(f"- {reason}: {count}")
+
+    if recent_reviewed:
+        lines.append("Recent reviewed tasks:")
+        for item in recent_reviewed[:3]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "(no title)").strip()
+            state = str(item.get("feedback_state") or "pending").strip()
+            reason = str(item.get("feedback_reason_code") or "").strip()
+            suffix = f" [{state}]"
+            if reason:
+                suffix += f" ({reason})"
+            lines.append(f"- {title}{suffix}")
+
+    if len(lines) == 1:
+        lines.append("- no current focus")
+    return "\n".join(lines)
 
 
 def load_env() -> Dict[str, str]:
@@ -210,11 +314,17 @@ def main() -> int:
     git_log = run_cmd(["git", "-C", str(REPO_DIR), "log", "-5", "--oneline"], env, timeout=30)
     gateway_log = tail_file(REPO_DIR / ".openclaw-gateway.log", 80)
     triage_runs = tail_file(Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl", 10)
+    feedback_latest = read_json(STATE_DIR / "feedback_sync_state.json")
+    memory_latest = read_json(STATE_DIR / "memory_sync_state.json")
+    eval_latest = read_json(STATE_DIR / "evals" / "latest.json")
+    drill_latest = read_json(STATE_DIR / "drills" / "latest.json")
+    growth_focus = summarize_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)
 
     context_parts = [
         f"REPO: {REPO_DIR}",
         f"GIT STATUS:\n{git_status or 'N/A'}",
         f"RECENT COMMITS:\n{git_log or 'N/A'}",
+        growth_focus,
     ]
     if gateway_log:
         context_parts.append(f"GATEWAY LOG TAIL:\n{gateway_log}")

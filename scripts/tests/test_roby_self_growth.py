@@ -123,6 +123,43 @@ class TestRobySelfGrowth(TestCase):
         self.assertEqual(entry["slack_status"], "ok")
         self.assertIn("ts", entry)
 
+    def test_summarize_growth_focus_prefers_targets_and_quality_signals(self):
+        text = self.mod.summarize_growth_focus(
+            memory_latest={"unresolved": ["stale component: gmail_triage"]},
+            feedback_latest={
+                "summary": {
+                    "improvement_targets": [
+                        {
+                            "label": "タスク抽出閾値",
+                            "count": 2,
+                            "recommendation": "依頼・期限・担当の弱い文を除外する。",
+                        }
+                    ],
+                    "actionable_reason_counts": {"not_actionable": 2},
+                    "recent_reviewed": [
+                        {
+                            "title": "メール確認: 自動支払いが完了しました",
+                            "feedback_state": "bad",
+                            "feedback_reason_code": "not_actionable",
+                        }
+                    ],
+                }
+            },
+            eval_latest={"failed": 1, "total": 7, "routes": {"qa_gemini": {"failed": 1}}},
+            drill_latest={"failed": 0, "total": 13},
+        )
+        self.assertIn("GROWTH FOCUS", text)
+        self.assertIn("Priority targets:", text)
+        self.assertIn("タスク抽出閾値", text)
+        self.assertIn("Unresolved heartbeat:", text)
+        self.assertIn("Evaluation: 1/7 failed", text)
+        self.assertIn("Runbook drill: 0/13 failed", text)
+        self.assertIn("Top feedback reasons:", text)
+
+    def test_summarize_growth_focus_handles_missing_state(self):
+        text = self.mod.summarize_growth_focus({}, {}, {}, {})
+        self.assertEqual(text, "GROWTH FOCUS\n- no current focus")
+
     def test_main_skips_when_git_tree_dirty(self):
         def fake_run_cmd(cmd, env, timeout=60):
             if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
@@ -156,6 +193,67 @@ class TestRobySelfGrowth(TestCase):
         self.assertIn("PATCH: no_change", result["stdout"])
         self.assertEqual(result["entry"]["patch_status"], "no_change")
         self.assertEqual(result["entry"]["test_status"], "skipped")
+
+    def test_main_includes_growth_focus_in_agent_prompt(self):
+        captured = {"prompt": ""}
+
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                captured["prompt"] = cmd[cmd.index("--message") + 1]
+                return "NO_CHANGE"
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            (state_dir / "evals").mkdir(parents=True)
+            (state_dir / "drills").mkdir(parents=True)
+            (state_dir / "feedback_sync_state.json").write_text(
+                json.dumps(
+                    {
+                        "summary": {
+                            "improvement_targets": [
+                                {"label": "案件判定", "count": 3, "recommendation": "案件名推定を見直す。"}
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (state_dir / "memory_sync_state.json").write_text(
+                json.dumps({"unresolved": ["stale component: gmail_triage"]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (state_dir / "evals" / "latest.json").write_text(
+                json.dumps({"failed": 1, "total": 7, "routes": {"auto": {"failed": 1}}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (state_dir / "drills" / "latest.json").write_text(
+                json.dumps({"failed": 0, "total": 13}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            runs_log = state_dir / "self_growth_runs.jsonl"
+            with (
+                patch.object(self.mod, "STATE_DIR", state_dir),
+                patch.object(self.mod, "RUNS_LOG", runs_log),
+                patch.object(self.mod, "load_env", return_value={"ROBY_IMMUTABLE_AUDIT": "0"}),
+                patch.object(self.mod, "run_cmd", side_effect=fake_run_cmd),
+                patch.object(self.mod, "append_audit_event"),
+                patch.object(self.mod, "send_slack"),
+                redirect_stdout(io.StringIO()),
+            ):
+                rc = self.mod.main()
+
+        self.assertEqual(rc, 0)
+        self.assertIn("GROWTH FOCUS", captured["prompt"])
+        self.assertIn("案件判定", captured["prompt"])
+        self.assertIn("stale component: gmail_triage", captured["prompt"])
 
     def test_main_records_invalid_patch_and_audits_error(self):
         patch_text = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
