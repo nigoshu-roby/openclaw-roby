@@ -468,10 +468,67 @@ def _looks_noise_task_title(title: str) -> bool:
 def _infer_project_from_text(text: str, known_projects: List[str]) -> Optional[str]:
     if not text:
         return None
-    for p in sorted(set([x for x in known_projects if x and x not in GENERIC_PROJECT_NAMES]), key=len, reverse=True):
-        if p in text:
-            return p
+    blob = text or ""
+    best_project = None
+    best_score = 0
+    for project in sorted(set([x for x in known_projects if x and x not in GENERIC_PROJECT_NAMES]), key=len, reverse=True):
+        score = 0
+        for alias in _project_aliases(project):
+            if not alias:
+                continue
+            count = blob.count(alias)
+            if count <= 0:
+                continue
+            score += min(count, 8) * max(2, min(len(alias), 12))
+        if score > best_score:
+            best_score = score
+            best_project = project
+    return best_project
+
+
+def _normalize_project_token(text: str) -> str:
+    s = (text or "").strip().lower()
+    if not s:
+        return ""
+    s = s.replace("　", " ")
+    s = s.replace("様", "")
+    s = re.sub(r"[\s・/:：()（）\-\u2010-\u2015]+", "", s)
+    return s
+
+
+def _match_known_project_name(label: str, known_projects: List[str]) -> Optional[str]:
+    raw = (label or "").strip()
+    if not raw:
+        return None
+    norm = _normalize_project_token(raw)
+    if not norm:
+        return None
+    for project in sorted(set([x for x in known_projects if x and x not in GENERIC_PROJECT_NAMES]), key=len, reverse=True):
+        project_norm = _normalize_project_token(project)
+        if not project_norm:
+            continue
+        if norm == project_norm or norm in project_norm or project_norm in norm:
+            return project
+        for alias in _project_aliases(project):
+            alias_norm = _normalize_project_token(alias)
+            if not alias_norm:
+                continue
+            if norm == alias_norm or norm in alias_norm or alias_norm in norm:
+                return project
     return None
+
+
+def _looks_plausible_project_label(label: str) -> bool:
+    s = _clean_line(label)
+    if not s or s in GENERIC_PROJECT_NAMES:
+        return False
+    if len(s) > 60 and _has_action_signal(s):
+        return False
+    if re.search(r"(対応タスク|タスク一覧|アクション候補|アクション)", s):
+        return False
+    if re.search(r"(する|した|して|すべき|必要|予定|依頼|共有|確認|対応|実施|作成|調整|検討|準備|修正|実装)$", s):
+        return False
+    return True
 
 
 def _resolve_project_name(
@@ -483,13 +540,16 @@ def _resolve_project_name(
     known_projects: List[str],
 ) -> str:
     p = (project or "").strip()
-    if p and p not in GENERIC_PROJECT_NAMES:
-        return p
-    inferred = _infer_project_from_text(" ".join([title or "", note or "", source_title or ""]), known_projects)
+    matched = _match_known_project_name(p, known_projects)
+    if matched:
+        return matched
+    inferred = _infer_project_from_text(" ".join([p or "", title or "", note or "", source_title or ""]), known_projects)
     if inferred:
         return inferred
+    if p and _looks_plausible_project_label(p):
+        return p
     if default_project and default_project not in GENERIC_PROJECT_NAMES:
-        return default_project
+        return _match_known_project_name(default_project, known_projects) or default_project
     return p or default_project or "TOKIWAGI"
 
 
@@ -497,6 +557,10 @@ def _project_aliases(name: str) -> List[str]:
     base = (name or "").strip()
     if not base:
         return []
+    head_hyphen = re.split(r"[-ー／/]", base, maxsplit=1)[0].strip()
+    head_space = base.split(" ", 1)[0].strip()
+    latin_head_match = re.match(r"^([A-Za-z0-9]{2,})", base)
+    latin_head = latin_head_match.group(1).strip() if latin_head_match else ""
     aliases = {
         base,
         base.replace("　", " "),
@@ -505,6 +569,9 @@ def _project_aliases(name: str) -> List[str]:
         base.replace("・", ""),
         base.replace("様", ""),
         base.split(":", 1)[0].strip(),
+        head_hyphen,
+        head_space,
+        latin_head,
     }
     return [a for a in aliases if a and len(a) >= 2]
 
@@ -566,8 +633,9 @@ def sanitize_extracted_tasks(
         note = (item.get("note") or "").strip()
         due_date = (item.get("due_date") or "").strip()
         assignee = (item.get("assignee") or "").strip() or "私"
+        raw_item_project = str(item.get("project") or "")
         project = _resolve_project_name(
-            str(item.get("project") or ""),
+            raw_item_project,
             title,
             note,
             source_title,
@@ -623,16 +691,52 @@ def sanitize_extracted_tasks(
             continue
 
         if subtasks:
-            parent_title = title
-            if (not parent_title) or (_looks_noise_task_title(parent_title) and not _has_action_signal(parent_title)):
-                parent_title = f"{project} 対応タスク"
+            subtask_blob = "\n".join(
+                [f"{sub.get('title', '')}\n{sub.get('note', '')}" for sub in subtasks[:8]]
+            )
+            contextual_project = _infer_project_from_text(
+                "\n".join([note, subtask_blob, source_title]),
+                known_projects,
+            )
+            project = (
+                contextual_project
+                or _resolve_project_name(
+                    raw_item_project,
+                    title,
+                    "\n".join([note, subtask_blob]),
+                    source_title,
+                    project,
+                    known_projects,
+                )
+            )
+            normalized_subtasks: List[Dict[str, Any]] = []
+            for sub in subtasks:
+                sub_project = str(sub.get("project") or "")
+                if raw_item_project.strip() and sub_project.strip() == raw_item_project.strip() and project != raw_item_project.strip():
+                    sub_project = ""
+                normalized_subtasks.append({
+                    **sub,
+                    "project": _resolve_project_name(
+                        sub_project,
+                        str(sub.get("title") or ""),
+                        str(sub.get("note") or ""),
+                        source_title,
+                        project,
+                        known_projects,
+                    ),
+                })
+            parent_title = _normalize_minutes_parent_title(title, project, source_title)
             cleaned.append({
                 "title": parent_title[:120],
                 "project": project,
                 "due_date": due_date,
                 "assignee": assignee,
                 "note": note,
-                "subtasks": subtasks[:max_subtasks_per_parent] if max_subtasks_per_parent > 0 else subtasks,
+                "subtasks": (
+                    normalized_subtasks[:max_subtasks_per_parent]
+                    if max_subtasks_per_parent > 0
+                    else normalized_subtasks
+                ),
             })
             continue
 
@@ -1668,6 +1772,21 @@ def _build_minutes_group_parent_title(project: str, source_title: str) -> str:
     if cleaned_source:
         return f"{project} / {cleaned_source}"[:120]
     return f"{project} 対応タスク"[:120]
+
+
+def _normalize_minutes_parent_title(parent_title: str, project: str, source_title: str) -> str:
+    project = (project or "").strip() or "TOKIWAGI"
+    raw = _clean_line(parent_title or "")
+    source = _clean_line(source_title or "")
+    if raw and re.search(r"対応タスク$", raw):
+        return _build_minutes_group_parent_title(project, source)
+    if raw and not (_looks_noise_task_title(raw) and not _has_action_signal(raw)):
+        if project and project not in raw:
+            if source and (raw == source or raw in source):
+                return _build_minutes_group_parent_title(project, source)
+            return f"{project} / {raw}"[:120]
+        return raw[:120]
+    return _build_minutes_group_parent_title(project, source)
 
 
 def _group_leaf_minutes_tasks_by_project(

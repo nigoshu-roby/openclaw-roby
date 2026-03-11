@@ -138,6 +138,39 @@ class TestRobyMinutesQuality(TestCase):
         self.assertEqual(child_projects.count("BT振興会-Mooovi"), 2)
         self.assertEqual(child_projects.count("ボーネルンド"), 1)
 
+    def test_sanitize_reinfers_parent_project_from_subtasks(self):
+        extracted = [
+            {
+                "title": "BRODO 対応タスク",
+                "project": "BRODO",
+                "assignee": "私",
+                "subtasks": [
+                    {"title": "MIDの提案において差分資料を作成する", "assignee": "私"},
+                    {"title": "堀之内店へのヒアリング結果を整理する", "assignee": "私"},
+                ],
+            }
+        ]
+        cleaned = self.mod.sanitize_extracted_tasks(
+            extracted=extracted,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "BRODO", "MIDジャパン-パチンコレポート"],
+            source_title="2026/03/10 社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        self.assertEqual(len(cleaned), 1)
+        self.assertEqual(cleaned[0]["project"], "MIDジャパン-パチンコレポート")
+        self.assertTrue(cleaned[0]["title"].startswith("MIDジャパン-パチンコレポート / "))
+        self.assertTrue(all(x["project"] == "MIDジャパン-パチンコレポート" for x in cleaned[0]["subtasks"]))
+
+    def test_normalize_minutes_parent_title_prefixes_specific_title_with_project(self):
+        title = self.mod._normalize_minutes_parent_title(
+            "渋谷Billage事務所情報",
+            "TOKIWAGI_MASTER",
+            "渋谷Billage事務所情報",
+        )
+        self.assertEqual(title, "TOKIWAGI_MASTER / 渋谷Billage事務所情報")
+
     def test_run_with_doc_timeout_returns_function_result_when_alarm_is_stubbed(self):
         with patch.object(self.mod.signal, "signal"), patch.object(self.mod.signal, "setitimer"):
             result = self.mod.run_with_doc_timeout(1, lambda x: x + 1, 2)
