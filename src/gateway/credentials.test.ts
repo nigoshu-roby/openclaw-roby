@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  GatewaySecretRefUnavailableError,
   resolveGatewayCredentialsFromConfig,
   resolveGatewayCredentialsFromValues,
 } from "./credentials.js";
@@ -102,6 +103,42 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       token: "remote-token",
       password: "remote-password",
     });
+  });
+
+  it("fails closed when local token is configured as an unresolved secret ref", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: cfg({
+          gateway: {
+            mode: "local",
+            auth: {
+              token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+            },
+            remote: { token: "remote-token" },
+          },
+        }),
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrowError(GatewaySecretRefUnavailableError);
+  });
+
+  it("fails closed when local password is configured as an unresolved secret ref", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: cfg({
+          gateway: {
+            mode: "local",
+            auth: {
+              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+            },
+            remote: { password: "remote-password" },
+          },
+        }),
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrowError(GatewaySecretRefUnavailableError);
   });
 
   it("keeps local credentials ahead of remote fallback in local mode", () => {

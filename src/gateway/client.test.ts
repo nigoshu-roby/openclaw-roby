@@ -6,7 +6,8 @@ const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
-const clearDevicePairingMock = vi.hoisted(() => vi.fn());
+const signDevicePayloadMock = vi.hoisted(() => vi.fn(() => "signed-payload"));
+const publicKeyRawBase64UrlFromPemMock = vi.hoisted(() => vi.fn(() => "public-key-raw"));
 const logDebugMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
@@ -18,6 +19,12 @@ type WsEventHandlers = {
 };
 
 class MockWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+
+  readyState = MockWebSocket.CONNECTING;
   private openHandlers: WsEventHandlers["open"][] = [];
   private messageHandlers: WsEventHandlers["message"][] = [];
   private closeHandlers: WsEventHandlers["close"][] = [];
@@ -51,13 +58,20 @@ class MockWebSocket {
     }
   }
 
-  close(_code?: number, _reason?: string): void {}
+  close(code?: number, reason?: string): void {
+    if (this.readyState === MockWebSocket.CLOSED) {
+      return;
+    }
+    this.readyState = MockWebSocket.CLOSING;
+    this.emitClose(code ?? 1000, reason ?? "");
+  }
 
   send(data: string): void {
     this.sent.push(data);
   }
 
   emitOpen(): void {
+    this.readyState = MockWebSocket.OPEN;
     for (const handler of this.openHandlers) {
       handler();
     }
@@ -70,6 +84,7 @@ class MockWebSocket {
   }
 
   emitClose(code: number, reason: string): void {
+    this.readyState = MockWebSocket.CLOSED;
     for (const handler of this.closeHandlers) {
       handler(code, Buffer.from(reason));
     }
@@ -90,11 +105,12 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/device-pairing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-pairing.js")>();
+vi.mock("../infra/device-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
   return {
     ...actual,
-    clearDevicePairing: (...args: unknown[]) => clearDevicePairingMock(...args),
+    signDevicePayload: (...args: unknown[]) => signDevicePayloadMock(...args),
+    publicKeyRawBase64UrlFromPem: (...args: unknown[]) => publicKeyRawBase64UrlFromPemMock(...args),
   };
 });
 
@@ -216,8 +232,9 @@ describe("GatewayClient close handling", () => {
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockClear();
     clearDeviceAuthTokenMock.mockImplementation(() => undefined);
-    clearDevicePairingMock.mockClear();
-    clearDevicePairingMock.mockResolvedValue(true);
+    loadDeviceAuthTokenMock.mockReset();
+    loadDeviceAuthTokenMock.mockReturnValue(undefined);
+    storeDeviceAuthTokenMock.mockReset();
     logDebugMock.mockClear();
   });
 
@@ -232,7 +249,6 @@ describe("GatewayClient close handling", () => {
     );
 
     expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({ deviceId: "dev-1", role: "operator" });
-    expect(clearDevicePairingMock).toHaveBeenCalledWith("dev-1");
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
@@ -255,25 +271,6 @@ describe("GatewayClient close handling", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),
     );
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
-    client.stop();
-  });
-
-  it("does not break close flow when pairing clear rejects", async () => {
-    clearDevicePairingMock.mockRejectedValue(new Error("pairing store unavailable"));
-    const onClose = vi.fn();
-    const client = createClientWithIdentity("dev-3", onClose);
-
-    client.start();
-    expect(() => {
-      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
-    }).not.toThrow();
-
-    await Promise.resolve();
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("failed clearing stale device pairing"),
-    );
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
   });
@@ -286,7 +283,6 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: signature invalid");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
     client.stop();
   });
@@ -309,9 +305,80 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
+  });
+});
+
+describe("GatewayClient auth retry behavior", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+    clearDeviceAuthTokenMock.mockClear();
+    clearDeviceAuthTokenMock.mockImplementation(() => undefined);
+    loadDeviceAuthTokenMock.mockReset();
+    logDebugMock.mockClear();
+  });
+
+  it("retries once with stored device token after shared token mismatch", async () => {
+    vi.useFakeTimers();
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const onConnectError = vi.fn();
+    const identity: DeviceIdentity = {
+      deviceId: "dev-retry",
+      privateKeyPem: "private-key",
+      publicKeyPem: "public-key",
+    };
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: identity,
+      token: "shared-token",
+      onConnectError,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    ws.emitMessage(
+      JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "nonce-1" } }),
+    );
+    const firstConnect = ws.sent
+      .map((item) => JSON.parse(item))
+      .find((item) => item.method === "connect");
+    expect(firstConnect).toBeDefined();
+
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: firstConnect.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "token mismatch",
+          details: {
+            code: "AUTH_TOKEN_MISMATCH",
+            canRetryWithDeviceToken: true,
+            recommendedNextStep: "retry_with_device_token",
+          },
+        },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(250);
+
+    const wsRetry = getLatestWs();
+    expect(wsRetry).not.toBe(ws);
+    wsRetry.emitOpen();
+    wsRetry.emitMessage(
+      JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "nonce-2" } }),
+    );
+    const connectFrames = wsRetry.sent
+      .map((item) => JSON.parse(item))
+      .filter((item) => item.method === "connect");
+    const retryConnect = connectFrames.at(-1);
+    expect(retryConnect?.params?.auth?.token).toBe("shared-token");
+    expect(retryConnect?.params?.auth?.deviceToken).toBe("stored-device-token");
+
+    client.stop();
+    vi.useRealTimers();
   });
 });
 
