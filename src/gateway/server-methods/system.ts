@@ -420,6 +420,19 @@ async function buildRobyStatus() {
   const feedbackRecentReviewed = Array.isArray(feedbackSummary.recent_reviewed)
     ? (feedbackSummary.recent_reviewed as Array<Record<string, unknown>>)
     : [];
+  const memorySources = asRecord(memoryLatest?.sources);
+  const memorySourceWeekly = asRecord(memorySources?.weekly);
+  const memorySourceFeedback = asRecord(memorySources?.feedback);
+  const memorySourceEvaluation = asRecord(memorySources?.evaluation);
+  const memorySourceDrill = asRecord(memorySources?.drill);
+  const memoryQuality = asRecord(memoryLatest?.quality);
+  const memoryQualityEvaluation = asRecord(memoryQuality?.evaluation);
+  const memoryQualityDrill = asRecord(memoryQuality?.drill);
+  const memoryQualityStale = Array.isArray(memoryQuality?.stale_components)
+    ? (memoryQuality.stale_components as unknown[])
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+    : [];
 
   return {
     generatedAtMs: Date.now(),
@@ -577,6 +590,57 @@ async function buildRobyStatus() {
         ? memoryLatest.unresolved
             .map((value) => (typeof value === "string" ? value.trim() : ""))
             .filter(Boolean)
+        : [],
+      sources: {
+        weekly: {
+          present: Boolean(memorySourceWeekly && memorySourceWeekly.present),
+          updatedAt:
+            typeof memorySourceWeekly?.updated_at === "string" ? memorySourceWeekly.updated_at : "",
+        },
+        feedback: {
+          present: Boolean(memorySourceFeedback && memorySourceFeedback.present),
+          updatedAt:
+            typeof memorySourceFeedback?.updated_at === "string"
+              ? memorySourceFeedback.updated_at
+              : "",
+        },
+        evaluation: {
+          present: Boolean(memorySourceEvaluation && memorySourceEvaluation.present),
+          updatedAt:
+            typeof memorySourceEvaluation?.updated_at === "string"
+              ? memorySourceEvaluation.updated_at
+              : "",
+        },
+        drill: {
+          present: Boolean(memorySourceDrill && memorySourceDrill.present),
+          updatedAt:
+            typeof memorySourceDrill?.updated_at === "string" ? memorySourceDrill.updated_at : "",
+        },
+      },
+      quality: {
+        evaluation: {
+          allOk: Boolean(memoryQualityEvaluation?.all_ok),
+          failed: Number(memoryQualityEvaluation?.failed ?? 0),
+          total: Number(memoryQualityEvaluation?.total ?? 0),
+        },
+        drill: {
+          allOk: Boolean(memoryQualityDrill?.all_ok),
+          failed: Number(memoryQualityDrill?.failed ?? 0),
+          total: Number(memoryQualityDrill?.total ?? 0),
+        },
+        auditErrors7d: Number(memoryQuality?.audit_errors_7d ?? 0),
+        staleComponents: memoryQualityStale,
+      },
+      feedbackReasonCounts: Array.isArray(memoryLatest?.feedback_reason_counts)
+        ? memoryLatest.feedback_reason_counts
+            .filter((row) => row && typeof row === "object")
+            .map((row) => ({
+              reasonCode:
+                typeof (row as Record<string, unknown>).reason_code === "string"
+                  ? ((row as Record<string, unknown>).reason_code as string)
+                  : "",
+              count: Number((row as Record<string, unknown>).count ?? 0),
+            }))
         : [],
       topTargets: Array.isArray(memoryLatest?.top_targets)
         ? memoryLatest.top_targets

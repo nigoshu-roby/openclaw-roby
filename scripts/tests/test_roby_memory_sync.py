@@ -63,6 +63,9 @@ class TestRobyMemorySync(TestCase):
                             "reviewed_count": 5,
                             "actionable_count": 2,
                             "counts": {"good": 2, "bad": 1, "missed": 1, "pending": 1},
+                            "actionable_reason_counts": {
+                                "newsletter_false_positive": 1
+                            },
                             "improvement_targets": [
                                 {
                                     "target": "gmail_promo_filtering",
@@ -119,6 +122,62 @@ class TestRobyMemorySync(TestCase):
             self.assertIn("stale component: minutes_sync", snapshot["unresolved"])
             self.assertEqual(snapshot["counts"]["bad"], 1)
             self.assertEqual(snapshot["top_targets"][0]["label"], "メルマガ判定")
+            self.assertTrue(snapshot["sources"]["weekly"]["present"])
+            self.assertFalse(snapshot["quality"]["evaluation"]["all_ok"])
+            self.assertEqual(snapshot["feedback_reason_counts"][0]["reason_code"], "newsletter_false_positive")
+
+    def test_render_blocks_include_structured_sections(self):
+        snapshot = {
+            "updated_at": "2026-03-12T10:00:00+09:00",
+            "heartbeat_status": "HEARTBEAT_OK",
+            "unresolved": [],
+            "sources": {
+                "weekly": {"present": True, "updated_at": "2026-03-12T09:00:00+09:00"},
+                "feedback": {"present": True, "updated_at": "2026-03-12T09:05:00+09:00"},
+                "evaluation": {"present": True, "updated_at": "2026-03-12T09:10:00+09:00"},
+                "drill": {"present": True, "updated_at": "2026-03-12T09:12:00+09:00"},
+            },
+            "quality": {
+                "evaluation": {"all_ok": True, "failed": 0, "total": 7},
+                "drill": {"all_ok": True, "failed": 0, "total": 4},
+                "audit_errors_7d": 0,
+                "stale_components": [],
+            },
+            "stale_components": [],
+            "eval_failed_runs_7d": 0,
+            "drill_failed_runs_7d": 0,
+            "audit_errors_7d": 0,
+            "reviewed_count": 10,
+            "actionable_count": 2,
+            "counts": {"good": 5, "bad": 2, "missed": 0, "pending": 3},
+            "feedback_reason_counts": [{"reason_code": "not_actionable", "count": 2}],
+            "top_targets": [
+                {
+                    "target": "task_filtering",
+                    "label": "タスク抽出閾値",
+                    "count": 2,
+                    "recommendation": "弱い文を除外する。",
+                }
+            ],
+            "recent_actionable": [
+                {
+                    "title": "メール確認: テスト",
+                    "feedback_state": "bad",
+                    "feedback_reason_code": "not_actionable",
+                }
+            ],
+        }
+
+        memory_block = self.mod.render_memory_block(snapshot)
+        heartbeat_block = self.mod.render_heartbeat_block(snapshot)
+
+        self.assertIn("### 現在の運用状態", memory_block)
+        self.assertIn("### 監視ソース", memory_block)
+        self.assertIn("### 品質ゲート", memory_block)
+        self.assertIn("### フィードバック要約", memory_block)
+        self.assertIn("### 判定", heartbeat_block)
+        self.assertIn("### いま見るべき運用信号", heartbeat_block)
+        self.assertIn("### 次に見るべき改善対象", heartbeat_block)
 
 
     def test_compute_live_stale_components_uses_jsonl_seconds_timestamps(self):
@@ -221,6 +280,9 @@ class TestRobyMemorySync(TestCase):
             day_notes = list(daily_dir.glob("*.md"))
             self.assertEqual(len(day_notes), 1)
             self.assertIn("PBS Ops Memory", day_notes[0].read_text(encoding="utf-8"))
+            self.assertIn("sources", result)
+            self.assertIn("quality", result)
+            self.assertIn("feedback_reason_counts", result)
 
 
 if __name__ == "__main__":

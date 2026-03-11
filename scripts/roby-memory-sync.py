@@ -198,6 +198,11 @@ def build_snapshot() -> Dict[str, Any]:
     reviewed_count = int(feedback_summary.get("reviewed_count", 0) or 0)
     actionable_count = int(feedback_summary.get("actionable_count", 0) or 0)
     counts = feedback_summary.get("counts", {}) if isinstance(feedback_summary.get("counts"), dict) else {}
+    actionable_reason_counts = (
+        feedback_summary.get("actionable_reason_counts", {})
+        if isinstance(feedback_summary.get("actionable_reason_counts"), dict)
+        else {}
+    )
     improvement_targets = feedback_summary.get("improvement_targets", []) if isinstance(feedback_summary.get("improvement_targets"), list) else []
     recent_actionable = feedback_summary.get("recent_actionable", []) if isinstance(feedback_summary.get("recent_actionable"), list) else []
 
@@ -229,12 +234,62 @@ def build_snapshot() -> Dict[str, Any]:
             }
         )
 
+    feedback_reason_rows = []
+    for reason_code, count in sorted(
+        actionable_reason_counts.items(),
+        key=lambda item: int(item[1] or 0),
+        reverse=True,
+    ):
+        feedback_reason_rows.append(
+            {
+                "reason_code": str(reason_code).strip(),
+                "count": int(count or 0),
+            }
+        )
+
+    weekly_current_failed = int(eval_latest.get("failed", 0) or 0) if eval_latest else 0
+    weekly_current_total = int(eval_latest.get("total", 0) or 0) if eval_latest else 0
+    drill_current_failed = int(drill_latest.get("failed", 0) or 0) if drill_latest else 0
+    drill_current_total = int(drill_latest.get("total", 0) or 0) if drill_latest else 0
+
     return {
         "updated_at": generated_at.isoformat(),
         "heartbeat_status": heartbeat_status,
         "unresolved": unresolved,
         "weekly_generated_at": weekly_ts.isoformat() if weekly_ts else "",
         "feedback_updated_at": feedback_ts.isoformat() if feedback_ts else "",
+        "sources": {
+            "weekly": {
+                "present": bool(weekly),
+                "updated_at": weekly_ts.isoformat() if weekly_ts else "",
+            },
+            "feedback": {
+                "present": bool(feedback),
+                "updated_at": feedback_ts.isoformat() if feedback_ts else "",
+            },
+            "evaluation": {
+                "present": bool(eval_latest),
+                "updated_at": str(eval_latest.get("ts") or "").strip() if eval_latest else "",
+            },
+            "drill": {
+                "present": bool(drill_latest),
+                "updated_at": str(drill_latest.get("ts") or "").strip() if drill_latest else "",
+            },
+        },
+        "quality": {
+            "evaluation": {
+                "all_ok": bool(eval_latest.get("all_ok", False)) if eval_latest else False,
+                "failed": weekly_current_failed,
+                "total": weekly_current_total,
+            },
+            "drill": {
+                "all_ok": bool(drill_latest.get("all_ok", False)) if drill_latest else False,
+                "failed": drill_current_failed,
+                "total": drill_current_total,
+            },
+            "audit_errors_7d": audit_errors,
+            "stale_components": stale_components,
+        },
         "stale_components": stale_components,
         "weekly_stale_components": weekly_stale_components,
         "eval_failed_runs_7d": eval_failed,
@@ -248,6 +303,7 @@ def build_snapshot() -> Dict[str, Any]:
             "missed": int(counts.get("missed", 0) or 0),
             "pending": int(counts.get("pending", 0) or 0),
         },
+        "feedback_reason_counts": feedback_reason_rows,
         "top_targets": top_targets,
         "recent_actionable": [
             {
@@ -262,20 +318,43 @@ def build_snapshot() -> Dict[str, Any]:
 
 
 def render_memory_block(snapshot: Dict[str, Any]) -> str:
+    quality = snapshot.get("quality", {}) if isinstance(snapshot.get("quality"), dict) else {}
+    eval_quality = quality.get("evaluation", {}) if isinstance(quality.get("evaluation"), dict) else {}
+    drill_quality = quality.get("drill", {}) if isinstance(quality.get("drill"), dict) else {}
+    sources = snapshot.get("sources", {}) if isinstance(snapshot.get("sources"), dict) else {}
+    reason_rows = snapshot.get("feedback_reason_counts", []) if isinstance(snapshot.get("feedback_reason_counts"), list) else []
+
     lines = [
+        "### 現在の運用状態",
         f"- 最終同期: {snapshot['updated_at']}",
         f"- heartbeat: {snapshot['heartbeat_status']}",
-        f"- 週次集計の更新: {snapshot.get('weekly_generated_at') or '未取得'}",
-        f"- feedback更新: {snapshot.get('feedback_updated_at') or '未取得'}",
+        f"- 未解消項目: {' / '.join(snapshot.get('unresolved', [])) if snapshot.get('unresolved') else 'なし'}",
+        "",
+        "### 監視ソース",
+        f"- 週次集計: {(sources.get('weekly', {}) if isinstance(sources.get('weekly'), dict) else {}).get('updated_at') or '未取得'}",
+        f"- feedback: {(sources.get('feedback', {}) if isinstance(sources.get('feedback'), dict) else {}).get('updated_at') or '未取得'}",
+        f"- evaluation: {(sources.get('evaluation', {}) if isinstance(sources.get('evaluation'), dict) else {}).get('updated_at') or '未取得'}",
+        f"- drill: {(sources.get('drill', {}) if isinstance(sources.get('drill'), dict) else {}).get('updated_at') or '未取得'}",
+        "",
+        "### 品質ゲート",
+        f"- evaluation(current): {'PASS' if eval_quality.get('all_ok') else 'FAIL'} {int(eval_quality.get('failed', 0) or 0)}/{int(eval_quality.get('total', 0) or 0)}",
+        f"- drill(current): {'PASS' if drill_quality.get('all_ok') else 'FAIL'} {int(drill_quality.get('failed', 0) or 0)}/{int(drill_quality.get('total', 0) or 0)}",
+        f"- audit errors(7d): {snapshot.get('audit_errors_7d', 0)}",
+        f"- stale component(now): {' / '.join(snapshot.get('stale_components', [])) if snapshot.get('stale_components') else 'なし'}",
+        "",
+        "### フィードバック要約",
         (
-            f"- フィードバック: reviewed {snapshot.get('reviewed_count', 0)} / actionable {snapshot.get('actionable_count', 0)}"
+            f"- reviewed {snapshot.get('reviewed_count', 0)} / actionable {snapshot.get('actionable_count', 0)}"
             f" / good {snapshot.get('counts', {}).get('good', 0)} / bad {snapshot.get('counts', {}).get('bad', 0)} / missed {snapshot.get('counts', {}).get('missed', 0)}"
         ),
-        f"- 未解消項目: {' / '.join(snapshot.get('unresolved', [])) if snapshot.get('unresolved') else 'なし'}",
     ]
+    if reason_rows:
+        lines.append("- Bad理由の上位:")
+        for row in reason_rows[:5]:
+            lines.append(f"  - {row.get('reason_code') or 'unknown'}: {int(row.get('count', 0) or 0)}")
     targets = snapshot.get("top_targets", [])
     if targets:
-        lines.append("- 直近の改善フォーカス:")
+        lines.extend(["", "### 直近の改善フォーカス"])
         for row in targets:
             label = row.get("label") or row.get("target") or "unknown"
             count = int(row.get("count", 0) or 0)
@@ -285,7 +364,7 @@ def render_memory_block(snapshot: Dict[str, Any]) -> str:
                 lines.append(f"    - {recommendation}")
     recent = snapshot.get("recent_actionable", [])
     if recent:
-        lines.append("- 直近の要確認評価:")
+        lines.extend(["", "### 直近の要確認評価"])
         for row in recent:
             title = row.get("title") or "unknown"
             state = row.get("feedback_state") or "unknown"
@@ -296,23 +375,31 @@ def render_memory_block(snapshot: Dict[str, Any]) -> str:
 
 
 def render_heartbeat_block(snapshot: Dict[str, Any]) -> str:
+    quality = snapshot.get("quality", {}) if isinstance(snapshot.get("quality"), dict) else {}
+    eval_quality = quality.get("evaluation", {}) if isinstance(quality.get("evaluation"), dict) else {}
+    drill_quality = quality.get("drill", {}) if isinstance(quality.get("drill"), dict) else {}
     lines = [
+        "### 判定",
         f"- 最終同期: {snapshot['updated_at']}",
         f"- 現在状態: {snapshot['heartbeat_status']}",
+        "",
+        "### いま見るべき運用信号",
         f"- stale component: {' / '.join(snapshot.get('stale_components', [])) if snapshot.get('stale_components') else 'なし'}",
+        f"- evaluation(current): {'PASS' if eval_quality.get('all_ok') else 'FAIL'} {int(eval_quality.get('failed', 0) or 0)}/{int(eval_quality.get('total', 0) or 0)}",
+        f"- drill(current): {'PASS' if drill_quality.get('all_ok') else 'FAIL'} {int(drill_quality.get('failed', 0) or 0)}/{int(drill_quality.get('total', 0) or 0)}",
         f"- eval fail runs (7d): {snapshot.get('eval_failed_runs_7d', 0)}",
         f"- drill fail runs (7d): {snapshot.get('drill_failed_runs_7d', 0)}",
         f"- audit errors (7d): {snapshot.get('audit_errors_7d', 0)}",
     ]
     if snapshot.get("unresolved"):
-        lines.append("- 現在の未解消事項:")
+        lines.extend(["", "### 現在の未解消事項"])
         for item in snapshot["unresolved"]:
             lines.append(f"  - {item}")
     else:
-        lines.append("- 現在の未解消事項: なし")
+        lines.extend(["", "### 現在の未解消事項", "- なし"])
     targets = snapshot.get("top_targets", [])
     if targets:
-        lines.append("- 次に見るべき改善対象:")
+        lines.extend(["", "### 次に見るべき改善対象"])
         for row in targets:
             label = row.get("label") or row.get("target") or "unknown"
             recommendation = row.get("recommendation") or ""
@@ -368,6 +455,9 @@ def run(dry_run: bool) -> Dict[str, Any]:
         "unresolved_count": len(snapshot.get("unresolved", [])),
         "unresolved": snapshot.get("unresolved", []),
         "top_targets": snapshot.get("top_targets", []),
+        "sources": snapshot.get("sources", {}),
+        "quality": snapshot.get("quality", {}),
+        "feedback_reason_counts": snapshot.get("feedback_reason_counts", []),
         "paths": paths,
         "dry_run": dry_run,
     }

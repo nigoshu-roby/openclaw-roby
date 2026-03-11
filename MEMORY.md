@@ -22,17 +22,40 @@
 
 <!-- ROBY:MEMORY-SNAPSHOT:START -->
 
-- 最終同期: 2026-03-12T01:23:43.051347+09:00
+### 現在の運用状態
+
+- 最終同期: 2026-03-12T01:49:27.387941+09:00
 - heartbeat: HEARTBEAT_OK
-- 週次集計の更新: 2026-03-11T20:21:17.368080+09:00
-- feedback更新: 2026-03-08T23:33:09.242648+09:00
-- フィードバック: reviewed 93 / actionable 69 / good 24 / bad 69 / missed 0
 - 未解消項目: なし
-- 直近の改善フォーカス:
-  - タスク抽出閾値: 2
-    - 議事録/Gmail抽出で『依頼・期限・担当・次アクション』が弱い文を除外する。
-- 直近の要確認評価:
-  - [bad / not_actionable] メール確認: 自動支払いが完了しました
-  - [bad / not_actionable] メール確認: brodo_japan ― フィードでpresidenrepublikindonesia、0pipi_chuchuなどをチェックしよう
-  - [bad] 4/21
-  <!-- ROBY:MEMORY-SNAPSHOT:END -->
+
+### 監視ソース
+
+- 週次集計: 2026-03-11T20:21:17.368080+09:00
+- feedback: 2026-03-08T23:33:09.242648+09:00
+- evaluation: 2026-03-11T23:29:53.598954+09:00
+- drill: 2026-03-11T20:21:17.150005+09:00
+
+### 品質ゲート
+
+- evaluation(current): PASS 0/7
+- drill(current): PASS 0/13
+- audit errors(7d): 0
+- stale component(now): なし
+
+### フィードバック要約
+
+- reviewed 93 / actionable 69 / good 24 / bad 69 / missed 0
+- Bad理由の上位:
+  - not_actionable: 2
+
+### 直近の改善フォーカス
+
+- タスク抽出閾値: 2
+  - 議事録/Gmail抽出で『依頼・期限・担当・次アクション』が弱い文を除外する。
+
+### 直近の要確認評価
+
+- [bad / not_actionable] メール確認: 自動支払いが完了しました
+- [bad / not_actionable] メール確認: brodo_japan ― フィードでpresidenrepublikindonesia、0pipi_chuchuなどをチェックしよう
+- [bad] 4/21
+<!-- ROBY:MEMORY-SNAPSHOT:END -->

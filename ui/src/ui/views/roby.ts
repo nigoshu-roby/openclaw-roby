@@ -476,6 +476,16 @@ export function renderRoby(props: RobyProps) {
               <div class="muted">- 対象: ${heartbeatRuntime?.target ?? "—"} / direct: ${heartbeatRuntime?.directPolicy ?? "—"}</div>
               <div class="muted">- 稼働時間: ${heartbeatRuntime?.activeHoursSummary ?? "制限なし"}</div>
               <div class="muted">- prompt: ${heartbeatRuntime?.promptPresent ? "設定済み" : "デフォルト"}</div>
+              <div class="muted" style="margin-top: 8px;">監視ソース</div>
+              <div class="muted">- 週次集計: ${memorySync?.sources?.weekly?.updatedAt || "未取得"}</div>
+              <div class="muted">- feedback: ${memorySync?.sources?.feedback?.updatedAt || "未取得"}</div>
+              <div class="muted">- evaluation: ${memorySync?.sources?.evaluation?.updatedAt || "未取得"}</div>
+              <div class="muted">- drill: ${memorySync?.sources?.drill?.updatedAt || "未取得"}</div>
+              <div class="muted" style="margin-top: 8px;">品質ゲート</div>
+              <div class="muted">- evaluation(current): ${memorySync?.quality?.evaluation?.allOk ? "PASS" : "FAIL"} ${memorySync?.quality?.evaluation?.failed ?? 0}/${memorySync?.quality?.evaluation?.total ?? 0}</div>
+              <div class="muted">- drill(current): ${memorySync?.quality?.drill?.allOk ? "PASS" : "FAIL"} ${memorySync?.quality?.drill?.failed ?? 0}/${memorySync?.quality?.drill?.total ?? 0}</div>
+              <div class="muted">- audit errors(7d): ${memorySync?.quality?.auditErrors7d ?? 0}</div>
+              <div class="muted">- stale(now): ${joinList(memorySync?.quality?.staleComponents, "なし")}</div>
               <div class="muted" style="margin-top: 8px;">直近 heartbeat</div>
               ${
                 heartbeatRuntime?.lastEvent
@@ -502,6 +512,19 @@ export function renderRoby(props: RobyProps) {
               }
               <div class="muted">未解消: ${joinList(memorySync?.unresolved, "なし")}</div>
               <div class="muted">daily note: ${memorySync?.dailyNotePath || "未生成"}</div>
+              ${
+                (memorySync?.feedbackReasonCounts?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted" style="margin-top: 8px;">Bad理由の上位</div>
+                      ${memorySync?.feedbackReasonCounts
+                        ?.slice(0, 5)
+                        .map(
+                          (row) =>
+                            html`<div class="muted">- ${row.reasonCode || "unknown"}: ${row.count}</div>`,
+                        )}
+                    `
+                  : nothing
+              }
               ${
                 (memorySync?.topTargets?.length ?? 0) > 0
                   ? html`

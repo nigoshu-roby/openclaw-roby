@@ -711,6 +711,22 @@ export type RobyMemorySyncStatus = RobyOpsHealthSummary & {
   heartbeatStatus?: string;
   unresolvedCount?: number;
   unresolved?: string[];
+  sources?: {
+    weekly?: { present?: boolean; updatedAt?: string };
+    feedback?: { present?: boolean; updatedAt?: string };
+    evaluation?: { present?: boolean; updatedAt?: string };
+    drill?: { present?: boolean; updatedAt?: string };
+  };
+  quality?: {
+    evaluation?: { allOk?: boolean; failed?: number; total?: number };
+    drill?: { allOk?: boolean; failed?: number; total?: number };
+    auditErrors7d?: number;
+    staleComponents?: string[];
+  };
+  feedbackReasonCounts?: Array<{
+    reasonCode: string;
+    count: number;
+  }>;
   topTargets?: Array<{
     target: string;
     label: string;

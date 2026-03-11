@@ -16,13 +16,25 @@
 
 <!-- ROBY:HEARTBEAT-STATUS:START -->
 
-- 最終同期: 2026-03-12T01:23:43.051347+09:00
+### 判定
+
+- 最終同期: 2026-03-12T01:49:27.387941+09:00
 - 現在状態: HEARTBEAT_OK
+
+### いま見るべき運用信号
+
 - stale component: なし
+- evaluation(current): PASS 0/7
+- drill(current): PASS 0/13
 - eval fail runs (7d): 23
 - drill fail runs (7d): 1
 - audit errors (7d): 0
-- 現在の未解消事項: なし
-- 次に見るべき改善対象:
-  - タスク抽出閾値 - 議事録/Gmail抽出で『依頼・期限・担当・次アクション』が弱い文を除外する。
-  <!-- ROBY:HEARTBEAT-STATUS:END -->
+
+### 現在の未解消事項
+
+- なし
+
+### 次に見るべき改善対象
+
+- タスク抽出閾値 - 議事録/Gmail抽出で『依頼・期限・担当・次アクション』が弱い文を除外する。
+<!-- ROBY:HEARTBEAT-STATUS:END -->
