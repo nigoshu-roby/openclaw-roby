@@ -727,6 +727,42 @@
 - 目的:
   - Slack通知の可読性を上げ、失敗時の判断と復旧を短時間で行えるようにする
 
+### 8.33 Completion Update（Phase 5: Ollama運用最適化）
+
+- 完了日: 2026-03-12
+- 実装:
+  - `scripts/roby-orchestrator.py`
+    - `resolve_local_first_schedule(...)` を追加
+    - minutes / gmail の local-first profile を時刻帯で自動切替
+    - runtime summary に `Local First schedule` を表示
+  - `src/gateway/server-methods/system.ts`
+    - `roby.status.localFirst` に日中/深夜の profile、現在ウィンドウ、ローカル時刻を追加
+    - minutes / gmail それぞれの effective profile と使用モデルを live で返却
+  - `ui/src/ui/types.ts`
+    - `RobyLocalFirstStatus` を schedule/運用メタデータ対応へ拡張
+  - `ui/src/ui/views/roby.ts`
+    - `Local First` カードに schedule / 現在ウィンドウ / effective profile / model を表示
+- 運用設定:
+  - `ROBY_ORCH_LOCAL_FIRST_SCHEDULE=1`
+  - `ROBY_ORCH_LOCAL_FIRST_TZ=Asia/Tokyo`
+  - `ROBY_ORCH_LOCAL_FIRST_DAY_START=08:00`
+  - `ROBY_ORCH_LOCAL_FIRST_DAY_END=20:00`
+  - `ROBY_ORCH_MINUTES_PROFILE_DAY=hybrid`
+  - `ROBY_ORCH_MINUTES_PROFILE_NIGHT=local`
+  - `ROBY_ORCH_GMAIL_PROFILE_DAY=fast`
+  - `ROBY_ORCH_GMAIL_PROFILE_NIGHT=hybrid`
+- 方針:
+  - 日中は応答速度優先
+  - 深夜は local-first を強めてコストを最適化
+  - 最終抽出品質は Gemini / Codex を維持し、Ollama は前処理・一次分類へ集中
+- テスト:
+  - `scripts/tests/test_roby_orchestrator_routing.py`
+    - 日中/深夜の profile 切替
+    - runtime summary への schedule 表示
+  - `pnpm build`
+  - `openclaw.mjs gateway call roby.status --json`
+    により UI / backend の live 表示を確認
+
 ### 8.3 Completion Update（#9 AB Router）
 
 - 完了日: 2026-03-04

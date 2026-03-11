@@ -14,6 +14,7 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 from roby_audit import append_audit_event
 
 ENV_PATH = Path.home() / ".openclaw" / ".env"
@@ -193,8 +194,95 @@ def int_from_env(value: Optional[str], default: int) -> int:
         return default
 
 
-def apply_minutes_llm_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
-    profile = (env.get("ROBY_ORCH_MINUTES_LLM_PROFILE", "hybrid") or "hybrid").strip().lower()
+def _env_enabled(value: Optional[str], default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_hhmm(text: Optional[str], default_minutes: int) -> int:
+    raw = str(text or "").strip()
+    if not raw:
+        return default_minutes
+    match = re.match(r"^(\d{1,2}):(\d{2})$", raw)
+    if not match:
+        return default_minutes
+    hour = max(0, min(23, int(match.group(1))))
+    minute = max(0, min(59, int(match.group(2))))
+    return hour * 60 + minute
+
+
+def _now_in_tz(tz_name: str, now: Optional[datetime] = None) -> datetime:
+    base = now or datetime.now(timezone.utc)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    try:
+        return base.astimezone(ZoneInfo(tz_name))
+    except Exception:
+        return base.astimezone(JST)
+
+
+def _within_day_window(now_minutes: int, start_minutes: int, end_minutes: int) -> bool:
+    if start_minutes == end_minutes:
+        return True
+    if start_minutes < end_minutes:
+        return start_minutes <= now_minutes < end_minutes
+    return now_minutes >= start_minutes or now_minutes < end_minutes
+
+
+def resolve_local_first_schedule(
+    env: Dict[str, str],
+    *,
+    route: str,
+    base_profile_key: str,
+    default_profile: str,
+    default_day_profile: str,
+    default_night_profile: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    tz_name = (env.get("ROBY_ORCH_LOCAL_FIRST_TZ", "Asia/Tokyo") or "Asia/Tokyo").strip()
+    schedule_enabled = _env_enabled(env.get("ROBY_ORCH_LOCAL_FIRST_SCHEDULE"), True)
+    base_profile = (env.get(base_profile_key, default_profile) or default_profile).strip().lower()
+    day_profile = (env.get(f"ROBY_ORCH_{route}_PROFILE_DAY", default_day_profile) or default_day_profile).strip().lower()
+    night_profile = (env.get(f"ROBY_ORCH_{route}_PROFILE_NIGHT", default_night_profile) or default_night_profile).strip().lower()
+    start_raw = env.get("ROBY_ORCH_LOCAL_FIRST_DAY_START", "08:00")
+    end_raw = env.get("ROBY_ORCH_LOCAL_FIRST_DAY_END", "20:00")
+    start_minutes = _parse_hhmm(start_raw, 8 * 60)
+    end_minutes = _parse_hhmm(end_raw, 20 * 60)
+    local_now = _now_in_tz(tz_name, now)
+    minute_of_day = local_now.hour * 60 + local_now.minute
+    in_day = _within_day_window(minute_of_day, start_minutes, end_minutes)
+    effective_profile = base_profile
+    window = "fixed"
+    if schedule_enabled:
+        window = "day" if in_day else "night"
+        effective_profile = day_profile if in_day else night_profile
+    return {
+        "schedule_enabled": schedule_enabled,
+        "tz": tz_name,
+        "window": window,
+        "window_label": "日中" if window == "day" else "深夜" if window == "night" else "固定",
+        "base_profile": base_profile,
+        "day_profile": day_profile,
+        "night_profile": night_profile,
+        "effective_profile": effective_profile,
+        "day_start": start_raw,
+        "day_end": end_raw,
+        "local_time": local_now.strftime("%H:%M"),
+    }
+
+
+def apply_minutes_llm_profile(env: Dict[str, str], now: Optional[datetime] = None) -> Tuple[str, Dict[str, str]]:
+    schedule = resolve_local_first_schedule(
+        env,
+        route="MINUTES",
+        base_profile_key="ROBY_ORCH_MINUTES_LLM_PROFILE",
+        default_profile="hybrid",
+        default_day_profile="hybrid",
+        default_night_profile="local",
+        now=now,
+    )
+    profile = str(schedule["effective_profile"])
     local_fast = (env.get("ROBY_ORCH_MINUTES_LOCAL_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
     local_quality = (env.get("ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
     cloud = (env.get("ROBY_ORCH_MINUTES_CLOUD_MODEL", env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview")) or "").strip()
@@ -249,11 +337,22 @@ def apply_minutes_llm_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]
             "MINUTES_REPAIR_MODELS": _csv(cloud, local_quality, local_fast),
             "MINUTES_ENRICH_MODELS": _csv(local_fast, cloud),
         }
+    overrides["ROBY_ORCH_MINUTES_EFFECTIVE_PROFILE"] = profile
+    overrides["ROBY_ORCH_MINUTES_WINDOW"] = str(schedule["window"])
     return profile, overrides
 
 
-def apply_gmail_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
-    profile = (env.get("ROBY_ORCH_GMAIL_PROFILE", "hybrid") or "hybrid").strip().lower()
+def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> Tuple[str, Dict[str, str]]:
+    schedule = resolve_local_first_schedule(
+        env,
+        route="GMAIL",
+        base_profile_key="ROBY_ORCH_GMAIL_PROFILE",
+        default_profile="fast",
+        default_day_profile="fast",
+        default_night_profile="hybrid",
+        now=now,
+    )
+    profile = str(schedule["effective_profile"])
     fast_model = (env.get("ROBY_ORCH_GMAIL_LLM_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
     quality_model = (env.get("ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
     overrides: Dict[str, str] = {}
@@ -282,6 +381,8 @@ def apply_gmail_profile(env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
             "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_FAST", "0"),
         }
+    overrides["ROBY_ORCH_GMAIL_EFFECTIVE_PROFILE"] = profile
+    overrides["ROBY_ORCH_GMAIL_WINDOW"] = str(schedule["window"])
     return profile, overrides
 
 
@@ -1037,8 +1138,29 @@ def build_runtime_status_summary(env: Dict[str, str]) -> str:
     lines.append(f"- Ollama API: {'接続OK' if ollama_api_ok else '未接続'} ({base_url})")
     if ollama_models:
         lines.append(f"- Ollama models: {', '.join(ollama_models)}")
+    minutes_schedule = resolve_local_first_schedule(
+        env,
+        route="MINUTES",
+        base_profile_key="ROBY_ORCH_MINUTES_LLM_PROFILE",
+        default_profile="hybrid",
+        default_day_profile="hybrid",
+        default_night_profile="local",
+    )
+    gmail_schedule = resolve_local_first_schedule(
+        env,
+        route="GMAIL",
+        base_profile_key="ROBY_ORCH_GMAIL_PROFILE",
+        default_profile="fast",
+        default_day_profile="fast",
+        default_night_profile="hybrid",
+    )
     minutes_profile, minutes_overrides = apply_minutes_llm_profile(env)
     gmail_profile, gmail_overrides = apply_gmail_profile(env)
+    lines.append(
+        f"- Local First schedule: {'有効' if minutes_schedule['schedule_enabled'] else '固定'} / "
+        f"{minutes_schedule['day_start']}-{minutes_schedule['day_end']} {minutes_schedule['tz']} / "
+        f"現在={minutes_schedule['window_label']} {minutes_schedule['local_time']}"
+    )
     lines.append(
         f"- Local First (minutes): profile={minutes_profile}, preprocess={'ON' if (minutes_overrides.get('MINUTES_LOCAL_PREPROCESS_ENABLE', '0').lower() in {'1','true','yes','on'}) else 'OFF'}, model={minutes_overrides.get('MINUTES_LOCAL_PREPROCESS_MODEL', '-')}"
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -173,6 +174,7 @@ class TestRobyOrchestratorRouting(TestCase):
     def test_apply_minutes_llm_profile_hybrid_prefers_fast_local_preprocess(self):
         profile, overrides = self.mod.apply_minutes_llm_profile(
             {
+                "ROBY_ORCH_LOCAL_FIRST_SCHEDULE": "0",
                 "ROBY_ORCH_MINUTES_LLM_PROFILE": "hybrid",
                 "ROBY_ORCH_MINUTES_LOCAL_FAST_MODEL": "ollama/llama3.2:3b",
                 "ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL": "ollama/qwen2.5:7b",
@@ -185,6 +187,67 @@ class TestRobyOrchestratorRouting(TestCase):
             overrides["MINUTES_REVIEW_MODELS"],
             "google/gemini-3-flash-preview,ollama/qwen2.5:7b,ollama/llama3.2:3b",
         )
+
+    def test_apply_minutes_llm_profile_uses_night_schedule(self):
+        profile, overrides = self.mod.apply_minutes_llm_profile(
+            {
+                "ROBY_ORCH_LOCAL_FIRST_SCHEDULE": "1",
+                "ROBY_ORCH_LOCAL_FIRST_TZ": "Asia/Tokyo",
+                "ROBY_ORCH_LOCAL_FIRST_DAY_START": "08:00",
+                "ROBY_ORCH_LOCAL_FIRST_DAY_END": "20:00",
+                "ROBY_ORCH_MINUTES_LLM_PROFILE": "hybrid",
+                "ROBY_ORCH_MINUTES_PROFILE_DAY": "hybrid",
+                "ROBY_ORCH_MINUTES_PROFILE_NIGHT": "local",
+                "ROBY_ORCH_MINUTES_LOCAL_FAST_MODEL": "ollama/llama3.2:3b",
+                "ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL": "ollama/qwen2.5:7b",
+                "ROBY_ORCH_MINUTES_CLOUD_MODEL": "google/gemini-3-flash-preview",
+            },
+            now=datetime(2026, 3, 12, 14, 30, tzinfo=timezone.utc),
+        )
+        self.assertEqual(profile, "local")
+        self.assertEqual(overrides["ROBY_ORCH_MINUTES_WINDOW"], "night")
+        self.assertEqual(overrides["MINUTES_LOCAL_PREPROCESS_MODEL"], "ollama/qwen2.5:7b")
+
+    def test_apply_gmail_profile_uses_day_schedule(self):
+        profile, overrides = self.mod.apply_gmail_profile(
+            {
+                "ROBY_ORCH_LOCAL_FIRST_SCHEDULE": "1",
+                "ROBY_ORCH_LOCAL_FIRST_TZ": "Asia/Tokyo",
+                "ROBY_ORCH_LOCAL_FIRST_DAY_START": "08:00",
+                "ROBY_ORCH_LOCAL_FIRST_DAY_END": "20:00",
+                "ROBY_ORCH_GMAIL_PROFILE": "fast",
+                "ROBY_ORCH_GMAIL_PROFILE_DAY": "fast",
+                "ROBY_ORCH_GMAIL_PROFILE_NIGHT": "hybrid",
+                "ROBY_ORCH_GMAIL_LLM_FAST_MODEL": "ollama/llama3.2:3b",
+                "ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL": "ollama/qwen2.5:7b",
+            },
+            now=datetime(2026, 3, 12, 3, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(profile, "fast")
+        self.assertEqual(overrides["ROBY_ORCH_GMAIL_WINDOW"], "day")
+        self.assertEqual(overrides["GMAIL_TRIAGE_LLM_ENABLE"], "0")
+
+    def test_build_runtime_status_summary_includes_local_first_schedule(self):
+        with (
+            patch.object(self.mod, "shutil"),
+            patch.object(self.mod, "read_last_jsonl", side_effect=[None, None, None]),
+            patch.object(self.mod, "read_last_json", side_effect=[None, None, None, None]),
+        ):
+            self.mod.shutil.which.return_value = "/opt/homebrew/bin/ollama"
+            text = self.mod.build_runtime_status_summary(
+                {
+                    "ROBY_ORCH_LOCAL_FIRST_SCHEDULE": "1",
+                    "ROBY_ORCH_LOCAL_FIRST_TZ": "Asia/Tokyo",
+                    "ROBY_ORCH_LOCAL_FIRST_DAY_START": "08:00",
+                    "ROBY_ORCH_LOCAL_FIRST_DAY_END": "20:00",
+                    "ROBY_ORCH_MINUTES_PROFILE_DAY": "hybrid",
+                    "ROBY_ORCH_MINUTES_PROFILE_NIGHT": "local",
+                    "ROBY_ORCH_GMAIL_PROFILE_DAY": "fast",
+                    "ROBY_ORCH_GMAIL_PROFILE_NIGHT": "hybrid",
+                    "NEURONIC_TOKEN": "dummy",
+                }
+            )
+        self.assertIn("Local First schedule: 有効 / 08:00-20:00 Asia/Tokyo", text)
 
     def test_build_local_capability_summary_includes_health_section(self):
         with (
@@ -210,7 +273,7 @@ class TestRobyOrchestratorRouting(TestCase):
     def test_handle_minutes_pipeline_cron_defaults_disable_local_preprocess_and_cap_max(self):
         captured = {}
 
-        def fake_run(cmd, cwd=None, env=None, capture_output=None, text=None):
+        def fake_run(cmd, cwd=None, env=None, capture_output=None, text=None, timeout=None):
             captured["cmd"] = cmd
             captured["env"] = dict(env or {})
 

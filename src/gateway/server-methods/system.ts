@@ -72,8 +72,114 @@ function parseTimestampDate(value: unknown): Date | null {
   return null;
 }
 
-function resolveMinutesLocalPreprocessModel(): string {
-  const profile = (process.env.ROBY_ORCH_MINUTES_LLM_PROFILE ?? "hybrid").trim().toLowerCase();
+function parseClockMinutes(value: string | undefined, fallbackMinutes: number): number {
+  const text = (value ?? "").trim();
+  const match = /^(\d{1,2}):(\d{2})$/.exec(text);
+  if (!match) {
+    return fallbackMinutes;
+  }
+  const hour = Math.max(0, Math.min(23, Number.parseInt(match[1] ?? "0", 10)));
+  const minute = Math.max(0, Math.min(59, Number.parseInt(match[2] ?? "0", 10)));
+  return hour * 60 + minute;
+}
+
+function envEnabled(value: string | undefined, fallback = false): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function getLocalClockParts(timeZone: string): { hour: number; minute: number; clock: string } {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+    const hour = Number.parseInt(parts.find((part) => part.type === "hour")?.value ?? "0", 10);
+    const minute = Number.parseInt(parts.find((part) => part.type === "minute")?.value ?? "0", 10);
+    return {
+      hour,
+      minute,
+      clock: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+    };
+  } catch {
+    const now = new Date();
+    return {
+      hour: now.getHours(),
+      minute: now.getMinutes(),
+      clock: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+    };
+  }
+}
+
+function inDayWindow(nowMinutes: number, startMinutes: number, endMinutes: number): boolean {
+  if (startMinutes === endMinutes) {
+    return true;
+  }
+  if (startMinutes < endMinutes) {
+    return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+  }
+  return nowMinutes >= startMinutes || nowMinutes < endMinutes;
+}
+
+function resolveLocalFirstSchedule(route: "MINUTES" | "GMAIL"): {
+  scheduleEnabled: boolean;
+  tz: string;
+  dayStart: string;
+  dayEnd: string;
+  window: "fixed" | "day" | "night";
+  windowLabel: string;
+  localTime: string;
+  baseProfile: string;
+  dayProfile: string;
+  nightProfile: string;
+  effectiveProfile: string;
+} {
+  const tz = (process.env.ROBY_ORCH_LOCAL_FIRST_TZ ?? "Asia/Tokyo").trim();
+  const dayStart = (process.env.ROBY_ORCH_LOCAL_FIRST_DAY_START ?? "08:00").trim();
+  const dayEnd = (process.env.ROBY_ORCH_LOCAL_FIRST_DAY_END ?? "20:00").trim();
+  const scheduleEnabled = envEnabled(process.env.ROBY_ORCH_LOCAL_FIRST_SCHEDULE, true);
+  const baseProfile =
+    route === "MINUTES"
+      ? (process.env.ROBY_ORCH_MINUTES_LLM_PROFILE ?? "hybrid").trim().toLowerCase()
+      : (process.env.ROBY_ORCH_GMAIL_PROFILE ?? "fast").trim().toLowerCase();
+  const dayProfile =
+    route === "MINUTES"
+      ? (process.env.ROBY_ORCH_MINUTES_PROFILE_DAY ?? "hybrid").trim().toLowerCase()
+      : (process.env.ROBY_ORCH_GMAIL_PROFILE_DAY ?? "fast").trim().toLowerCase();
+  const nightProfile =
+    route === "MINUTES"
+      ? (process.env.ROBY_ORCH_MINUTES_PROFILE_NIGHT ?? "local").trim().toLowerCase()
+      : (process.env.ROBY_ORCH_GMAIL_PROFILE_NIGHT ?? "hybrid").trim().toLowerCase();
+  const localClock = getLocalClockParts(tz);
+  const nowMinutes = localClock.hour * 60 + localClock.minute;
+  const startMinutes = parseClockMinutes(dayStart, 8 * 60);
+  const endMinutes = parseClockMinutes(dayEnd, 20 * 60);
+  const dayMode = inDayWindow(nowMinutes, startMinutes, endMinutes);
+  const window = scheduleEnabled ? (dayMode ? "day" : "night") : "fixed";
+  const effectiveProfile = scheduleEnabled ? (dayMode ? dayProfile : nightProfile) : baseProfile;
+  return {
+    scheduleEnabled,
+    tz,
+    dayStart,
+    dayEnd,
+    window,
+    windowLabel: window === "day" ? "日中" : window === "night" ? "深夜" : "固定",
+    localTime: localClock.clock,
+    baseProfile,
+    dayProfile,
+    nightProfile,
+    effectiveProfile,
+  };
+}
+
+function resolveMinutesLocalPreprocessModel(profileOverride?: string): string {
+  const profile = (profileOverride ?? resolveLocalFirstSchedule("MINUTES").effectiveProfile)
+    .trim()
+    .toLowerCase();
   const explicit = process.env.MINUTES_LOCAL_PREPROCESS_MODEL?.trim();
   if (explicit) {
     return explicit;
@@ -92,6 +198,22 @@ function resolveMinutesLocalPreprocessModel(): string {
     return fast || quality || cloud;
   }
   return fast || quality || cloud;
+}
+
+function resolveGmailLocalPreclassifyModel(profileOverride?: string): string {
+  const profile = (profileOverride ?? resolveLocalFirstSchedule("GMAIL").effectiveProfile)
+    .trim()
+    .toLowerCase();
+  const explicit = process.env.GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const fast = (process.env.ROBY_ORCH_GMAIL_LLM_FAST_MODEL ?? "ollama/llama3.2:3b").trim();
+  const quality = (process.env.ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL ?? "ollama/qwen2.5:7b").trim();
+  if (profile === "quality") {
+    return quality || fast;
+  }
+  return fast || quality;
 }
 
 async function readJsonLinesLastTimestamp(filePath: string): Promise<Date | null> {
@@ -492,6 +614,8 @@ async function buildRobyStatus() {
   const liveFreshness = await buildLiveFreshness();
   const workspaceBootstrap = await buildWorkspaceBootstrapStatus();
   const heartbeatRuntime = await buildHeartbeatRuntimeStatus();
+  const minutesSchedule = resolveLocalFirstSchedule("MINUTES");
+  const gmailSchedule = resolveLocalFirstSchedule("GMAIL");
   const evalResults = Array.isArray(evalLatest?.results)
     ? (evalLatest.results as Array<Record<string, unknown>>)
     : [];
@@ -928,18 +1052,32 @@ async function buildRobyStatus() {
       modelAvailable: ollama.modelAvailable,
       baseUrl: ollama.baseUrl,
       availableModels: ollama.models,
-      minutesProfile: (process.env.ROBY_ORCH_MINUTES_LLM_PROFILE ?? "hybrid").trim(),
+      scheduleEnabled: minutesSchedule.scheduleEnabled,
+      scheduleTimeZone: minutesSchedule.tz,
+      scheduleDayStart: minutesSchedule.dayStart,
+      scheduleDayEnd: minutesSchedule.dayEnd,
+      scheduleWindow: minutesSchedule.window,
+      scheduleWindowLabel: minutesSchedule.windowLabel,
+      scheduleLocalTime: minutesSchedule.localTime,
+      minutesProfile: minutesSchedule.effectiveProfile,
+      minutesBaseProfile: minutesSchedule.baseProfile,
+      minutesDayProfile: minutesSchedule.dayProfile,
+      minutesNightProfile: minutesSchedule.nightProfile,
       minutesLocalPreprocessEnabled:
         String(
           process.env.MINUTES_LOCAL_PREPROCESS_ENABLE ??
-            (process.env.ROBY_ORCH_MINUTES_LLM_PROFILE ?? "hybrid").trim().toLowerCase() !==
-              "cloud",
+            minutesSchedule.effectiveProfile !== "cloud",
         )
           .trim()
           .toLowerCase()
           .match(/^(1|true|yes|on)$/) !== null,
-      minutesLocalPreprocessModel: resolveMinutesLocalPreprocessModel().trim(),
-      gmailProfile: (process.env.ROBY_ORCH_GMAIL_PROFILE ?? "hybrid").trim(),
+      minutesLocalPreprocessModel: resolveMinutesLocalPreprocessModel(
+        minutesSchedule.effectiveProfile,
+      ).trim(),
+      gmailProfile: gmailSchedule.effectiveProfile,
+      gmailBaseProfile: gmailSchedule.baseProfile,
+      gmailDayProfile: gmailSchedule.dayProfile,
+      gmailNightProfile: gmailSchedule.nightProfile,
       gmailLocalPreclassifyEnabled:
         String(
           process.env.GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE ??
@@ -949,10 +1087,8 @@ async function buildRobyStatus() {
           .trim()
           .toLowerCase()
           .match(/^(1|true|yes|on)$/) !== null,
-      gmailLocalPreclassifyModel: (
-        process.env.GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL ??
-        process.env.ROBY_ORCH_GMAIL_LLM_FAST_MODEL ??
-        "ollama/llama3.2:3b"
+      gmailLocalPreclassifyModel: resolveGmailLocalPreclassifyModel(
+        gmailSchedule.effectiveProfile,
       ).trim(),
       error: ollama.error,
     },

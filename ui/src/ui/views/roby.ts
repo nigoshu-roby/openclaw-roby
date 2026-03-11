@@ -838,17 +838,21 @@ export function renderRoby(props: RobyProps) {
         status: localFirst?.ollamaApiOk ? "準備完了" : localFirst?.ollamaCli ? "API待ち" : "未導入",
         tone: localFirst?.ollamaApiOk ? "ok" : localFirst?.ollamaCli ? "warn" : "muted",
         subtitle: localFirst
-          ? `minutes:${localFirst.minutesProfile ?? "hybrid"} / gmail:${localFirst.gmailProfile ?? "hybrid"}`
+          ? `${localFirst.scheduleWindowLabel ?? "固定"} / ${localFirst.scheduleLocalTime ?? "—"} / minutes:${localFirst.minutesProfile ?? "hybrid"} / gmail:${localFirst.gmailProfile ?? "hybrid"}`
           : "状態未取得",
         meta: localFirst ? (localFirst.error ? localFirst.error : localFirst.baseUrl) : "—",
         details: localFirst
           ? html`
+              <div class="muted">schedule: ${localFirst.scheduleEnabled ? "有効" : "固定"}</div>
+              <div class="muted">window: ${localFirst.scheduleDayStart ?? "08:00"}-${localFirst.scheduleDayEnd ?? "20:00"} ${localFirst.scheduleTimeZone ?? "Asia/Tokyo"} / 現在 ${localFirst.scheduleWindowLabel ?? "固定"} ${localFirst.scheduleLocalTime ?? ""}</div>
               <div class="muted">base URL: ${localFirst.baseUrl}</div>
               <div class="muted">configured model: ${localFirst.configuredModel}</div>
               <div class="muted">available: ${joinList(localFirst.availableModels, "なし")}</div>
               <div class="muted" style="margin-top: 8px;">minutes: ${localFirst.minutesProfile ?? "hybrid"} / ${localFirst.minutesLocalPreprocessEnabled ? "前処理ON" : "前処理OFF"}</div>
+              <div class="muted">minutes schedule: 日中 ${localFirst.minutesDayProfile ?? localFirst.minutesBaseProfile ?? "hybrid"} / 深夜 ${localFirst.minutesNightProfile ?? localFirst.minutesBaseProfile ?? "hybrid"}</div>
               <div class="muted">minutes model: ${localFirst.minutesLocalPreprocessModel ?? "—"}</div>
               <div class="muted" style="margin-top: 8px;">gmail: ${localFirst.gmailProfile ?? "hybrid"} / ${localFirst.gmailLocalPreclassifyEnabled ? "一次判定ON" : "一次判定OFF"}</div>
+              <div class="muted">gmail schedule: 日中 ${localFirst.gmailDayProfile ?? localFirst.gmailBaseProfile ?? "fast"} / 深夜 ${localFirst.gmailNightProfile ?? localFirst.gmailBaseProfile ?? "hybrid"}</div>
               <div class="muted">gmail model: ${localFirst.gmailLocalPreclassifyModel ?? "—"}</div>
             `
           : nothing,
