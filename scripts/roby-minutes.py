@@ -1661,6 +1661,51 @@ def _normalize_task_item(item: Dict[str, Any], default_project: str) -> Dict[str
     }
 
 
+def _build_minutes_group_parent_title(project: str, source_title: str) -> str:
+    cleaned_source = _clean_line(source_title or "")[:80]
+    if cleaned_source and project and project in cleaned_source:
+        return cleaned_source[:120]
+    if cleaned_source:
+        return f"{project} / {cleaned_source}"[:120]
+    return f"{project} 対応タスク"[:120]
+
+
+def _group_leaf_minutes_tasks_by_project(
+    extracted: List[Dict[str, Any]],
+    default_project: str,
+    source_title: str,
+) -> List[Dict[str, Any]]:
+    grouped: List[Dict[str, Any]] = []
+    flat_by_project: Dict[str, List[Dict[str, Any]]] = {}
+
+    for item in extracted:
+        raw_subtasks = item.get("subtasks") or item.get("children") or []
+        if isinstance(raw_subtasks, list) and raw_subtasks:
+            grouped.append(item)
+            continue
+
+        normalized = _normalize_task_item(item, default_project)
+        if not normalized.get("title"):
+            continue
+        project = normalized.get("project") or default_project
+        flat_by_project.setdefault(project, []).append(normalized)
+
+    for project, subtasks in flat_by_project.items():
+        parent_note = "自動グループ化: 同一議事録・同一プロジェクトの抽出タスクを親子化"
+        grouped.append(
+            {
+                "title": _build_minutes_group_parent_title(project, source_title),
+                "project": project,
+                "due_date": "",
+                "assignee": subtasks[0].get("assignee") or "私",
+                "note": parent_note,
+                "subtasks": subtasks,
+            }
+        )
+
+    return grouped
+
+
 def build_neuronic_tasks(
     extracted: List[Dict[str, Any]],
     source: str,
@@ -1672,8 +1717,9 @@ def build_neuronic_tasks(
     include_legacy_group_tag: bool = False,
 ) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
+    grouped_extracted = _group_leaf_minutes_tasks_by_project(extracted, default_project, source_title)
     group_index = 0
-    for item in extracted:
+    for item in grouped_extracted:
         normalized = _normalize_task_item(item, default_project)
         title = normalized.get("title")
         if not title:

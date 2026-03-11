@@ -115,6 +115,29 @@ class TestRobyMinutesQuality(TestCase):
         self.assertEqual(tasks[0]["project"], "ボーネルンド")
         self.assertIn("local_preprocess.action_candidates", tasks[0]["note"])
 
+    def test_build_neuronic_tasks_groups_flat_minutes_by_project(self):
+        extracted = [
+            {"title": "リンク挿入の抜け漏れがないか確認する", "project": "BT振興会-Mooovi", "assignee": "私"},
+            {"title": "ログイン情報を共有する", "project": "BT振興会-Mooovi", "assignee": "私"},
+            {"title": "見積項目を整理する", "project": "ボーネルンド", "assignee": "私"},
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="gdocs",
+            source_title="2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+        )
+        parent_titles = [x.get("title") for x in tasks if x.get("parent_origin_id") is None]
+        child_projects = [x.get("project") for x in tasks if x.get("parent_origin_id")]
+        self.assertEqual(len(parent_titles), 2)
+        self.assertTrue(any("BT振興会-Mooovi" in title for title in parent_titles))
+        self.assertTrue(any("ボーネルンド" in title for title in parent_titles))
+        self.assertEqual(child_projects.count("BT振興会-Mooovi"), 2)
+        self.assertEqual(child_projects.count("ボーネルンド"), 1)
+
     def test_run_with_doc_timeout_returns_function_result_when_alarm_is_stubbed(self):
         with patch.object(self.mod.signal, "signal"), patch.object(self.mod.signal, "setitimer"):
             result = self.mod.run_with_doc_timeout(1, lambda x: x + 1, 2)

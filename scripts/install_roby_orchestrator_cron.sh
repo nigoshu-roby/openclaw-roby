@@ -4,7 +4,7 @@ set -euo pipefail
 # Install persistent orchestrator cron jobs.
 # Defaults (safe baseline):
 # - self_growth : every hour at minute 5
-# - minutes_sync: every 2 hours at minute 15
+# - minutes_sync: every 2 hours at minute 15 (last 3 days, max 4)
 # - gmail_triage: every 30 minutes
 # - eval_harness: disabled by default (set ROBY_ORCH_ENABLE_EVAL=1)
 # - runbook_drill: disabled by default (set ROBY_ORCH_ENABLE_DRILL=1)
@@ -22,6 +22,8 @@ SECRET_WRAPPER="${ROBY_SECRET_WRAPPER:-$ROOT_DIR/scripts/roby-keychain-run.sh}"
 
 SELF_GROWTH_CRON="${SELF_GROWTH_CRON:-5 * * * *}"
 MINUTES_SYNC_CRON="${MINUTES_SYNC_CRON:-15 */2 * * *}"
+MINUTES_SYNC_DAYS="${MINUTES_SYNC_DAYS:-3}"
+MINUTES_SYNC_MAX="${MINUTES_SYNC_MAX:-4}"
 GMAIL_TRIAGE_CRON="${GMAIL_TRIAGE_CRON:-*/30 * * * *}"
 EVAL_HARNESS_CRON="${EVAL_HARNESS_CRON:-35 */6 * * *}"
 RUNBOOK_DRILL_CRON="${RUNBOOK_DRILL_CRON:-20 8 * * 1}"
@@ -48,8 +50,9 @@ TAG_FEEDBACK="ROBY_ORCH_CRON_FEEDBACK_SYNC"
 TAG_WEEKLY="ROBY_ORCH_CRON_WEEKLY_REPORT"
 
 BASE_ENV="ROBY_KEYCHAIN_SERVICE=\"$KEYCHAIN_SERVICE\" ROBY_SECRET_WRAPPER=\"$SECRET_WRAPPER\""
+MINUTES_ENV="${BASE_ENV} ROBY_ORCH_MINUTES_DAYS=\"$MINUTES_SYNC_DAYS\" ROBY_ORCH_MINUTES_CRON_MAX=\"$MINUTES_SYNC_MAX\""
 CMD_SELF="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" self_growth ${SELF_GROWTH_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_self_growth.log\" 2>&1"
-CMD_MINUTES="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" minutes_sync ${MINUTES_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_minutes_sync.log\" 2>&1"
+CMD_MINUTES="cd \"$ROOT_DIR\" && ${MINUTES_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" minutes_sync ${MINUTES_SYNC_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_minutes_sync.log\" 2>&1"
 CMD_GMAIL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" gmail_triage ${GMAIL_TRIAGE_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_gmail_triage.log\" 2>&1"
 CMD_EVAL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" eval_harness ${EVAL_HARNESS_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_eval_harness.log\" 2>&1"
 CMD_DRILL="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" runbook_drill ${RUNBOOK_DRILL_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_runbook_drill.log\" 2>&1"
