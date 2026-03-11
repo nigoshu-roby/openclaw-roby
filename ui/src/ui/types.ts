@@ -784,6 +784,14 @@ export type RobySelfGrowthLatestStatus = {
   postEvalStatus?: string;
   postMemorySyncStatus?: string;
   targetLabels?: string[];
+  rankedTargets?: Array<{
+    label: string;
+    target: string;
+    score: number;
+    latestPatchStatus: string;
+    successRate: number;
+    improvedRate: number;
+  }>;
   suggestedFiles?: string[];
   touchedFiles?: string[];
   summaryText?: string;

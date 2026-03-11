@@ -640,6 +640,26 @@ export function renderRoby(props: RobyProps) {
               <div class="muted">scope: ${selfGrowthLatest?.patchScopeStatus || "—"} / commit: ${selfGrowthLatest?.commitStatus || "—"}</div>
               <div class="muted">post-eval: ${selfGrowthLatest?.postEvalStatus || "—"} / post-memory: ${selfGrowthLatest?.postMemorySyncStatus || "—"}</div>
               <div class="muted" style="margin-top: 8px;">改善フォーカス</div>
+              ${
+                (selfGrowthLatest?.rankedTargets?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted">- 優先順位</div>
+                      ${selfGrowthLatest?.rankedTargets?.slice(0, 5).map(
+                        (row, index) => html`
+                          <div class="muted">
+                            ${index + 1}. ${row.label || row.target || "未分類"}
+                          </div>
+                          <div class="muted" style="padding-left: 12px;">
+                            score ${row.score.toFixed(1)} / 直近判定 ${selfGrowthPatchStatusLabel(row.latestPatchStatus)}
+                          </div>
+                          <div class="muted" style="padding-left: 12px;">
+                            success ${Math.round((row.successRate || 0) * 100)}% / improved ${Math.round((row.improvedRate || 0) * 100)}%
+                          </div>
+                        `,
+                      )}
+                    `
+                  : nothing
+              }
               <div class="muted">- targets: ${joinList(selfGrowthLatest?.targetLabels, "なし")}</div>
               <div class="muted">- candidate files: ${joinList(selfGrowthLatest?.suggestedFiles, "なし")}</div>
               <div class="muted">- touched files: ${joinList(selfGrowthLatest?.touchedFiles, "なし")}</div>

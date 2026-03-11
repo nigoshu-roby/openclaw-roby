@@ -839,6 +839,22 @@ async function buildRobyStatus() {
             .map((value) => (typeof value === "string" ? value.trim() : ""))
             .filter(Boolean)
         : [],
+      rankedTargets: Array.isArray(selfGrowthFocus.ranked_targets)
+        ? selfGrowthFocus.ranked_targets
+            .filter((row) => row && typeof row === "object")
+            .map((row) => {
+              const target = row as Record<string, unknown>;
+              return {
+                label: typeof target.label === "string" ? target.label : "",
+                target: typeof target.target === "string" ? target.target : "",
+                score: Number(target.score ?? 0),
+                latestPatchStatus:
+                  typeof target.latest_patch_status === "string" ? target.latest_patch_status : "",
+                successRate: Number(target.success_rate ?? 0),
+                improvedRate: Number(target.improved_rate ?? 0),
+              };
+            })
+        : [],
       suggestedFiles: Array.isArray(selfGrowthFocus.suggested_files)
         ? selfGrowthFocus.suggested_files
             .map((value) => (typeof value === "string" ? value.trim() : ""))
