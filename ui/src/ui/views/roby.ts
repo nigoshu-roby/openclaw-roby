@@ -113,6 +113,36 @@ function feedbackReasonLabel(code?: string | null) {
   }
 }
 
+function heartbeatEventTone(indicatorType?: string | null, status?: string | null) {
+  if ((indicatorType ?? "").trim() === "ok") {
+    return "ok";
+  }
+  if ((indicatorType ?? "").trim() === "error" || status === "failed") {
+    return "danger";
+  }
+  if ((indicatorType ?? "").trim() === "alert" || status === "sent") {
+    return "warn";
+  }
+  return "muted";
+}
+
+function heartbeatEventLabel(status?: string | null) {
+  switch ((status ?? "").trim()) {
+    case "ok-empty":
+      return "正常（空通知）";
+    case "ok-token":
+      return "正常";
+    case "sent":
+      return "送信あり";
+    case "skipped":
+      return "スキップ";
+    case "failed":
+      return "失敗";
+    default:
+      return status?.trim() || "未観測";
+  }
+}
+
 async function copyTextToClipboard(text: string): Promise<boolean> {
   if (!text.trim()) {
     return false;
@@ -174,6 +204,7 @@ export function renderRoby(props: RobyProps) {
   const feedbackLoop = ops?.feedbackLoop;
   const memorySync = ops?.memorySync;
   const localFirst = ops?.localFirst;
+  const heartbeatRuntime = ops?.heartbeatRuntime;
   const workspaceBootstrap = ops?.workspaceBootstrap;
   const weeklyLoaded = Boolean(weeklyStatus);
   const currentIssues = [
@@ -434,11 +465,41 @@ export function renderRoby(props: RobyProps) {
               ? "ok"
               : "warn",
         subtitle: memorySync?.present
-          ? `heartbeat ${memorySync?.heartbeatStatus ?? "unknown"} / unresolved ${memorySync?.unresolvedCount ?? 0}`
+          ? `heartbeat ${memorySync?.heartbeatStatus ?? "unknown"} / 未解消 ${memorySync?.unresolvedCount ?? 0} / cadence ${heartbeatRuntime?.every ?? "—"}`
           : "MEMORY / HEARTBEAT 未同期",
         meta: memorySync?.ts ? formatRelativeTimestamp(memorySync.ts) : "—",
         details: memorySync?.present
           ? html`
+              <div class="muted">heartbeat 設定</div>
+              <div class="muted">- 稼働: ${heartbeatRuntime?.enabled ? "有効" : "無効"}</div>
+              <div class="muted">- 間隔: ${heartbeatRuntime?.every ?? "—"} / セッション: ${heartbeatRuntime?.session ?? "—"}</div>
+              <div class="muted">- 対象: ${heartbeatRuntime?.target ?? "—"} / direct: ${heartbeatRuntime?.directPolicy ?? "—"}</div>
+              <div class="muted">- 稼働時間: ${heartbeatRuntime?.activeHoursSummary ?? "制限なし"}</div>
+              <div class="muted">- prompt: ${heartbeatRuntime?.promptPresent ? "設定済み" : "デフォルト"}</div>
+              <div class="muted" style="margin-top: 8px;">直近 heartbeat</div>
+              ${
+                heartbeatRuntime?.lastEvent
+                  ? html`
+                      <div class="row" style="gap: 8px; align-items: center; margin-top: 4px;">
+                        <span class="pill ${heartbeatEventTone(heartbeatRuntime.lastEvent.indicatorType, heartbeatRuntime.lastEvent.status)}">
+                          ${heartbeatEventLabel(heartbeatRuntime.lastEvent.status)}
+                        </span>
+                        <span class="muted">
+                          ${
+                            heartbeatRuntime.lastEvent.ts
+                              ? formatRelativeTimestamp(heartbeatRuntime.lastEvent.ts)
+                              : "時刻不明"
+                          }
+                        </span>
+                      </div>
+                      <div class="muted">- reason: ${heartbeatRuntime.lastEvent.reason?.trim() || "なし"}</div>
+                      <div class="muted">- channel: ${heartbeatRuntime.lastEvent.channel?.trim() || "なし"} / to: ${heartbeatRuntime.lastEvent.to?.trim() || "なし"}</div>
+                      <div class="muted">- duration: ${heartbeatRuntime.lastEvent.durationMs ?? "—"}ms / silent: ${heartbeatRuntime.lastEvent.silent ? "yes" : "no"}</div>
+                    `
+                  : html`
+                      <div class="muted">- 未観測</div>
+                    `
+              }
               <div class="muted">未解消: ${joinList(memorySync?.unresolved, "なし")}</div>
               <div class="muted">daily note: ${memorySync?.dailyNotePath || "未生成"}</div>
               ${

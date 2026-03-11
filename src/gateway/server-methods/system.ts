@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
-import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
+import { getHeartbeatsEnabled, setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -17,6 +17,7 @@ const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = path.resolve(moduleDir, "../../..");
 const OPENCLAW_REPO = process.env.OPENCLAW_REPO?.trim() || defaultRepoRoot;
 const ROBY_STATE_ROOT = path.join(os.homedir(), ".openclaw", "roby");
+const OPENCLAW_CONFIG_PATH = path.join(os.homedir(), ".openclaw", "openclaw.json");
 
 function normalizeEpochMs(value: number): number {
   return value > 0 && value < 1_000_000_000_000 ? value * 1000 : value;
@@ -48,6 +49,12 @@ async function readJsonFile(filePath: string): Promise<Record<string, unknown> |
   } catch {
     return null;
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function parseTimestampDate(value: unknown): Date | null {
@@ -247,6 +254,61 @@ async function buildWorkspaceBootstrapStatus() {
   };
 }
 
+function summarizeHeartbeatActiveHours(value: unknown): string {
+  const active = asRecord(value);
+  const start = typeof active.start === "string" ? active.start.trim() : "";
+  const end = typeof active.end === "string" ? active.end.trim() : "";
+  const timezone = typeof active.timezone === "string" ? active.timezone.trim() : "";
+  if (!start || !end) {
+    return "制限なし";
+  }
+  return `${start}–${end}${timezone ? ` (${timezone})` : ""}`;
+}
+
+async function buildHeartbeatRuntimeStatus() {
+  const config = await readJsonFile(OPENCLAW_CONFIG_PATH);
+  const defaults = asRecord(asRecord(asRecord(config).agents).defaults);
+  const heartbeat = asRecord(defaults.heartbeat);
+  const every =
+    typeof heartbeat.every === "string" && heartbeat.every.trim() ? heartbeat.every.trim() : "30m";
+  const session =
+    typeof heartbeat.session === "string" && heartbeat.session.trim()
+      ? heartbeat.session.trim()
+      : resolveMainSessionKeyFromConfig();
+  const target =
+    typeof heartbeat.target === "string" && heartbeat.target.trim()
+      ? heartbeat.target.trim()
+      : "none";
+  const directPolicy =
+    typeof heartbeat.directPolicy === "string" && heartbeat.directPolicy.trim()
+      ? heartbeat.directPolicy.trim()
+      : "allow";
+  const last = getLastHeartbeatEvent();
+  return {
+    present: true,
+    configured: Object.keys(heartbeat).length > 0,
+    enabled: getHeartbeatsEnabled() && every !== "0m",
+    every,
+    session,
+    target,
+    directPolicy,
+    promptPresent: typeof heartbeat.prompt === "string" && heartbeat.prompt.trim().length > 0,
+    activeHoursSummary: summarizeHeartbeatActiveHours(heartbeat.activeHours),
+    lastEvent: last
+      ? {
+          ts: last.ts ?? null,
+          status: last.status ?? "",
+          reason: last.reason ?? "",
+          channel: last.channel ?? "",
+          to: last.to ?? "",
+          indicatorType: last.indicatorType ?? "",
+          durationMs: last.durationMs ?? null,
+          silent: last.silent === true,
+        }
+      : null,
+  };
+}
+
 async function readOllamaStatus() {
   const cliPresent =
     spawnSync("sh", ["-lc", "command -v ollama >/dev/null 2>&1"], {
@@ -300,6 +362,7 @@ async function buildRobyStatus() {
   const ollama = await readOllamaStatus();
   const liveFreshness = await buildLiveFreshness();
   const workspaceBootstrap = await buildWorkspaceBootstrapStatus();
+  const heartbeatRuntime = await buildHeartbeatRuntimeStatus();
   const evalResults = Array.isArray(evalLatest?.results)
     ? (evalLatest.results as Array<Record<string, unknown>>)
     : [];
@@ -576,6 +639,7 @@ async function buildRobyStatus() {
       ).trim(),
       error: ollama.error,
     },
+    heartbeatRuntime,
     workspaceBootstrap,
   };
 }

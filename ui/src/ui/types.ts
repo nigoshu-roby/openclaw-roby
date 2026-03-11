@@ -720,6 +720,28 @@ export type RobyMemorySyncStatus = RobyOpsHealthSummary & {
   dailyNotePath?: string;
 };
 
+export type RobyHeartbeatRuntimeStatus = {
+  present: boolean;
+  configured: boolean;
+  enabled: boolean;
+  every: string;
+  session: string;
+  target: string;
+  directPolicy: string;
+  promptPresent: boolean;
+  activeHoursSummary: string;
+  lastEvent: null | {
+    ts: number | null;
+    status: string;
+    reason?: string;
+    channel?: string;
+    to?: string;
+    indicatorType?: string;
+    durationMs?: number | null;
+    silent?: boolean;
+  };
+};
+
 export type RobyWorkspaceBootstrapStatus = {
   present: boolean;
   ts: number | null;
@@ -743,6 +765,7 @@ export type RobyOpsStatus = {
   feedbackLoop: RobyFeedbackLoopStatus;
   memorySync: RobyMemorySyncStatus;
   localFirst: RobyLocalFirstStatus;
+  heartbeatRuntime: RobyHeartbeatRuntimeStatus;
   workspaceBootstrap: RobyWorkspaceBootstrapStatus;
 };
 

@@ -81,6 +81,10 @@ export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
 }
 
+export function getHeartbeatsEnabled() {
+  return heartbeatsEnabled;
+}
+
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 type HeartbeatAgent = {
   agentId: string;
