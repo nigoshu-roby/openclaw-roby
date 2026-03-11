@@ -632,6 +632,38 @@ export function renderRoby(props: RobyProps) {
                 (${selfGrowthLatest?.qualityDelta?.unresolvedDelta ?? 0})
               </div>
               <div class="muted">- improved: ${selfGrowthLatest?.qualityDelta?.improved ? "yes" : "no"}</div>
+              <div class="muted" style="margin-top: 8px;">フィードバック差分</div>
+              ${
+                selfGrowthLatest?.feedbackDelta?.measured
+                  ? html`
+                      <div class="muted">
+                        - reviewed ${selfGrowthLatest?.feedbackDelta?.reviewedBefore ?? 0}→${selfGrowthLatest?.feedbackDelta?.reviewedAfter ?? 0}
+                        (${selfGrowthLatest?.feedbackDelta?.reviewedDelta ?? 0})
+                      </div>
+                      <div class="muted">
+                        - actionable ${selfGrowthLatest?.feedbackDelta?.actionableBefore ?? 0}→${selfGrowthLatest?.feedbackDelta?.actionableAfter ?? 0}
+                        (${selfGrowthLatest?.feedbackDelta?.actionableDelta ?? 0})
+                      </div>
+                      <div class="muted">
+                        - good ${selfGrowthLatest?.feedbackDelta?.goodBefore ?? 0}→${selfGrowthLatest?.feedbackDelta?.goodAfter ?? 0}
+                        (${selfGrowthLatest?.feedbackDelta?.goodDelta ?? 0})
+                      </div>
+                      <div class="muted">
+                        - bad ${selfGrowthLatest?.feedbackDelta?.badBefore ?? 0}→${selfGrowthLatest?.feedbackDelta?.badAfter ?? 0}
+                        (${selfGrowthLatest?.feedbackDelta?.badDelta ?? 0})
+                      </div>
+                      <div class="muted">
+                        - missed ${selfGrowthLatest?.feedbackDelta?.missedBefore ?? 0}→${selfGrowthLatest?.feedbackDelta?.missedAfter ?? 0}
+                        (${selfGrowthLatest?.feedbackDelta?.missedDelta ?? 0})
+                      </div>
+                      <div class="muted">
+                        - improved: ${selfGrowthLatest?.feedbackDelta?.improved ? "yes" : "no"} / worsened: ${selfGrowthLatest?.feedbackDelta?.worsened ? "yes" : "no"}
+                      </div>
+                    `
+                  : html`
+                      <div class="muted">- 未観測</div>
+                    `
+              }
             `
           : nothing,
       })}

@@ -240,13 +240,68 @@ def summarize_feedback(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def summarize_self_growth(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_feedback_snapshot(row: Dict[str, Any]) -> Dict[str, Any]:
+    summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    return {
+        "ts": str(row.get("ts") or row.get("timestamp") or ""),
+        "reviewed_count": int(summary.get("reviewed_count", 0)),
+        "actionable_count": int(summary.get("actionable_count", 0)),
+        "good": int(counts.get("good", 0)),
+        "bad": int(counts.get("bad", 0)),
+        "missed": int(counts.get("missed", 0)),
+        "pending": int(counts.get("pending", 0)),
+    }
+
+
+def compute_feedback_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "before_ts": str(before.get("ts") or ""),
+        "after_ts": str(after.get("ts") or ""),
+        "reviewed_before": int(before.get("reviewed_count", 0)),
+        "reviewed_after": int(after.get("reviewed_count", 0)),
+        "reviewed_delta": int(after.get("reviewed_count", 0)) - int(before.get("reviewed_count", 0)),
+        "actionable_before": int(before.get("actionable_count", 0)),
+        "actionable_after": int(after.get("actionable_count", 0)),
+        "actionable_delta": int(after.get("actionable_count", 0)) - int(before.get("actionable_count", 0)),
+        "good_before": int(before.get("good", 0)),
+        "good_after": int(after.get("good", 0)),
+        "good_delta": int(after.get("good", 0)) - int(before.get("good", 0)),
+        "bad_before": int(before.get("bad", 0)),
+        "bad_after": int(after.get("bad", 0)),
+        "bad_delta": int(after.get("bad", 0)) - int(before.get("bad", 0)),
+        "missed_before": int(before.get("missed", 0)),
+        "missed_after": int(after.get("missed", 0)),
+        "missed_delta": int(after.get("missed", 0)) - int(before.get("missed", 0)),
+        "improved": (
+            int(after.get("bad", 0)) <= int(before.get("bad", 0))
+            and int(after.get("missed", 0)) <= int(before.get("missed", 0))
+            and int(after.get("good", 0)) >= int(before.get("good", 0))
+        ),
+        "worsened": (
+            int(after.get("bad", 0)) > int(before.get("bad", 0))
+            or int(after.get("missed", 0)) > int(before.get("missed", 0))
+        ),
+    }
+
+
+def summarize_self_growth(items: List[Dict[str, Any]], feedback_items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     if not items:
         return {"runs": 0}
     latest = items[-1]
     patch_status_counts: Dict[str, int] = {}
     scope_blocked_runs = 0
     success_runs = 0
+    feedback_snapshots = [
+        (parse_ts(row.get("ts") or row.get("timestamp")), build_feedback_snapshot(row))
+        for row in (feedback_items or [])
+        if isinstance(row, dict)
+    ]
+    feedback_snapshots = [(dt, snap) for dt, snap in feedback_snapshots if dt is not None]
+    measured_runs = 0
+    improved_runs = 0
+    worsened_runs = 0
+    latest_feedback_delta: Dict[str, Any] = {}
     for row in items:
         patch_status = str(row.get("patch_status") or "").strip() or "unknown"
         patch_status_counts[patch_status] = patch_status_counts.get(patch_status, 0) + 1
@@ -258,11 +313,34 @@ def summarize_self_growth(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             and str(row.get("restart_status") or "").strip() != "failed"
         ):
             success_runs += 1
+        run_dt = parse_ts(row.get("ts") or row.get("timestamp"))
+        if not run_dt or not feedback_snapshots:
+            continue
+        before = None
+        after = None
+        for snap_dt, snapshot in feedback_snapshots:
+            if snap_dt <= run_dt:
+                before = snapshot
+            elif snap_dt > run_dt and after is None:
+                after = snapshot
+                break
+        if before and after:
+            measured_runs += 1
+            delta = compute_feedback_delta(before, after)
+            if delta["improved"]:
+                improved_runs += 1
+            if delta["worsened"]:
+                worsened_runs += 1
+            if row is latest:
+                latest_feedback_delta = delta
     growth_focus = latest.get("growth_focus") if isinstance(latest.get("growth_focus"), dict) else {}
     return {
         "runs": len(items),
         "success_runs": success_runs,
         "scope_blocked_runs": scope_blocked_runs,
+        "measured_runs": measured_runs,
+        "improved_runs": improved_runs,
+        "worsened_runs": worsened_runs,
         "patch_status_counts": patch_status_counts,
         "latest": {
             "timestamp": str(latest.get("timestamp") or ""),
@@ -276,6 +354,7 @@ def summarize_self_growth(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             "touched_files": latest.get("touched_files") if isinstance(latest.get("touched_files"), list) else [],
             "target_labels": growth_focus.get("target_labels") if isinstance(growth_focus.get("target_labels"), list) else [],
             "quality_delta": latest.get("quality_delta") if isinstance(latest.get("quality_delta"), dict) else {},
+            "feedback_delta": latest_feedback_delta,
         },
     }
 
@@ -425,6 +504,19 @@ def build_markdown(report: Dict[str, Any]) -> str:
                 f"drill {quality_delta.get('drill_failed_before', 0)}→{quality_delta.get('drill_failed_after', 0)}, "
                 f"unresolved {quality_delta.get('unresolved_before', 0)}→{quality_delta.get('unresolved_after', 0)}"
             )
+        feedback_delta = latest_self_growth.get("feedback_delta") or {}
+        if isinstance(feedback_delta, dict) and feedback_delta:
+            lines.append(
+                "  - feedback_delta: "
+                f"good {feedback_delta.get('good_before', 0)}→{feedback_delta.get('good_after', 0)}, "
+                f"bad {feedback_delta.get('bad_before', 0)}→{feedback_delta.get('bad_after', 0)}, "
+                f"missed {feedback_delta.get('missed_before', 0)}→{feedback_delta.get('missed_after', 0)}"
+            )
+            lines.append(
+                "  - feedback_effect: "
+                f"improved={feedback_delta.get('improved', False)} "
+                f"worsened={feedback_delta.get('worsened', False)}"
+            )
     lines.append("")
     lines.extend(
         [
@@ -484,7 +576,7 @@ def main() -> int:
         "drill": summarize_drill(drill_items),
         "ab": summarize_ab(ab_items),
         "feedback": summarize_feedback(feedback_items),
-        "self_growth": summarize_self_growth(self_growth_items),
+        "self_growth": summarize_self_growth(self_growth_items, feedback_items),
         "audit": audit_report,
         "ops": summarize_ops_from_audit(audit_events),
     }

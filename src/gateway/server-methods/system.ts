@@ -141,6 +141,106 @@ async function readJsonLinesLastEntry(filePath: string): Promise<Record<string, 
   return null;
 }
 
+async function readJsonLines(filePath: string): Promise<Array<Record<string, unknown>>> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const out: Array<Record<string, unknown>> = [];
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          out.push(parsed as Record<string, unknown>);
+        }
+      } catch {
+        continue;
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function buildFeedbackSnapshot(row: Record<string, unknown>) {
+  const summary = asRecord(row.summary);
+  const counts = asRecord(summary.counts);
+  const tsValue =
+    typeof row.ts === "string" ? row.ts : typeof row.timestamp === "string" ? row.timestamp : "";
+  return {
+    ts: tsValue,
+    reviewedCount: Number(summary.reviewed_count ?? 0),
+    actionableCount: Number(summary.actionable_count ?? 0),
+    good: Number(counts.good ?? 0),
+    bad: Number(counts.bad ?? 0),
+    missed: Number(counts.missed ?? 0),
+    pending: Number(counts.pending ?? 0),
+  };
+}
+
+function computeFeedbackDelta(
+  before: ReturnType<typeof buildFeedbackSnapshot>,
+  after: ReturnType<typeof buildFeedbackSnapshot>,
+) {
+  const goodBefore = Number(before.good ?? 0);
+  const goodAfter = Number(after.good ?? 0);
+  const badBefore = Number(before.bad ?? 0);
+  const badAfter = Number(after.bad ?? 0);
+  const missedBefore = Number(before.missed ?? 0);
+  const missedAfter = Number(after.missed ?? 0);
+  return {
+    beforeTs: before.ts,
+    afterTs: after.ts,
+    reviewedBefore: Number(before.reviewedCount ?? 0),
+    reviewedAfter: Number(after.reviewedCount ?? 0),
+    reviewedDelta: Number(after.reviewedCount ?? 0) - Number(before.reviewedCount ?? 0),
+    actionableBefore: Number(before.actionableCount ?? 0),
+    actionableAfter: Number(after.actionableCount ?? 0),
+    actionableDelta: Number(after.actionableCount ?? 0) - Number(before.actionableCount ?? 0),
+    goodBefore,
+    goodAfter,
+    goodDelta: goodAfter - goodBefore,
+    badBefore,
+    badAfter,
+    badDelta: badAfter - badBefore,
+    missedBefore,
+    missedAfter,
+    missedDelta: missedAfter - missedBefore,
+    improved: badAfter <= badBefore && missedAfter <= missedBefore && goodAfter >= goodBefore,
+    worsened: badAfter > badBefore || missedAfter > missedBefore,
+    measured: true,
+  };
+}
+
+function findFeedbackDeltaAroundRun(runTs: unknown, feedbackItems: Array<Record<string, unknown>>) {
+  const runDate = parseTimestampDate(runTs);
+  if (!runDate || feedbackItems.length === 0) {
+    return null;
+  }
+  let before: ReturnType<typeof buildFeedbackSnapshot> | null = null;
+  let after: ReturnType<typeof buildFeedbackSnapshot> | null = null;
+  for (const row of feedbackItems) {
+    const snapDate = parseTimestampDate(row.ts ?? row.timestamp);
+    if (!snapDate) {
+      continue;
+    }
+    const snapshot = buildFeedbackSnapshot(row);
+    if (snapDate.getTime() <= runDate.getTime()) {
+      before = snapshot;
+      continue;
+    }
+    after = snapshot;
+    break;
+  }
+  if (!before || !after) {
+    return null;
+  }
+  return computeFeedbackDelta(before, after);
+}
+
 function ageMinutesFrom(date: Date | null, nowMs: number): number | null {
   if (!date) {
     return null;
@@ -381,6 +481,9 @@ async function buildRobyStatus() {
     path.join(ROBY_STATE_ROOT, "reports", "weekly_latest.json"),
   );
   const feedbackLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "feedback_sync_state.json"));
+  const feedbackHistory = await readJsonLines(
+    path.join(ROBY_STATE_ROOT, "feedback_sync_runs.jsonl"),
+  );
   const memoryLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "memory_sync_state.json"));
   const selfGrowthLatest = await readJsonLinesLastEntry(
     path.join(ROBY_STATE_ROOT, "self_growth_runs.jsonl"),
@@ -461,6 +564,10 @@ async function buildRobyStatus() {
     : [];
   const selfGrowthFocus = asRecord(selfGrowthLatest?.growth_focus);
   const selfGrowthQualityDelta = asRecord(selfGrowthLatest?.quality_delta);
+  const selfGrowthFeedbackDelta = findFeedbackDeltaAroundRun(
+    selfGrowthLatest?.ts ?? selfGrowthLatest?.timestamp,
+    feedbackHistory,
+  );
 
   return {
     generatedAtMs: Date.now(),
@@ -747,6 +854,32 @@ async function buildRobyStatus() {
         unresolvedDelta: Number(selfGrowthQualityDelta.unresolved_delta ?? 0),
         improved: Boolean(selfGrowthQualityDelta.improved),
       },
+      feedbackDelta: selfGrowthFeedbackDelta
+        ? {
+            beforeTs: selfGrowthFeedbackDelta.beforeTs,
+            afterTs: selfGrowthFeedbackDelta.afterTs,
+            reviewedBefore: selfGrowthFeedbackDelta.reviewedBefore,
+            reviewedAfter: selfGrowthFeedbackDelta.reviewedAfter,
+            reviewedDelta: selfGrowthFeedbackDelta.reviewedDelta,
+            actionableBefore: selfGrowthFeedbackDelta.actionableBefore,
+            actionableAfter: selfGrowthFeedbackDelta.actionableAfter,
+            actionableDelta: selfGrowthFeedbackDelta.actionableDelta,
+            goodBefore: selfGrowthFeedbackDelta.goodBefore,
+            goodAfter: selfGrowthFeedbackDelta.goodAfter,
+            goodDelta: selfGrowthFeedbackDelta.goodDelta,
+            badBefore: selfGrowthFeedbackDelta.badBefore,
+            badAfter: selfGrowthFeedbackDelta.badAfter,
+            badDelta: selfGrowthFeedbackDelta.badDelta,
+            missedBefore: selfGrowthFeedbackDelta.missedBefore,
+            missedAfter: selfGrowthFeedbackDelta.missedAfter,
+            missedDelta: selfGrowthFeedbackDelta.missedDelta,
+            improved: selfGrowthFeedbackDelta.improved,
+            worsened: selfGrowthFeedbackDelta.worsened,
+            measured: true,
+          }
+        : {
+            measured: false,
+          },
       summaryText:
         typeof selfGrowthFocus.summary_text === "string" ? selfGrowthFocus.summary_text : "",
     },

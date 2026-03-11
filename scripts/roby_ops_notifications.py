@@ -90,6 +90,7 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
     eval_s = report.get("eval") or {}
     drill_s = report.get("drill") or {}
     feedback_s = report.get("feedback") or {}
+    self_growth_s = report.get("self_growth") or {}
     audit_s = report.get("audit") or {}
     freshness = report.get("freshness") or {}
     ab_s = report.get("ab") or {}
@@ -139,6 +140,24 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
         if feedback_s.get("improvement_targets")
         else "・next improvements: なし",
     ]
+    latest_self_growth = self_growth_s.get("latest") if isinstance(self_growth_s.get("latest"), dict) else {}
+    feedback_delta = (
+        latest_self_growth.get("feedback_delta")
+        if isinstance(latest_self_growth.get("feedback_delta"), dict)
+        else {}
+    )
+    self_growth_rows = [
+        f"・runs: {self_growth_s.get('runs', 0)} / success={self_growth_s.get('success_runs', 0)} / measured={self_growth_s.get('measured_runs', 0)}",
+        f"・improved / worsened: {self_growth_s.get('improved_runs', 0)} / {self_growth_s.get('worsened_runs', 0)}",
+        (
+            "・latest feedback delta: "
+            f"good {feedback_delta.get('good_before', 0)}→{feedback_delta.get('good_after', 0)} / "
+            f"bad {feedback_delta.get('bad_before', 0)}→{feedback_delta.get('bad_after', 0)} / "
+            f"missed {feedback_delta.get('missed_before', 0)}→{feedback_delta.get('missed_after', 0)}"
+        )
+        if feedback_delta
+        else "・latest feedback delta: 未観測",
+    ]
     return build_slack_message(
         "PBS 週次運用レポート",
         status,
@@ -148,5 +167,6 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
             ("運用実行数", ops_rows),
             ("鮮度とAB Router", freshness_rows),
             ("Neuronic評価", feedback_rows),
+            ("Self Growth 効果", self_growth_rows),
         ],
     )

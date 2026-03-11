@@ -796,6 +796,28 @@ export type RobySelfGrowthLatestStatus = {
     unresolvedDelta?: number;
     improved?: boolean;
   };
+  feedbackDelta?: {
+    measured?: boolean;
+    beforeTs?: string;
+    afterTs?: string;
+    reviewedBefore?: number;
+    reviewedAfter?: number;
+    reviewedDelta?: number;
+    actionableBefore?: number;
+    actionableAfter?: number;
+    actionableDelta?: number;
+    goodBefore?: number;
+    goodAfter?: number;
+    goodDelta?: number;
+    badBefore?: number;
+    badAfter?: number;
+    badDelta?: number;
+    missedBefore?: number;
+    missedAfter?: number;
+    missedDelta?: number;
+    improved?: boolean;
+    worsened?: boolean;
+  };
 };
 
 export type RobyOpsStatus = {
