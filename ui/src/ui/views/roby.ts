@@ -143,6 +143,27 @@ function heartbeatEventLabel(status?: string | null) {
   }
 }
 
+function selfGrowthPatchStatusLabel(status?: string | null) {
+  switch ((status ?? "").trim()) {
+    case "no_change":
+      return "変更不要";
+    case "applied":
+      return "変更適用";
+    case "out_of_scope":
+      return "範囲外";
+    case "failed":
+    case "agent_failed":
+    case "apply_failed":
+    case "invalid":
+    case "invalid_response":
+      return "失敗";
+    case "skipped":
+      return "スキップ";
+    default:
+      return status?.trim() || "—";
+  }
+}
+
 async function copyTextToClipboard(text: string): Promise<boolean> {
   if (!text.trim()) {
     return false;
@@ -634,7 +655,7 @@ export function renderRoby(props: RobyProps) {
                           </div>
                           <div class="muted" style="padding-left: 12px;">
                             improved ${row.improvedRuns}/${row.measuredRuns}
-                            (${Math.round((row.improvedRate || 0) * 100)}%) / latest ${row.latestPatchStatus || "—"}
+                            (${Math.round((row.improvedRate || 0) * 100)}%) / 直近判定 ${selfGrowthPatchStatusLabel(row.latestPatchStatus)}
                           </div>
                         `,
                       )}

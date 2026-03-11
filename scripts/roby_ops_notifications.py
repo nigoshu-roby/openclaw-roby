@@ -17,6 +17,21 @@ def _clean_value(value: Any, fallback: str = "-") -> str:
     return text or fallback
 
 
+def _self_growth_patch_status_label(value: Any) -> str:
+    text = str(value or "").strip()
+    return {
+        "no_change": "変更不要",
+        "applied": "変更適用",
+        "out_of_scope": "範囲外",
+        "failed": "失敗",
+        "agent_failed": "失敗",
+        "apply_failed": "失敗",
+        "invalid": "失敗",
+        "invalid_response": "失敗",
+        "skipped": "スキップ",
+    }.get(text, text or "-")
+
+
 def build_slack_message(
     title: str,
     status: str,
@@ -166,7 +181,8 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
                 (
                     f"{str(row.get('label') or '-')} "
                     f"{int(row.get('success_runs', 0) or 0)}/{int(row.get('runs', 0) or 0)} "
-                    f"({float(row.get('success_rate', 0.0) or 0.0):.0%})"
+                    f"({float(row.get('success_rate', 0.0) or 0.0):.0%}) "
+                    f"直近判定:{_self_growth_patch_status_label(row.get('latest_patch_status'))}"
                 )
                 for row in target_stats[:3]
                 if isinstance(row, dict)

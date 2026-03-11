@@ -131,7 +131,7 @@ class TestRobyWeeklyReport(TestCase):
         self.assertIn("feedback_delta: good 2→4, bad 3→2, missed 1→0", markdown)
         self.assertIn("feedback_effect: improved=True worsened=False", markdown)
         self.assertIn("target performance:", markdown)
-        self.assertIn("gmail_promo_filtering: runs=2 success=2 (100%) improved=1/1 latest=applied", markdown)
+        self.assertIn("gmail_promo_filtering: runs=2 success=2 (100%) improved=1/1 latest=変更適用", markdown)
         self.assertIn("Self Growth 効果", slack)
         self.assertIn("latest feedback delta: good 2→4 / bad 3→2 / missed 1→0", slack)
         self.assertIn("top target performance: gmail_promo_filtering 2/2 (100%)", slack)

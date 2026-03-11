@@ -285,6 +285,21 @@ def compute_feedback_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dic
     }
 
 
+def humanize_self_growth_patch_status(status: Any) -> str:
+    value = str(status or "").strip()
+    return {
+        "no_change": "変更不要",
+        "applied": "変更適用",
+        "out_of_scope": "範囲外",
+        "failed": "失敗",
+        "agent_failed": "失敗",
+        "apply_failed": "失敗",
+        "invalid": "失敗",
+        "invalid_response": "失敗",
+        "skipped": "スキップ",
+    }.get(value, value or "-")
+
+
 def summarize_self_growth_targets(
     items: List[Dict[str, Any]], feedback_items: Optional[List[Dict[str, Any]]] = None
 ) -> List[Dict[str, Any]]:
@@ -595,7 +610,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
                 f"({float(row.get('success_rate', 0.0) or 0.0):.0%}) "
                 f"improved={int(row.get('improved_runs', 0) or 0)}/"
                 f"{int(row.get('measured_runs', 0) or 0)} "
-                f"latest={str(row.get('latest_patch_status') or '-')}"
+                f"latest={humanize_self_growth_patch_status(row.get('latest_patch_status'))}"
             )
     latest_self_growth = self_growth_s.get("latest") or {}
     if isinstance(latest_self_growth, dict) and latest_self_growth:
