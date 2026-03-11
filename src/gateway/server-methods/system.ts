@@ -568,6 +568,10 @@ async function buildRobyStatus() {
     selfGrowthLatest?.ts ?? selfGrowthLatest?.timestamp,
     feedbackHistory,
   );
+  const weeklySelfGrowth = asRecord(weeklyLatest?.self_growth);
+  const weeklySelfGrowthTargetStats = Array.isArray(weeklySelfGrowth.target_stats)
+    ? (weeklySelfGrowth.target_stats as Array<Record<string, unknown>>)
+    : [];
 
   return {
     generatedAtMs: Date.now(),
@@ -880,6 +884,24 @@ async function buildRobyStatus() {
         : {
             measured: false,
           },
+      targetPerformance: weeklySelfGrowthTargetStats
+        .filter((row) => row && typeof row === "object")
+        .map((row) => ({
+          label: typeof row.label === "string" ? row.label : "",
+          runs: Number(row.runs ?? 0),
+          successRuns: Number(row.success_runs ?? 0),
+          successRate: Number(row.success_rate ?? 0),
+          measuredRuns: Number(row.measured_runs ?? 0),
+          improvedRuns: Number(row.improved_runs ?? 0),
+          worsenedRuns: Number(row.worsened_runs ?? 0),
+          improvedRate: Number(row.improved_rate ?? 0),
+          latestTs:
+            typeof row.latest_ts === "string" || typeof row.latest_ts === "number"
+              ? parseTimestampMs(row.latest_ts)
+              : null,
+          latestPatchStatus:
+            typeof row.latest_patch_status === "string" ? row.latest_patch_status : "",
+        })),
       summaryText:
         typeof selfGrowthFocus.summary_text === "string" ? selfGrowthFocus.summary_text : "",
     },

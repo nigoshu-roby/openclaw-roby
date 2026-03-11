@@ -285,6 +285,105 @@ def compute_feedback_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dic
     }
 
 
+def summarize_self_growth_targets(
+    items: List[Dict[str, Any]], feedback_items: Optional[List[Dict[str, Any]]] = None
+) -> List[Dict[str, Any]]:
+    target_stats: Dict[str, Dict[str, Any]] = {}
+    feedback_snapshots = [
+        (parse_ts(row.get("ts") or row.get("timestamp")), build_feedback_snapshot(row))
+        for row in (feedback_items or [])
+        if isinstance(row, dict)
+    ]
+    feedback_snapshots = [(dt, snap) for dt, snap in feedback_snapshots if dt is not None]
+
+    def ensure_target(label: str) -> Dict[str, Any]:
+        return target_stats.setdefault(
+            label,
+            {
+                "label": label,
+                "runs": 0,
+                "success_runs": 0,
+                "measured_runs": 0,
+                "improved_runs": 0,
+                "worsened_runs": 0,
+                "latest_ts": "",
+                "latest_patch_status": "",
+            },
+        )
+
+    for row in items:
+        growth_focus = row.get("growth_focus") if isinstance(row.get("growth_focus"), dict) else {}
+        labels = growth_focus.get("target_labels") if isinstance(growth_focus.get("target_labels"), list) else []
+        normalized_labels = [
+            str(label).strip()
+            for label in labels
+            if str(label).strip()
+        ]
+        if not normalized_labels:
+            continue
+
+        patch_status = str(row.get("patch_status") or "").strip()
+        test_status = str(row.get("test_status") or "").strip()
+        restart_status = str(row.get("restart_status") or "").strip()
+        is_success = (
+            patch_status in {"applied", "no_change"}
+            and test_status != "failed"
+            and restart_status != "failed"
+        )
+
+        delta: Optional[Dict[str, Any]] = None
+        run_dt = parse_ts(row.get("ts") or row.get("timestamp"))
+        if run_dt and feedback_snapshots:
+            before = None
+            after = None
+            for snap_dt, snapshot in feedback_snapshots:
+                if snap_dt <= run_dt:
+                    before = snapshot
+                elif snap_dt > run_dt and after is None:
+                    after = snapshot
+                    break
+            if before and after:
+                delta = compute_feedback_delta(before, after)
+
+        timestamp = str(row.get("timestamp") or row.get("ts") or "")
+        for label in normalized_labels:
+            stats = ensure_target(label)
+            stats["runs"] += 1
+            if is_success:
+                stats["success_runs"] += 1
+            if delta:
+                stats["measured_runs"] += 1
+                if delta["improved"]:
+                    stats["improved_runs"] += 1
+                if delta["worsened"]:
+                    stats["worsened_runs"] += 1
+            stats["latest_ts"] = timestamp
+            stats["latest_patch_status"] = patch_status
+
+    out: List[Dict[str, Any]] = []
+    for row in target_stats.values():
+        runs = int(row["runs"])
+        success_runs = int(row["success_runs"])
+        measured_runs = int(row["measured_runs"])
+        improved_runs = int(row["improved_runs"])
+        worsened_runs = int(row["worsened_runs"])
+        out.append(
+            {
+                "label": str(row["label"]),
+                "runs": runs,
+                "success_runs": success_runs,
+                "success_rate": round(success_runs / runs, 4) if runs else 0.0,
+                "measured_runs": measured_runs,
+                "improved_runs": improved_runs,
+                "worsened_runs": worsened_runs,
+                "improved_rate": round(improved_runs / measured_runs, 4) if measured_runs else 0.0,
+                "latest_ts": str(row["latest_ts"]),
+                "latest_patch_status": str(row["latest_patch_status"]),
+            }
+        )
+    return sorted(out, key=lambda row: (-int(row["runs"]), str(row["label"])))
+
+
 def summarize_self_growth(items: List[Dict[str, Any]], feedback_items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     if not items:
         return {"runs": 0}
@@ -342,6 +441,7 @@ def summarize_self_growth(items: List[Dict[str, Any]], feedback_items: Optional[
         "improved_runs": improved_runs,
         "worsened_runs": worsened_runs,
         "patch_status_counts": patch_status_counts,
+        "target_stats": summarize_self_growth_targets(items, feedback_items),
         "latest": {
             "timestamp": str(latest.get("timestamp") or ""),
             "patch_status": str(latest.get("patch_status") or "").strip(),
@@ -481,6 +581,22 @@ def build_markdown(report: Dict[str, Any]) -> str:
         lines.append("- patch statuses:")
         for status, count in sorted(patch_counts.items(), key=lambda item: (-int(item[1]), str(item[0]))):
             lines.append(f"  - {status}: {count}")
+    target_stats = self_growth_s.get("target_stats") or []
+    if isinstance(target_stats, list) and target_stats:
+        lines.append("- target performance:")
+        for row in target_stats[:5]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                "  - "
+                f"{str(row.get('label') or '-').strip()}: "
+                f"runs={int(row.get('runs', 0) or 0)} "
+                f"success={int(row.get('success_runs', 0) or 0)} "
+                f"({float(row.get('success_rate', 0.0) or 0.0):.0%}) "
+                f"improved={int(row.get('improved_runs', 0) or 0)}/"
+                f"{int(row.get('measured_runs', 0) or 0)} "
+                f"latest={str(row.get('latest_patch_status') or '-')}"
+            )
     latest_self_growth = self_growth_s.get("latest") or {}
     if isinstance(latest_self_growth, dict) and latest_self_growth:
         lines.append("- latest:")

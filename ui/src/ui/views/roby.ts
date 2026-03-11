@@ -622,6 +622,25 @@ export function renderRoby(props: RobyProps) {
               <div class="muted">- targets: ${joinList(selfGrowthLatest?.targetLabels, "なし")}</div>
               <div class="muted">- candidate files: ${joinList(selfGrowthLatest?.suggestedFiles, "なし")}</div>
               <div class="muted">- touched files: ${joinList(selfGrowthLatest?.touchedFiles, "なし")}</div>
+              ${
+                (selfGrowthLatest?.targetPerformance?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted" style="margin-top: 8px;">改善対象ごとの成功率</div>
+                      ${selfGrowthLatest?.targetPerformance?.slice(0, 5).map(
+                        (row) => html`
+                          <div class="muted">
+                            - ${row.label || "未分類"}: success ${row.successRuns}/${row.runs}
+                            (${Math.round((row.successRate || 0) * 100)}%)
+                          </div>
+                          <div class="muted" style="padding-left: 12px;">
+                            improved ${row.improvedRuns}/${row.measuredRuns}
+                            (${Math.round((row.improvedRate || 0) * 100)}%) / latest ${row.latestPatchStatus || "—"}
+                          </div>
+                        `,
+                      )}
+                    `
+                  : nothing
+              }
               <div class="muted" style="margin-top: 8px;">品質差分</div>
               <div class="muted">
                 - eval ${selfGrowthLatest?.qualityDelta?.evaluationFailedBefore ?? 0}→${selfGrowthLatest?.qualityDelta?.evaluationFailedAfter ?? 0}

@@ -158,6 +158,20 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
         if feedback_delta
         else "・latest feedback delta: 未観測",
     ]
+    target_stats = self_growth_s.get("target_stats") or []
+    if isinstance(target_stats, list) and target_stats:
+        self_growth_rows.append(
+            "・top target performance: "
+            + " / ".join(
+                (
+                    f"{str(row.get('label') or '-')} "
+                    f"{int(row.get('success_runs', 0) or 0)}/{int(row.get('runs', 0) or 0)} "
+                    f"({float(row.get('success_rate', 0.0) or 0.0):.0%})"
+                )
+                for row in target_stats[:3]
+                if isinstance(row, dict)
+            )
+        )
     return build_slack_message(
         "PBS 週次運用レポート",
         status,

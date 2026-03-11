@@ -818,6 +818,18 @@ export type RobySelfGrowthLatestStatus = {
     improved?: boolean;
     worsened?: boolean;
   };
+  targetPerformance?: Array<{
+    label: string;
+    runs: number;
+    successRuns: number;
+    successRate: number;
+    measuredRuns: number;
+    improvedRuns: number;
+    worsenedRuns: number;
+    improvedRate: number;
+    latestTs: number | null;
+    latestPatchStatus: string;
+  }>;
 };
 
 export type RobyOpsStatus = {

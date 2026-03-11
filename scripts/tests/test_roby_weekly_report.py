@@ -71,6 +71,12 @@ class TestRobyWeeklyReport(TestCase):
         self.assertEqual(delta["missed_before"], 1)
         self.assertEqual(delta["missed_after"], 0)
         self.assertTrue(delta["improved"])
+        target_stats = summary["target_stats"]
+        self.assertEqual(len(target_stats), 1)
+        self.assertEqual(target_stats[0]["label"], "gmail_promo_filtering")
+        self.assertEqual(target_stats[0]["runs"], 1)
+        self.assertEqual(target_stats[0]["success_runs"], 1)
+        self.assertEqual(target_stats[0]["improved_runs"], 1)
 
     def test_build_markdown_includes_feedback_effect(self):
         report = {
@@ -100,6 +106,19 @@ class TestRobyWeeklyReport(TestCase):
                         "worsened": False,
                     },
                 },
+                "target_stats": [
+                    {
+                        "label": "gmail_promo_filtering",
+                        "runs": 2,
+                        "success_runs": 2,
+                        "success_rate": 1.0,
+                        "measured_runs": 1,
+                        "improved_runs": 1,
+                        "worsened_runs": 0,
+                        "improved_rate": 1.0,
+                        "latest_patch_status": "applied",
+                    }
+                ],
             },
             "audit": {"ok": True, "files": 1, "errors": 0},
             "freshness": {"present": True, "ok": True, "stale_count": 0, "stale_components": []},
@@ -111,8 +130,11 @@ class TestRobyWeeklyReport(TestCase):
 
         self.assertIn("feedback_delta: good 2→4, bad 3→2, missed 1→0", markdown)
         self.assertIn("feedback_effect: improved=True worsened=False", markdown)
+        self.assertIn("target performance:", markdown)
+        self.assertIn("gmail_promo_filtering: runs=2 success=2 (100%) improved=1/1 latest=applied", markdown)
         self.assertIn("Self Growth 効果", slack)
         self.assertIn("latest feedback delta: good 2→4 / bad 3→2 / missed 1→0", slack)
+        self.assertIn("top target performance: gmail_promo_filtering 2/2 (100%)", slack)
 
 
 if __name__ == "__main__":
