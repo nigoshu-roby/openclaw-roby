@@ -26,6 +26,73 @@ KEYCHAIN_SECRET_KEYS = {
 }
 FAILURE_STATES = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response"}
 RUN_ENTRY_SCHEMA_VERSION = 2
+TARGET_FILE_RULES: Dict[str, List[str]] = {
+    "task_filtering": [
+        "scripts/roby-minutes.py",
+        "skills/roby-mail/scripts/gmail_triage.py",
+        "scripts/roby-feedback-sync.py",
+    ],
+    "project_classification": [
+        "scripts/roby-minutes.py",
+        "scripts/tests/test_roby_minutes_quality.py",
+    ],
+    "task_granularity_split": [
+        "scripts/roby-minutes.py",
+        "scripts/tests/test_roby_minutes_quality.py",
+    ],
+    "task_granularity_merge": [
+        "scripts/roby-minutes.py",
+        "scripts/tests/test_roby_minutes_quality.py",
+    ],
+    "deduplication": [
+        "scripts/roby-minutes.py",
+        "skills/roby-mail/scripts/gmail_triage.py",
+    ],
+    "source_grounding": [
+        "scripts/roby-minutes.py",
+        "scripts/roby_local_first.py",
+    ],
+    "task_rewrite": [
+        "scripts/roby-minutes.py",
+        "scripts/roby_local_first.py",
+    ],
+    "gmail_promo_filtering": [
+        "skills/roby-mail/scripts/gmail_triage.py",
+        "skills/roby-mail/scripts/test_gmail_triage_classify.py",
+    ],
+    "gmail_review_vs_task": [
+        "skills/roby-mail/scripts/gmail_triage.py",
+        "skills/roby-mail/scripts/test_gmail_triage_classify.py",
+        "skills/roby-mail/scripts/test_gmail_triage_neuronic.py",
+    ],
+    "gmail_reply_detection": [
+        "skills/roby-mail/scripts/gmail_triage.py",
+        "skills/roby-mail/scripts/test_gmail_triage_classify.py",
+    ],
+    "gmail_notice_priority": [
+        "skills/roby-mail/scripts/gmail_triage.py",
+        "skills/roby-mail/scripts/test_gmail_triage_classify.py",
+    ],
+    "gmail_finance_contract_detection": [
+        "skills/roby-mail/scripts/gmail_triage.py",
+        "skills/roby-mail/scripts/test_gmail_triage_classify.py",
+    ],
+}
+LIVE_COMPONENT_FILE_RULES: Dict[str, List[str]] = {
+    "self_growth": ["scripts/roby-self-growth.py", "scripts/tests/test_roby_self_growth.py"],
+    "minutes_sync": ["scripts/roby-minutes.py", "scripts/roby-orchestrator.py"],
+    "gmail_triage": ["skills/roby-mail/scripts/gmail_triage.py", "scripts/roby-orchestrator.py"],
+    "notion_sync": ["scripts/roby-notion-sync.py"],
+    "feedback_sync": ["scripts/roby-feedback-sync.py"],
+    "weekly_report": ["scripts/roby-weekly-report.py", "scripts/roby_ops_notifications.py"],
+}
+ROUTE_FILE_RULES: Dict[str, List[str]] = {
+    "qa_gemini": ["scripts/roby-orchestrator.py", "scripts/roby-eval-harness.py"],
+    "coding_codex": ["scripts/roby-orchestrator.py", "scripts/roby-self-growth.py"],
+    "minutes_pipeline": ["scripts/roby-minutes.py", "scripts/roby_local_first.py"],
+    "gmail_pipeline": ["skills/roby-mail/scripts/gmail_triage.py", "scripts/roby-orchestrator.py"],
+    "auto": ["scripts/roby-orchestrator.py"],
+}
 
 
 def read_json(path: Path) -> Dict[str, Any]:
@@ -50,13 +117,26 @@ def _format_growth_target(target: Dict[str, Any]) -> str:
     return line
 
 
-def summarize_growth_focus(
+def _dedupe_keep_order(values: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for value in values:
+        key = value.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def collect_growth_focus(
     memory_latest: Dict[str, Any],
     feedback_latest: Dict[str, Any],
     eval_latest: Dict[str, Any],
     drill_latest: Dict[str, Any],
-) -> str:
+) -> Dict[str, Any]:
     lines: List[str] = ["GROWTH FOCUS"]
+    suggested_files: List[str] = []
 
     feedback_summary = feedback_latest.get("summary") if isinstance(feedback_latest.get("summary"), dict) else {}
     improvement_targets = (
@@ -80,12 +160,18 @@ def summarize_growth_focus(
         for target in improvement_targets[:3]:
             if isinstance(target, dict):
                 lines.append(_format_growth_target(target))
+                suggested_files.extend(TARGET_FILE_RULES.get(str(target.get("target") or "").strip(), []))
 
     unresolved = memory_latest.get("unresolved") if isinstance(memory_latest.get("unresolved"), list) else []
     if unresolved:
         lines.append("Unresolved heartbeat:")
         for item in unresolved[:3]:
-            lines.append(f"- {str(item).strip()}")
+            item_text = str(item).strip()
+            lines.append(f"- {item_text}")
+            if item_text.startswith("stale component:"):
+                components = [part.strip() for part in item_text.split(":", 1)[1].split("/") if part.strip()]
+                for component in components:
+                    suggested_files.extend(LIVE_COMPONENT_FILE_RULES.get(component, []))
 
     eval_failed = int(eval_latest.get("failed") or 0)
     eval_total = int(eval_latest.get("total") or 0)
@@ -95,6 +181,7 @@ def summarize_growth_focus(
         for route, stats in eval_routes.items():
             if isinstance(stats, dict) and int(stats.get("failed") or 0) > 0:
                 route_failures.append(f"{route}:{int(stats.get('failed') or 0)}")
+                suggested_files.extend(ROUTE_FILE_RULES.get(route, []))
         line = f"Evaluation: {eval_failed}/{eval_total} failed"
         if route_failures:
             line += f" | routes={', '.join(route_failures[:4])}"
@@ -129,7 +216,35 @@ def summarize_growth_focus(
 
     if len(lines) == 1:
         lines.append("- no current focus")
-    return "\n".join(lines)
+    suggested_files = _dedupe_keep_order(suggested_files)
+    if suggested_files:
+        lines.append("Candidate files:")
+        for path in suggested_files[:8]:
+            lines.append(f"- {path}")
+    return {
+        "summary_text": "\n".join(lines),
+        "suggested_files": suggested_files,
+        "target_labels": [
+            str((target or {}).get("label") or (target or {}).get("target") or "").strip()
+            for target in improvement_targets[:3]
+            if isinstance(target, dict)
+        ],
+        "unresolved": [str(item).strip() for item in unresolved[:5]],
+        "eval_failed": eval_failed,
+        "eval_total": eval_total,
+        "drill_failed": drill_failed,
+        "drill_total": drill_total,
+        "reason_counts": actionable_reason_counts,
+    }
+
+
+def summarize_growth_focus(
+    memory_latest: Dict[str, Any],
+    feedback_latest: Dict[str, Any],
+    eval_latest: Dict[str, Any],
+    drill_latest: Dict[str, Any],
+) -> str:
+    return collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)["summary_text"]
 
 
 def load_env() -> Dict[str, str]:
@@ -279,6 +394,7 @@ def build_run_entry(
     restart_status: str,
     slack_status: str,
     report: str,
+    growth_focus: Dict[str, Any],
 ) -> Dict[str, object]:
     return {
         "schema_version": RUN_ENTRY_SCHEMA_VERSION,
@@ -291,6 +407,7 @@ def build_run_entry(
         "commit_status": commit_status,
         "restart_status": restart_status,
         "slack_status": slack_status,
+        "growth_focus": growth_focus,
         "report": report,
     }
 
@@ -318,13 +435,13 @@ def main() -> int:
     memory_latest = read_json(STATE_DIR / "memory_sync_state.json")
     eval_latest = read_json(STATE_DIR / "evals" / "latest.json")
     drill_latest = read_json(STATE_DIR / "drills" / "latest.json")
-    growth_focus = summarize_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)
+    growth_focus = collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)
 
     context_parts = [
         f"REPO: {REPO_DIR}",
         f"GIT STATUS:\n{git_status or 'N/A'}",
         f"RECENT COMMITS:\n{git_log or 'N/A'}",
-        growth_focus,
+        growth_focus["summary_text"],
     ]
     if gateway_log:
         context_parts.append(f"GATEWAY LOG TAIL:\n{gateway_log}")
@@ -473,6 +590,7 @@ def main() -> int:
         restart_status=restart_status,
         slack_status=slack_status,
         report=report,
+        growth_focus=growth_focus,
     )
     with RUNS_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")

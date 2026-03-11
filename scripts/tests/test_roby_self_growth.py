@@ -117,11 +117,36 @@ class TestRobySelfGrowth(TestCase):
             restart_status="ok",
             slack_status="ok",
             report="TEST: passed",
+            growth_focus={"summary_text": "GROWTH FOCUS\n- no current focus", "suggested_files": []},
         )
         self.assertEqual(entry["schema_version"], 2)
         self.assertEqual(entry["patch_status"], "applied")
         self.assertEqual(entry["slack_status"], "ok")
         self.assertIn("ts", entry)
+        self.assertIn("growth_focus", entry)
+
+    def test_collect_growth_focus_suggests_candidate_files(self):
+        focus = self.mod.collect_growth_focus(
+            memory_latest={"unresolved": ["stale component: gmail_triage / notion_sync"]},
+            feedback_latest={
+                "summary": {
+                    "improvement_targets": [
+                        {
+                            "target": "gmail_finance_contract_detection",
+                            "label": "契約・請求判定",
+                            "count": 3,
+                            "recommendation": "請求・見積・契約更新を review 優先にする。",
+                        }
+                    ],
+                    "actionable_reason_counts": {"billing_contract": 3},
+                }
+            },
+            eval_latest={"failed": 1, "total": 7, "routes": {"gmail_pipeline": {"failed": 1}}},
+            drill_latest={"failed": 0, "total": 13},
+        )
+        self.assertIn("Candidate files:", focus["summary_text"])
+        self.assertIn("skills/roby-mail/scripts/gmail_triage.py", focus["suggested_files"])
+        self.assertIn("scripts/roby-notion-sync.py", focus["suggested_files"])
 
     def test_summarize_growth_focus_prefers_targets_and_quality_signals(self):
         text = self.mod.summarize_growth_focus(
@@ -254,6 +279,8 @@ class TestRobySelfGrowth(TestCase):
         self.assertIn("GROWTH FOCUS", captured["prompt"])
         self.assertIn("案件判定", captured["prompt"])
         self.assertIn("stale component: gmail_triage", captured["prompt"])
+        self.assertIn("Candidate files:", captured["prompt"])
+        self.assertIn("scripts/roby-orchestrator.py", captured["prompt"])
 
     def test_main_records_invalid_patch_and_audits_error(self):
         patch_text = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
