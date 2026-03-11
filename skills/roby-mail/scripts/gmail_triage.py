@@ -8,6 +8,7 @@ import sys
 import time
 import hashlib
 from datetime import datetime, timedelta
+from email.utils import parseaddr
 from html import unescape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -725,6 +726,19 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
     return out
 
 
+def _sender_label(raw_from: str) -> str:
+    display_name, address = parseaddr((raw_from or "").strip())
+    label = (display_name or address or "").strip().strip("\"'")
+    if not label:
+        return "送信者不明"
+    return re.sub(r"\s+", " ", label)[:48]
+
+
+def _decorate_email_task_title(title: str, sender_label: str) -> str:
+    base = (title or "").strip() or "メール確認タスク"
+    return f"【{sender_label}】{base}"
+
+
 def _parse_jsonish_text(raw: str) -> Any:
     if not raw:
         return None
@@ -1099,12 +1113,16 @@ def build_tasks(
     base_tags = ["source:gmail", f"category:{category}"] + tags
     assignee = "私"
     msg_subject = (msg.get("subject") or "").strip()
+    sender_label = _sender_label(msg.get("from", ""))
     msg_thread_id = (msg.get("threadId") or "").strip()
     msg_id = (msg.get("id") or "").strip()
     msg_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_thread_id}"
 
     parent_task = {
-        "title": f"メール確認: {msg_subject}" if msg_subject else "メール確認タスク",
+        "title": _decorate_email_task_title(
+            f"メール確認: {msg_subject}" if msg_subject else "メール確認タスク",
+            sender_label,
+        ),
         "project": "email",
         "due_date": "",
         "assignee": assignee,
@@ -1147,7 +1165,7 @@ def build_tasks(
             + f"Link: {msg_url}"
         )
         task = {
-            "title": title,
+            "title": _decorate_email_task_title(title, sender_label),
             "project": project,
             "due_date": due,
             "assignee": assignee,

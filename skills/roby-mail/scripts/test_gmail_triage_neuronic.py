@@ -124,6 +124,30 @@ class TestGmailTriageNeuronic(TestCase):
         self.assertEqual(called["bulk"], 1)
         self.assertTrue(result.get("fallback_used"))
 
+    def test_build_tasks_prefixes_sender_on_parent_and_children(self):
+        msg = {
+            "subject": "見積書の件",
+            "threadId": "thread-1",
+            "id": "msg-1",
+            "from": "\"高田彰\" <a.takata@tokiwa-gi.com>",
+            "date": "2026-03-12 10:00",
+        }
+        extracted = [
+            {
+                "title": "返信内容を確認する",
+                "project": "email",
+                "due_date": "",
+                "note": "",
+            }
+        ]
+
+        tasks = self.mod.build_tasks(extracted, msg, "needs_review", [], "roby:gmail:test")
+
+        self.assertEqual(len(tasks), 2)
+        self.assertTrue(tasks[0]["title"].startswith("【高田彰】メール確認: 見積書の件"))
+        self.assertEqual(tasks[1]["title"], "【高田彰】返信内容を確認する")
+        self.assertEqual(tasks[1]["parent_origin_id"], tasks[0]["origin_id"])
+
 
 if __name__ == "__main__":
     main()
