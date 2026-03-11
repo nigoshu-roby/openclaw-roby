@@ -24,7 +24,7 @@ KEYCHAIN_SECRET_KEYS = {
     "NEURONIC_TOKEN",
     "OLLAMA_API_KEY",
 }
-FAILURE_STATES = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response"}
+FAILURE_STATES = {"failed", "invalid", "apply_failed", "agent_failed", "invalid_response", "out_of_scope"}
 RUN_ENTRY_SCHEMA_VERSION = 2
 TARGET_FILE_RULES: Dict[str, List[str]] = {
     "task_filtering": [
@@ -247,6 +247,50 @@ def summarize_growth_focus(
     return collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)["summary_text"]
 
 
+def extract_touched_files(patch_text: str) -> List[str]:
+    files: List[str] = []
+    for line in patch_text.splitlines():
+        if line.startswith("diff --git "):
+            match = re.match(r"diff --git a/(.+?) b/(.+)$", line.strip())
+            if match:
+                files.append(match.group(2).strip())
+    return _dedupe_keep_order(files)
+
+
+def build_quality_snapshot(memory_latest: Dict[str, Any], eval_latest: Dict[str, Any], drill_latest: Dict[str, Any]) -> Dict[str, Any]:
+    unresolved = memory_latest.get("unresolved") if isinstance(memory_latest.get("unresolved"), list) else []
+    return {
+        "evaluation_failed": int(eval_latest.get("failed") or 0),
+        "evaluation_total": int(eval_latest.get("total") or 0),
+        "drill_failed": int(drill_latest.get("failed") or 0),
+        "drill_total": int(drill_latest.get("total") or 0),
+        "heartbeat_status": str(memory_latest.get("heartbeat_status") or "").strip(),
+        "unresolved_count": int(memory_latest.get("unresolved_count") or len(unresolved) or 0),
+        "unresolved": [str(item).strip() for item in unresolved[:5]],
+    }
+
+
+def compute_quality_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "evaluation_failed_before": int(before.get("evaluation_failed") or 0),
+        "evaluation_failed_after": int(after.get("evaluation_failed") or 0),
+        "evaluation_failed_delta": int(after.get("evaluation_failed") or 0) - int(before.get("evaluation_failed") or 0),
+        "drill_failed_before": int(before.get("drill_failed") or 0),
+        "drill_failed_after": int(after.get("drill_failed") or 0),
+        "drill_failed_delta": int(after.get("drill_failed") or 0) - int(before.get("drill_failed") or 0),
+        "unresolved_before": int(before.get("unresolved_count") or 0),
+        "unresolved_after": int(after.get("unresolved_count") or 0),
+        "unresolved_delta": int(after.get("unresolved_count") or 0) - int(before.get("unresolved_count") or 0),
+        "heartbeat_before": str(before.get("heartbeat_status") or "").strip(),
+        "heartbeat_after": str(after.get("heartbeat_status") or "").strip(),
+        "improved": (
+            int(after.get("evaluation_failed") or 0) <= int(before.get("evaluation_failed") or 0)
+            and int(after.get("drill_failed") or 0) <= int(before.get("drill_failed") or 0)
+            and int(after.get("unresolved_count") or 0) <= int(before.get("unresolved_count") or 0)
+        ),
+    }
+
+
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
     env_file = Path(env.get("ROBY_ENV_FILE", str(ENV_PATH))).expanduser()
@@ -388,13 +432,20 @@ def build_run_entry(
     timestamp: str,
     git_status: str,
     patch_status: str,
+    patch_scope_status: str,
     test_status: str,
     rollback_status: str,
     commit_status: str,
     restart_status: str,
+    post_eval_status: str,
+    post_memory_sync_status: str,
     slack_status: str,
     report: str,
     growth_focus: Dict[str, Any],
+    touched_files: List[str],
+    pre_quality: Dict[str, Any],
+    post_quality: Dict[str, Any],
+    quality_delta: Dict[str, Any],
 ) -> Dict[str, object]:
     return {
         "schema_version": RUN_ENTRY_SCHEMA_VERSION,
@@ -402,12 +453,19 @@ def build_run_entry(
         "timestamp": timestamp,
         "git_status": git_status,
         "patch_status": patch_status,
+        "patch_scope_status": patch_scope_status,
         "test_status": test_status,
         "rollback_status": rollback_status,
         "commit_status": commit_status,
         "restart_status": restart_status,
+        "post_eval_status": post_eval_status,
+        "post_memory_sync_status": post_memory_sync_status,
         "slack_status": slack_status,
         "growth_focus": growth_focus,
+        "touched_files": touched_files,
+        "pre_quality": pre_quality,
+        "post_quality": post_quality,
+        "quality_delta": quality_delta,
         "report": report,
     }
 
@@ -425,6 +483,19 @@ def main() -> int:
         f"node {REPO_DIR / 'openclaw.mjs'} gateway restart",
     )
     agent_name = env.get("SELF_GROWTH_AGENT", "main").strip() or "main"
+    scope_guard = env.get("SELF_GROWTH_SCOPE_GUARD", "1") == "1"
+    post_eval_enabled = env.get("SELF_GROWTH_POST_EVAL", "1") == "1"
+    post_eval_cmd = env.get(
+        "SELF_GROWTH_POST_EVAL_CMD",
+        f"python3 {REPO_DIR / 'scripts' / 'roby-eval-harness.py'} --json --soft-fail",
+    )
+    post_eval_timeout = int(env.get("SELF_GROWTH_POST_EVAL_TIMEOUT", "240"))
+    post_memory_sync_enabled = env.get("SELF_GROWTH_POST_MEMORY_SYNC", "1") == "1"
+    post_memory_sync_cmd = env.get(
+        "SELF_GROWTH_POST_MEMORY_SYNC_CMD",
+        f"python3 {REPO_DIR / 'scripts' / 'roby-memory-sync.py'} --json",
+    )
+    post_memory_sync_timeout = int(env.get("SELF_GROWTH_POST_MEMORY_SYNC_TIMEOUT", "180"))
 
     git_status = run_cmd(["git", "-C", str(REPO_DIR), "status", "-sb"], env, timeout=30)
     git_dirty = run_cmd(["git", "-C", str(REPO_DIR), "status", "--porcelain"], env, timeout=30)
@@ -436,6 +507,9 @@ def main() -> int:
     eval_latest = read_json(STATE_DIR / "evals" / "latest.json")
     drill_latest = read_json(STATE_DIR / "drills" / "latest.json")
     growth_focus = collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)
+    pre_quality = build_quality_snapshot(memory_latest, eval_latest, drill_latest)
+    post_quality = dict(pre_quality)
+    quality_delta = compute_quality_delta(pre_quality, post_quality)
 
     context_parts = [
         f"REPO: {REPO_DIR}",
@@ -453,11 +527,15 @@ def main() -> int:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     steps = []
     patch_status = "skipped"
+    patch_scope_status = "skipped"
     test_status = "skipped"
     restart_status = "skipped"
     commit_status = "skipped"
     rollback_status = "skipped"
+    post_eval_status = "skipped"
+    post_memory_sync_status = "skipped"
     slack_status = "skipped"
+    touched_files: List[str] = []
 
     if git_dirty and not allow_dirty:
         steps.append("SKIP: working tree is dirty (set SELF_GROWTH_ALLOW_DIRTY=1 to override).")
@@ -492,55 +570,101 @@ def main() -> int:
         else:
             patch_path = STATE_DIR / "self_growth.patch"
             patch_path.write_text(patch, encoding="utf-8")
-            check = run_cmd(["git", "-C", str(REPO_DIR), "apply", "--check", str(patch_path)], env, timeout=60)
-            if check.startswith("[error]"):
-                patch_status = "invalid"
-                steps.append(f"PATCH: invalid\n{check}")
+            touched_files = extract_touched_files(patch)
+            allowed_files = growth_focus.get("suggested_files") if isinstance(growth_focus.get("suggested_files"), list) else []
+            if scope_guard and allowed_files and touched_files and not set(touched_files).intersection(set(allowed_files)):
+                patch_status = "out_of_scope"
+                patch_scope_status = "blocked"
+                steps.append(
+                    "PATCH: out_of_scope\n"
+                    f"touched={', '.join(touched_files)}\n"
+                    f"allowed={', '.join(allowed_files[:8])}"
+                )
             else:
-                apply_out = run_cmd(["git", "-C", str(REPO_DIR), "apply", str(patch_path)], env, timeout=60)
-                if apply_out.startswith("[error]"):
-                    patch_status = "apply_failed"
-                    steps.append(f"PATCH: apply_failed\n{apply_out}")
+                patch_scope_status = "ok" if touched_files else "unknown"
+                check = run_cmd(["git", "-C", str(REPO_DIR), "apply", "--check", str(patch_path)], env, timeout=60)
+                if check.startswith("[error]"):
+                    patch_status = "invalid"
+                    steps.append(f"PATCH: invalid\n{check}")
                 else:
-                    patch_status = "applied"
-                    steps.append("PATCH: applied")
-
-                    # Tests
-                    test_out = run_cmd(["bash", "-lc", test_cmd], env, timeout=test_timeout)
-                    if test_out.startswith("[error]") or "FAIL" in test_out:
-                        test_status = "failed"
-                        steps.append(f"TEST: failed\n{test_out}")
-                        # rollback
-                        rollback_out = run_cmd(["git", "-C", str(REPO_DIR), "apply", "-R", str(patch_path)], env, timeout=60)
-                        if rollback_out.startswith("[error]"):
-                            rollback_status = "failed"
-                            steps.append(f"ROLLBACK: failed\n{rollback_out}")
-                        else:
-                            rollback_status = "ok"
-                            steps.append("ROLLBACK: ok")
+                    apply_out = run_cmd(["git", "-C", str(REPO_DIR), "apply", str(patch_path)], env, timeout=60)
+                    if apply_out.startswith("[error]"):
+                        patch_status = "apply_failed"
+                        steps.append(f"PATCH: apply_failed\n{apply_out}")
                     else:
-                        test_status = "passed"
-                        steps.append("TEST: passed")
+                        patch_status = "applied"
+                        steps.append("PATCH: applied")
 
-                        if auto_commit:
-                            run_cmd(["git", "-C", str(REPO_DIR), "add", "-A"], env, timeout=60)
-                            commit_msg = f"roby self-growth {timestamp}"
-                            commit_out = run_cmd(["git", "-C", str(REPO_DIR), "commit", "-m", commit_msg], env, timeout=60)
-                            if commit_out.startswith("[error]"):
-                                commit_status = "failed"
-                                steps.append(f"COMMIT: failed\n{commit_out}")
+                        # Tests
+                        test_out = run_cmd(["bash", "-lc", test_cmd], env, timeout=test_timeout)
+                        if test_out.startswith("[error]") or "FAIL" in test_out:
+                            test_status = "failed"
+                            steps.append(f"TEST: failed\n{test_out}")
+                            # rollback
+                            rollback_out = run_cmd(["git", "-C", str(REPO_DIR), "apply", "-R", str(patch_path)], env, timeout=60)
+                            if rollback_out.startswith("[error]"):
+                                rollback_status = "failed"
+                                steps.append(f"ROLLBACK: failed\n{rollback_out}")
                             else:
-                                commit_status = "ok"
-                                steps.append("COMMIT: ok")
-
-                        # Restart
-                        restart_out = run_cmd(["bash", "-lc", restart_cmd], env, timeout=90)
-                        if restart_out.startswith("[error]"):
-                            restart_status = "failed"
-                            steps.append(f"RESTART: failed\n{restart_out}")
+                                rollback_status = "ok"
+                                steps.append("ROLLBACK: ok")
                         else:
-                            restart_status = "ok"
-                            steps.append("RESTART: ok")
+                            test_status = "passed"
+                            steps.append("TEST: passed")
+
+                            if auto_commit:
+                                run_cmd(["git", "-C", str(REPO_DIR), "add", "-A"], env, timeout=60)
+                                commit_msg = f"roby self-growth {timestamp}"
+                                commit_out = run_cmd(["git", "-C", str(REPO_DIR), "commit", "-m", commit_msg], env, timeout=60)
+                                if commit_out.startswith("[error]"):
+                                    commit_status = "failed"
+                                    steps.append(f"COMMIT: failed\n{commit_out}")
+                                else:
+                                    commit_status = "ok"
+                                    steps.append("COMMIT: ok")
+
+                            # Restart
+                            restart_out = run_cmd(["bash", "-lc", restart_cmd], env, timeout=90)
+                            if restart_out.startswith("[error]"):
+                                restart_status = "failed"
+                                steps.append(f"RESTART: failed\n{restart_out}")
+                            else:
+                                restart_status = "ok"
+                                steps.append("RESTART: ok")
+
+                            if post_eval_enabled:
+                                post_eval_out = run_cmd(["bash", "-lc", post_eval_cmd], env, timeout=post_eval_timeout)
+                                if post_eval_out.startswith("[error]"):
+                                    post_eval_status = "failed"
+                                    steps.append(f"POST_EVAL: failed\n{post_eval_out}")
+                                else:
+                                    post_eval_status = "ok"
+                                    steps.append("POST_EVAL: ok")
+
+                            if post_memory_sync_enabled:
+                                post_memory_out = run_cmd(
+                                    ["bash", "-lc", post_memory_sync_cmd],
+                                    env,
+                                    timeout=post_memory_sync_timeout,
+                                )
+                                if post_memory_out.startswith("[error]"):
+                                    post_memory_sync_status = "failed"
+                                    steps.append(f"POST_MEMORY_SYNC: failed\n{post_memory_out}")
+                                else:
+                                    post_memory_sync_status = "ok"
+                                    steps.append("POST_MEMORY_SYNC: ok")
+
+                            post_memory_latest = read_json(STATE_DIR / "memory_sync_state.json")
+                            post_eval_latest = read_json(STATE_DIR / "evals" / "latest.json")
+                            post_drill_latest = read_json(STATE_DIR / "drills" / "latest.json")
+                            post_quality = build_quality_snapshot(post_memory_latest, post_eval_latest, post_drill_latest)
+                            quality_delta = compute_quality_delta(pre_quality, post_quality)
+                            steps.append(
+                                "QUALITY_DELTA: "
+                                f"eval {quality_delta['evaluation_failed_before']}→{quality_delta['evaluation_failed_after']}, "
+                                f"drill {quality_delta['drill_failed_before']}→{quality_delta['drill_failed_after']}, "
+                                f"unresolved {quality_delta['unresolved_before']}→{quality_delta['unresolved_after']}"
+                            )
 
         report = "\n".join(steps) if steps else "[error] empty report"
 
@@ -567,10 +691,14 @@ def main() -> int:
                         "self_growth.slack_error",
                         {
                             "patch_status": patch_status,
+                            "patch_scope_status": patch_scope_status,
                             "test_status": test_status,
                             "rollback_status": rollback_status,
                             "commit_status": commit_status,
                             "restart_status": restart_status,
+                            "post_eval_status": post_eval_status,
+                            "post_memory_sync_status": post_memory_sync_status,
+                            "quality_delta": quality_delta,
                             "error": str(e),
                         },
                         source="roby-self-growth",
@@ -584,13 +712,20 @@ def main() -> int:
         timestamp=timestamp,
         git_status=git_status,
         patch_status=patch_status,
+        patch_scope_status=patch_scope_status,
         test_status=test_status,
         rollback_status=rollback_status,
         commit_status=commit_status,
         restart_status=restart_status,
+        post_eval_status=post_eval_status,
+        post_memory_sync_status=post_memory_sync_status,
         slack_status=slack_status,
         report=report,
         growth_focus=growth_focus,
+        touched_files=touched_files,
+        pre_quality=pre_quality,
+        post_quality=post_quality,
+        quality_delta=quality_delta,
     )
     with RUNS_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -601,10 +736,15 @@ def main() -> int:
                 "self_growth.run",
                 {
                     "patch_status": patch_status,
+                    "patch_scope_status": patch_scope_status,
                     "test_status": test_status,
                     "rollback_status": rollback_status,
                     "commit_status": commit_status,
                     "restart_status": restart_status,
+                    "post_eval_status": post_eval_status,
+                    "post_memory_sync_status": post_memory_sync_status,
+                    "growth_focus": growth_focus,
+                    "quality_delta": quality_delta,
                     "report_preview": report[:300],
                 },
                 source="roby-self-growth",

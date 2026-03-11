@@ -772,6 +772,32 @@ export type RobyWorkspaceBootstrapStatus = {
   }>;
 };
 
+export type RobySelfGrowthLatestStatus = {
+  present: boolean;
+  ts: number | null;
+  patchStatus?: string;
+  patchScopeStatus?: string;
+  testStatus?: string;
+  rollbackStatus?: string;
+  commitStatus?: string;
+  restartStatus?: string;
+  postEvalStatus?: string;
+  postMemorySyncStatus?: string;
+  targetLabels?: string[];
+  suggestedFiles?: string[];
+  touchedFiles?: string[];
+  summaryText?: string;
+  qualityDelta?: {
+    evaluationFailedBefore?: number;
+    evaluationFailedAfter?: number;
+    evaluationFailedDelta?: number;
+    unresolvedBefore?: number;
+    unresolvedAfter?: number;
+    unresolvedDelta?: number;
+    improved?: boolean;
+  };
+};
+
 export type RobyOpsStatus = {
   generatedAtMs: number;
   evaluationHarness: RobyEvalStatus;
@@ -783,6 +809,7 @@ export type RobyOpsStatus = {
   localFirst: RobyLocalFirstStatus;
   heartbeatRuntime: RobyHeartbeatRuntimeStatus;
   workspaceBootstrap: RobyWorkspaceBootstrapStatus;
+  selfGrowthLatest: RobySelfGrowthLatestStatus;
 };
 
 export type SkillsStatusConfigCheck = {

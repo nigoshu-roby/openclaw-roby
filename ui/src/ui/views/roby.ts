@@ -235,6 +235,7 @@ export function renderRoby(props: RobyProps) {
   const weeklyStatus = ops?.weeklyReport;
   const feedbackLoop = ops?.feedbackLoop;
   const memorySync = ops?.memorySync;
+  const selfGrowthLatest = ops?.selfGrowthLatest;
   const localFirst = ops?.localFirst;
   const heartbeatRuntime = ops?.heartbeatRuntime;
   const workspaceBootstrap = ops?.workspaceBootstrap;
@@ -574,6 +575,63 @@ export function renderRoby(props: RobyProps) {
                     `
                   : nothing
               }
+            `
+          : nothing,
+      })}
+      ${renderOpsCard({
+        title: "Self Growth",
+        status:
+          selfGrowthLatest?.present === false
+            ? "未実行"
+            : selfGrowthLatest?.patchStatus === "out_of_scope"
+              ? "範囲外停止"
+              : ["failed", "invalid", "apply_failed", "agent_failed", "invalid_response"].includes(
+                    selfGrowthLatest?.patchStatus ?? "",
+                  ) ||
+                  [
+                    selfGrowthLatest?.testStatus,
+                    selfGrowthLatest?.restartStatus,
+                    selfGrowthLatest?.commitStatus,
+                  ].includes("failed")
+                ? "失敗あり"
+                : "正常",
+        tone:
+          selfGrowthLatest?.present === false
+            ? "muted"
+            : selfGrowthLatest?.patchStatus === "out_of_scope"
+              ? "warn"
+              : ["failed", "invalid", "apply_failed", "agent_failed", "invalid_response"].includes(
+                    selfGrowthLatest?.patchStatus ?? "",
+                  ) ||
+                  [
+                    selfGrowthLatest?.testStatus,
+                    selfGrowthLatest?.restartStatus,
+                    selfGrowthLatest?.commitStatus,
+                  ].includes("failed")
+                ? "danger"
+                : "ok",
+        subtitle: selfGrowthLatest?.present
+          ? `patch ${selfGrowthLatest?.patchStatus || "—"} / test ${selfGrowthLatest?.testStatus || "—"} / restart ${selfGrowthLatest?.restartStatus || "—"}`
+          : "自己成長の最新結果なし",
+        meta: selfGrowthLatest?.ts ? formatRelativeTimestamp(selfGrowthLatest.ts) : "—",
+        details: selfGrowthLatest?.present
+          ? html`
+              <div class="muted">scope: ${selfGrowthLatest?.patchScopeStatus || "—"} / commit: ${selfGrowthLatest?.commitStatus || "—"}</div>
+              <div class="muted">post-eval: ${selfGrowthLatest?.postEvalStatus || "—"} / post-memory: ${selfGrowthLatest?.postMemorySyncStatus || "—"}</div>
+              <div class="muted" style="margin-top: 8px;">改善フォーカス</div>
+              <div class="muted">- targets: ${joinList(selfGrowthLatest?.targetLabels, "なし")}</div>
+              <div class="muted">- candidate files: ${joinList(selfGrowthLatest?.suggestedFiles, "なし")}</div>
+              <div class="muted">- touched files: ${joinList(selfGrowthLatest?.touchedFiles, "なし")}</div>
+              <div class="muted" style="margin-top: 8px;">品質差分</div>
+              <div class="muted">
+                - eval ${selfGrowthLatest?.qualityDelta?.evaluationFailedBefore ?? 0}→${selfGrowthLatest?.qualityDelta?.evaluationFailedAfter ?? 0}
+                (${selfGrowthLatest?.qualityDelta?.evaluationFailedDelta ?? 0})
+              </div>
+              <div class="muted">
+                - unresolved ${selfGrowthLatest?.qualityDelta?.unresolvedBefore ?? 0}→${selfGrowthLatest?.qualityDelta?.unresolvedAfter ?? 0}
+                (${selfGrowthLatest?.qualityDelta?.unresolvedDelta ?? 0})
+              </div>
+              <div class="muted">- improved: ${selfGrowthLatest?.qualityDelta?.improved ? "yes" : "no"}</div>
             `
           : nothing,
       })}

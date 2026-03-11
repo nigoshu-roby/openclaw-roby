@@ -29,6 +29,7 @@ DRILL_HISTORY = STATE_ROOT / "drills" / "history.jsonl"
 AB_HISTORY = STATE_ROOT / "ab_router_runs.jsonl"
 AUDIT_FILE = STATE_ROOT / "audit" / "events.jsonl"
 FEEDBACK_HISTORY = STATE_ROOT / "feedback_sync_runs.jsonl"
+SELF_GROWTH_HISTORY = STATE_ROOT / "self_growth_runs.jsonl"
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
     "OPENAI_API_KEY",
@@ -239,6 +240,46 @@ def summarize_feedback(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def summarize_self_growth(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not items:
+        return {"runs": 0}
+    latest = items[-1]
+    patch_status_counts: Dict[str, int] = {}
+    scope_blocked_runs = 0
+    success_runs = 0
+    for row in items:
+        patch_status = str(row.get("patch_status") or "").strip() or "unknown"
+        patch_status_counts[patch_status] = patch_status_counts.get(patch_status, 0) + 1
+        if str(row.get("patch_scope_status") or "").strip() == "blocked":
+            scope_blocked_runs += 1
+        if (
+            patch_status in {"applied", "no_change"}
+            and str(row.get("test_status") or "").strip() != "failed"
+            and str(row.get("restart_status") or "").strip() != "failed"
+        ):
+            success_runs += 1
+    growth_focus = latest.get("growth_focus") if isinstance(latest.get("growth_focus"), dict) else {}
+    return {
+        "runs": len(items),
+        "success_runs": success_runs,
+        "scope_blocked_runs": scope_blocked_runs,
+        "patch_status_counts": patch_status_counts,
+        "latest": {
+            "timestamp": str(latest.get("timestamp") or ""),
+            "patch_status": str(latest.get("patch_status") or "").strip(),
+            "patch_scope_status": str(latest.get("patch_scope_status") or "").strip(),
+            "test_status": str(latest.get("test_status") or "").strip(),
+            "commit_status": str(latest.get("commit_status") or "").strip(),
+            "restart_status": str(latest.get("restart_status") or "").strip(),
+            "post_eval_status": str(latest.get("post_eval_status") or "").strip(),
+            "post_memory_sync_status": str(latest.get("post_memory_sync_status") or "").strip(),
+            "touched_files": latest.get("touched_files") if isinstance(latest.get("touched_files"), list) else [],
+            "target_labels": growth_focus.get("target_labels") if isinstance(growth_focus.get("target_labels"), list) else [],
+            "quality_delta": latest.get("quality_delta") if isinstance(latest.get("quality_delta"), dict) else {},
+        },
+    }
+
+
 def summarize_ops_from_audit(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     tracked = {
         "minutes_sync.run": "minutes_sync",
@@ -286,6 +327,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
     drill_s = report["drill"]
     ab_s = report["ab"]
     feedback_s = report.get("feedback") or {}
+    self_growth_s = report.get("self_growth") or {}
     audit_s = report["audit"]
     lines = [
         "# PBS Weekly Ops Report",
@@ -349,6 +391,44 @@ def build_markdown(report: Dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Self Growth",
+            f"- runs: {self_growth_s.get('runs', 0)}",
+            f"- success_runs: {self_growth_s.get('success_runs', 0)}",
+            f"- scope_blocked_runs: {self_growth_s.get('scope_blocked_runs', 0)}",
+        ]
+    )
+    patch_counts = self_growth_s.get("patch_status_counts") or {}
+    if isinstance(patch_counts, dict) and patch_counts:
+        lines.append("- patch statuses:")
+        for status, count in sorted(patch_counts.items(), key=lambda item: (-int(item[1]), str(item[0]))):
+            lines.append(f"  - {status}: {count}")
+    latest_self_growth = self_growth_s.get("latest") or {}
+    if isinstance(latest_self_growth, dict) and latest_self_growth:
+        lines.append("- latest:")
+        lines.append(
+            "  - patch/test/restart: "
+            f"{latest_self_growth.get('patch_status', '-')} / "
+            f"{latest_self_growth.get('test_status', '-')} / "
+            f"{latest_self_growth.get('restart_status', '-')}"
+        )
+        target_labels = latest_self_growth.get("target_labels") or []
+        if isinstance(target_labels, list) and target_labels:
+            lines.append(f"  - targets: {', '.join(str(item) for item in target_labels[:4])}")
+        touched_files = latest_self_growth.get("touched_files") or []
+        if isinstance(touched_files, list) and touched_files:
+            lines.append(f"  - touched_files: {', '.join(str(item) for item in touched_files[:4])}")
+        quality_delta = latest_self_growth.get("quality_delta") or {}
+        if isinstance(quality_delta, dict) and quality_delta:
+            lines.append(
+                "  - quality_delta: "
+                f"eval {quality_delta.get('evaluation_failed_before', 0)}→{quality_delta.get('evaluation_failed_after', 0)}, "
+                f"drill {quality_delta.get('drill_failed_before', 0)}→{quality_delta.get('drill_failed_after', 0)}, "
+                f"unresolved {quality_delta.get('unresolved_before', 0)}→{quality_delta.get('unresolved_after', 0)}"
+            )
+    lines.append("")
+    lines.extend(
+        [
+            "",
             "## Immutable Audit",
             f"- ok: {audit_s.get('ok', False)}",
             f"- files: {audit_s.get('files', 0)}",
@@ -393,6 +473,7 @@ def main() -> int:
     drill_items = in_window(read_jsonl(DRILL_HISTORY), since)
     ab_items = in_window(read_jsonl(AB_HISTORY), since)
     feedback_items = in_window(read_jsonl(FEEDBACK_HISTORY), since)
+    self_growth_items = in_window(read_jsonl(SELF_GROWTH_HISTORY), since)
     audit_events = in_window(read_jsonl(AUDIT_FILE), since)
     audit_report = verify_audit([AUDIT_FILE])
 
@@ -403,6 +484,7 @@ def main() -> int:
         "drill": summarize_drill(drill_items),
         "ab": summarize_ab(ab_items),
         "feedback": summarize_feedback(feedback_items),
+        "self_growth": summarize_self_growth(self_growth_items),
         "audit": audit_report,
         "ops": summarize_ops_from_audit(audit_events),
     }
@@ -462,6 +544,11 @@ def main() -> int:
                         "runs": int(report.get("feedback", {}).get("runs", 0)),
                         "reviewed_count": int(report.get("feedback", {}).get("reviewed_count", 0)),
                         "actionable_count": int(report.get("feedback", {}).get("actionable_count", 0)),
+                    },
+                    "self_growth": {
+                        "runs": int(report.get("self_growth", {}).get("runs", 0)),
+                        "success_runs": int(report.get("self_growth", {}).get("success_runs", 0)),
+                        "scope_blocked_runs": int(report.get("self_growth", {}).get("scope_blocked_runs", 0)),
                     },
                     "ab": {
                         "runs": int(report.get("ab", {}).get("runs", 0)),

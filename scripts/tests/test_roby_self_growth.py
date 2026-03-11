@@ -111,19 +111,28 @@ class TestRobySelfGrowth(TestCase):
             timestamp="2026-03-08 15:00:00",
             git_status="## main",
             patch_status="applied",
+            patch_scope_status="ok",
             test_status="passed",
             rollback_status="skipped",
             commit_status="ok",
             restart_status="ok",
+            post_eval_status="ok",
+            post_memory_sync_status="ok",
             slack_status="ok",
             report="TEST: passed",
             growth_focus={"summary_text": "GROWTH FOCUS\n- no current focus", "suggested_files": []},
+            touched_files=["scripts/roby-self-growth.py"],
+            pre_quality={"evaluation_failed": 1, "unresolved_count": 2},
+            post_quality={"evaluation_failed": 0, "unresolved_count": 1},
+            quality_delta={"evaluation_failed_delta": -1, "unresolved_delta": -1},
         )
         self.assertEqual(entry["schema_version"], 2)
         self.assertEqual(entry["patch_status"], "applied")
+        self.assertEqual(entry["patch_scope_status"], "ok")
         self.assertEqual(entry["slack_status"], "ok")
         self.assertIn("ts", entry)
         self.assertIn("growth_focus", entry)
+        self.assertEqual(entry["touched_files"], ["scripts/roby-self-growth.py"])
 
     def test_collect_growth_focus_suggests_candidate_files(self):
         focus = self.mod.collect_growth_focus(
@@ -305,6 +314,66 @@ class TestRobySelfGrowth(TestCase):
         self.assertEqual(result["audit_events"][0]["severity"], "error")
         self.assertIn("・実行結果: 失敗あり", result["slack_messages"][0]["text"])
 
+    def test_main_blocks_patch_when_out_of_scope(self):
+        patch_text = (
+            "diff --git a/ui/src/ui/views/chat.ts b/ui/src/ui/views/chat.ts\n"
+            "index 1..2 100644\n"
+            "--- a/ui/src/ui/views/chat.ts\n"
+            "+++ b/ui/src/ui/views/chat.ts\n"
+            "@@ -1 +1 @@\n-a\n+b\n"
+        )
+
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                return patch_text
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            (state_dir / "feedback_sync_state.json").write_text(
+                json.dumps(
+                    {
+                        "summary": {
+                            "improvement_targets": [
+                                {
+                                    "target": "gmail_finance_contract_detection",
+                                    "label": "契約・請求判定",
+                                    "count": 2,
+                                    "recommendation": "請求・見積語を優先する。",
+                                }
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            runs_log = state_dir / "self_growth_runs.jsonl"
+            stdout = io.StringIO()
+            with (
+                patch.object(self.mod, "STATE_DIR", state_dir),
+                patch.object(self.mod, "RUNS_LOG", runs_log),
+                patch.object(self.mod, "load_env", return_value={"ROBY_IMMUTABLE_AUDIT": "0"}),
+                patch.object(self.mod, "run_cmd", side_effect=fake_run_cmd),
+                patch.object(self.mod, "append_audit_event"),
+                patch.object(self.mod, "send_slack"),
+                redirect_stdout(stdout),
+            ):
+                rc = self.mod.main()
+
+            self.assertEqual(rc, 0)
+            entry = json.loads(runs_log.read_text(encoding="utf-8").strip())
+            self.assertEqual(entry["patch_status"], "out_of_scope")
+            self.assertEqual(entry["patch_scope_status"], "blocked")
+            self.assertEqual(entry["touched_files"], ["ui/src/ui/views/chat.ts"])
+            self.assertIn("PATCH: out_of_scope", stdout.getvalue())
+
     def test_main_rolls_back_on_test_failure_and_audits_error(self):
         patch_text = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
 
@@ -358,6 +427,10 @@ class TestRobySelfGrowth(TestCase):
                 return "[main abc123] test"
             if cmd[:3] == ["bash", "-lc", f"node {self.mod.REPO_DIR / 'openclaw.mjs'} gateway restart"]:
                 return "[error] exit=1\nrestart failed"
+            if cmd[:3] == ["bash", "-lc", f"python3 {self.mod.REPO_DIR / 'scripts' / 'roby-eval-harness.py'} --json --soft-fail"]:
+                return json.dumps({"failed": 0, "total": 7}, ensure_ascii=False)
+            if cmd[:3] == ["bash", "-lc", f"python3 {self.mod.REPO_DIR / 'scripts' / 'roby-memory-sync.py'} --json"]:
+                return json.dumps({"heartbeat_status": "HEARTBEAT_OK", "unresolved_count": 0}, ensure_ascii=False)
             raise AssertionError(f"Unexpected command: {cmd}")
 
         result = self.run_main_with({"SLACK_WEBHOOK_URL": "https://example.invalid/webhook"}, fake_run_cmd)
@@ -391,6 +464,10 @@ class TestRobySelfGrowth(TestCase):
                 return "[error] exit=1\ncommit failed"
             if cmd[:3] == ["bash", "-lc", f"node {self.mod.REPO_DIR / 'openclaw.mjs'} gateway restart"]:
                 return "restart ok"
+            if cmd[:3] == ["bash", "-lc", f"python3 {self.mod.REPO_DIR / 'scripts' / 'roby-eval-harness.py'} --json --soft-fail"]:
+                return json.dumps({"failed": 0, "total": 7}, ensure_ascii=False)
+            if cmd[:3] == ["bash", "-lc", f"python3 {self.mod.REPO_DIR / 'scripts' / 'roby-memory-sync.py'} --json"]:
+                return json.dumps({"heartbeat_status": "HEARTBEAT_OK", "unresolved_count": 0}, ensure_ascii=False)
             raise AssertionError(f"Unexpected command: {cmd}")
 
         result = self.run_main_with({}, fake_run_cmd)
@@ -441,6 +518,141 @@ class TestRobySelfGrowth(TestCase):
             slack_error_events = [event for event in audit_events if event["event_name"] == "self_growth.slack_error"]
             self.assertEqual(len(slack_error_events), 1)
             self.assertEqual(slack_error_events[0]["severity"], "error")
+
+    def test_main_records_quality_delta_after_successful_run(self):
+        patch_text = (
+            "diff --git a/skills/roby-mail/scripts/gmail_triage.py b/skills/roby-mail/scripts/gmail_triage.py\n"
+            "index 1..2 100644\n"
+            "--- a/skills/roby-mail/scripts/gmail_triage.py\n"
+            "+++ b/skills/roby-mail/scripts/gmail_triage.py\n"
+            "@@ -1 +1 @@\n-a\n+b\n"
+        )
+
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            if cmd[:2] == ["node", str(self.mod.REPO_DIR / "openclaw.mjs")]:
+                return patch_text
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "--check" in cmd:
+                return ""
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "apply"] and "-R" not in cmd:
+                return ""
+            if cmd[:3] == ["bash", "-lc", "pnpm -s test:fast"]:
+                return "ok"
+            if cmd[:5] == ["git", "-C", str(self.mod.REPO_DIR), "add", "-A"]:
+                return ""
+            if cmd[:5] == ["git", "-C", str(self.mod.REPO_DIR), "commit", "-m"]:
+                return "[main abc123] test"
+            if cmd[:3] == ["bash", "-lc", f"node {self.mod.REPO_DIR / 'openclaw.mjs'} gateway restart"]:
+                return "restart ok"
+            if cmd[:3] == ["bash", "-lc", f"python3 {self.mod.REPO_DIR / 'scripts' / 'roby-eval-harness.py'} --json --soft-fail"]:
+                return json.dumps({"failed": 0, "total": 7}, ensure_ascii=False)
+            if cmd[:3] == ["bash", "-lc", f"python3 {self.mod.REPO_DIR / 'scripts' / 'roby-memory-sync.py'} --json"]:
+                return json.dumps({"heartbeat_status": "HEARTBEAT_OK", "unresolved_count": 1}, ensure_ascii=False)
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            (state_dir / "evals").mkdir(parents=True)
+            (state_dir / "drills").mkdir(parents=True)
+            (state_dir / "feedback_sync_state.json").write_text(
+                json.dumps(
+                    {
+                        "summary": {
+                            "improvement_targets": [
+                                {
+                                    "target": "gmail_finance_contract_detection",
+                                    "label": "契約・請求判定",
+                                    "count": 2,
+                                    "recommendation": "請求・見積語を優先する。",
+                                }
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (state_dir / "memory_sync_state.json").write_text(
+                json.dumps(
+                    {"heartbeat_status": "HEARTBEAT_ATTENTION", "unresolved_count": 3, "unresolved": ["stale component: gmail_triage"]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (state_dir / "evals" / "latest.json").write_text(
+                json.dumps({"failed": 1, "total": 7}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (state_dir / "drills" / "latest.json").write_text(
+                json.dumps({"failed": 0, "total": 13}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            runs_log = state_dir / "self_growth_runs.jsonl"
+            stdout = io.StringIO()
+
+            def fake_read_json(path):
+                if path.name == "memory_sync_state.json":
+                    if getattr(fake_read_json, "post_memory", False):
+                        return {"heartbeat_status": "HEARTBEAT_OK", "unresolved_count": 1, "unresolved": []}
+                    return {"heartbeat_status": "HEARTBEAT_ATTENTION", "unresolved_count": 3, "unresolved": ["stale component: gmail_triage"]}
+                if path.name == "latest.json" and path.parent.name == "evals":
+                    if getattr(fake_read_json, "post_eval", False):
+                        return {"failed": 0, "total": 7}
+                    return {"failed": 1, "total": 7}
+                if path.name == "latest.json" and path.parent.name == "drills":
+                    return {"failed": 0, "total": 13}
+                if path.name == "feedback_sync_state.json":
+                    return {
+                        "summary": {
+                            "improvement_targets": [
+                                {
+                                    "target": "gmail_finance_contract_detection",
+                                    "label": "契約・請求判定",
+                                    "count": 2,
+                                    "recommendation": "請求・見積語を優先する。",
+                                }
+                            ]
+                        }
+                    }
+                return {}
+
+            def side_effect(cmd, env, timeout=60):
+                result = fake_run_cmd(cmd, env, timeout)
+                joined = " ".join(cmd)
+                if "roby-eval-harness.py" in joined:
+                    fake_read_json.post_eval = True
+                if "roby-memory-sync.py" in joined:
+                    fake_read_json.post_memory = True
+                return result
+
+            with (
+                patch.object(self.mod, "STATE_DIR", state_dir),
+                patch.object(self.mod, "RUNS_LOG", runs_log),
+                patch.object(self.mod, "load_env", return_value={"ROBY_IMMUTABLE_AUDIT": "0"}),
+                patch.object(self.mod, "run_cmd", side_effect=side_effect),
+                patch.object(self.mod, "read_json", side_effect=fake_read_json),
+                patch.object(self.mod, "append_audit_event"),
+                patch.object(self.mod, "send_slack"),
+                redirect_stdout(stdout),
+            ):
+                rc = self.mod.main()
+
+            self.assertEqual(rc, 0)
+            entry = json.loads(runs_log.read_text(encoding="utf-8").strip())
+            self.assertEqual(entry["post_eval_status"], "ok")
+            self.assertEqual(entry["post_memory_sync_status"], "ok")
+            self.assertEqual(entry["quality_delta"]["evaluation_failed_before"], 1)
+            self.assertEqual(entry["quality_delta"]["evaluation_failed_after"], 0)
+            self.assertEqual(entry["quality_delta"]["evaluation_failed_delta"], -1)
+            self.assertEqual(entry["quality_delta"]["unresolved_before"], 3)
+            self.assertEqual(entry["quality_delta"]["unresolved_after"], 1)
+            self.assertEqual(entry["quality_delta"]["unresolved_delta"], -2)
+            self.assertIn("QUALITY_DELTA:", stdout.getvalue())
 
 
 if __name__ == "__main__":

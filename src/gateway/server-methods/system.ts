@@ -118,6 +118,29 @@ async function readJsonLinesLastTimestamp(filePath: string): Promise<Date | null
   return null;
 }
 
+async function readJsonLinesLastEntry(filePath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const parsed = JSON.parse(lines[index]) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function ageMinutesFrom(date: Date | null, nowMs: number): number | null {
   if (!date) {
     return null;
@@ -359,6 +382,9 @@ async function buildRobyStatus() {
   );
   const feedbackLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "feedback_sync_state.json"));
   const memoryLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "memory_sync_state.json"));
+  const selfGrowthLatest = await readJsonLinesLastEntry(
+    path.join(ROBY_STATE_ROOT, "self_growth_runs.jsonl"),
+  );
   const ollama = await readOllamaStatus();
   const liveFreshness = await buildLiveFreshness();
   const workspaceBootstrap = await buildWorkspaceBootstrapStatus();
@@ -433,6 +459,8 @@ async function buildRobyStatus() {
         .map((value) => (typeof value === "string" ? value.trim() : ""))
         .filter(Boolean)
     : [];
+  const selfGrowthFocus = asRecord(selfGrowthLatest?.growth_focus);
+  const selfGrowthQualityDelta = asRecord(selfGrowthLatest?.quality_delta);
 
   return {
     generatedAtMs: Date.now(),
@@ -667,6 +695,60 @@ async function buildRobyStatus() {
           ? (((memoryLatest?.paths as Record<string, unknown> | undefined)
               ?.daily_note_path as string) ?? "")
           : "",
+    },
+    selfGrowthLatest: {
+      present: Boolean(selfGrowthLatest),
+      ts: parseTimestampMs(selfGrowthLatest?.ts ?? selfGrowthLatest?.timestamp),
+      patchStatus:
+        typeof selfGrowthLatest?.patch_status === "string" ? selfGrowthLatest.patch_status : "",
+      patchScopeStatus:
+        typeof selfGrowthLatest?.patch_scope_status === "string"
+          ? selfGrowthLatest.patch_scope_status
+          : "",
+      testStatus:
+        typeof selfGrowthLatest?.test_status === "string" ? selfGrowthLatest.test_status : "",
+      rollbackStatus:
+        typeof selfGrowthLatest?.rollback_status === "string"
+          ? selfGrowthLatest.rollback_status
+          : "",
+      commitStatus:
+        typeof selfGrowthLatest?.commit_status === "string" ? selfGrowthLatest.commit_status : "",
+      restartStatus:
+        typeof selfGrowthLatest?.restart_status === "string" ? selfGrowthLatest.restart_status : "",
+      postEvalStatus:
+        typeof selfGrowthLatest?.post_eval_status === "string"
+          ? selfGrowthLatest.post_eval_status
+          : "",
+      postMemorySyncStatus:
+        typeof selfGrowthLatest?.post_memory_sync_status === "string"
+          ? selfGrowthLatest.post_memory_sync_status
+          : "",
+      targetLabels: Array.isArray(selfGrowthFocus.target_labels)
+        ? selfGrowthFocus.target_labels
+            .map((value) => (typeof value === "string" ? value.trim() : ""))
+            .filter(Boolean)
+        : [],
+      suggestedFiles: Array.isArray(selfGrowthFocus.suggested_files)
+        ? selfGrowthFocus.suggested_files
+            .map((value) => (typeof value === "string" ? value.trim() : ""))
+            .filter(Boolean)
+        : [],
+      touchedFiles: Array.isArray(selfGrowthLatest?.touched_files)
+        ? (selfGrowthLatest.touched_files as unknown[])
+            .map((value) => (typeof value === "string" ? value.trim() : ""))
+            .filter(Boolean)
+        : [],
+      qualityDelta: {
+        evaluationFailedBefore: Number(selfGrowthQualityDelta.evaluation_failed_before ?? 0),
+        evaluationFailedAfter: Number(selfGrowthQualityDelta.evaluation_failed_after ?? 0),
+        evaluationFailedDelta: Number(selfGrowthQualityDelta.evaluation_failed_delta ?? 0),
+        unresolvedBefore: Number(selfGrowthQualityDelta.unresolved_before ?? 0),
+        unresolvedAfter: Number(selfGrowthQualityDelta.unresolved_after ?? 0),
+        unresolvedDelta: Number(selfGrowthQualityDelta.unresolved_delta ?? 0),
+        improved: Boolean(selfGrowthQualityDelta.improved),
+      },
+      summaryText:
+        typeof selfGrowthFocus.summary_text === "string" ? selfGrowthFocus.summary_text : "",
     },
     localFirst: {
       ollamaCli: ollama.cliPresent,
