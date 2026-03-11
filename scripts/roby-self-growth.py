@@ -12,6 +12,7 @@ from roby_audit import append_audit_event
 REPO_DIR = Path(__file__).resolve().parent.parent
 STATE_DIR = Path.home() / ".openclaw" / "roby"
 RUNS_LOG = STATE_DIR / "self_growth_runs.jsonl"
+WEEKLY_LATEST = STATE_DIR / "reports" / "weekly_latest.json"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
@@ -129,14 +130,79 @@ def _dedupe_keep_order(values: List[str]) -> List[str]:
     return out
 
 
+def _score_growth_target(target: Dict[str, Any], performance: Dict[str, Any]) -> float:
+    base = float(target.get("count") or 0)
+    success_rate = float(performance.get("success_rate") or 0.0)
+    improved_rate = float(performance.get("improved_rate") or 0.0)
+    measured_runs = int(performance.get("measured_runs") or 0)
+    latest_patch_status = str(performance.get("latest_patch_status") or "").strip()
+    score = base
+    if latest_patch_status in FAILURE_STATES:
+        score += 4.0
+    elif latest_patch_status == "out_of_scope":
+        score += 3.0
+    elif latest_patch_status == "no_change" and success_rate >= 0.8 and (measured_runs == 0 or improved_rate >= 0.5):
+        score -= 1.0
+    if success_rate < 0.5:
+        score += 2.0
+    elif success_rate < 0.8:
+        score += 1.0
+    if measured_runs > 0 and improved_rate < 0.3:
+        score += 2.0
+    elif measured_runs > 0 and improved_rate < 0.6:
+        score += 1.0
+    return score
+
+
+def _prioritize_growth_targets(
+    improvement_targets: List[Dict[str, Any]],
+    weekly_latest: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    weekly_self_growth = weekly_latest.get("self_growth") if isinstance(weekly_latest.get("self_growth"), dict) else {}
+    target_stats = weekly_self_growth.get("target_stats") if isinstance(weekly_self_growth.get("target_stats"), list) else []
+    performance_by_label: Dict[str, Dict[str, Any]] = {}
+    for row in target_stats:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label") or "").strip()
+        if label:
+            performance_by_label[label] = row
+
+    ranked: List[Dict[str, Any]] = []
+    for index, target in enumerate(improvement_targets):
+        if not isinstance(target, dict):
+            continue
+        label = str(target.get("label") or target.get("target") or "").strip()
+        performance = performance_by_label.get(label, {})
+        ranked.append(
+            {
+                **target,
+                "_priority_score": _score_growth_target(target, performance),
+                "_performance": performance,
+                "_original_index": index,
+            }
+        )
+
+    ranked.sort(
+        key=lambda row: (
+            -float(row.get("_priority_score") or 0.0),
+            -int(row.get("count") or 0),
+            int(row.get("_original_index") or 0),
+        )
+    )
+    return ranked
+
+
 def collect_growth_focus(
     memory_latest: Dict[str, Any],
     feedback_latest: Dict[str, Any],
     eval_latest: Dict[str, Any],
     drill_latest: Dict[str, Any],
+    weekly_latest: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     lines: List[str] = ["GROWTH FOCUS"]
     suggested_files: List[str] = []
+    weekly_latest = weekly_latest if isinstance(weekly_latest, dict) else {}
 
     feedback_summary = feedback_latest.get("summary") if isinstance(feedback_latest.get("summary"), dict) else {}
     improvement_targets = (
@@ -144,6 +210,7 @@ def collect_growth_focus(
         if isinstance(feedback_summary.get("improvement_targets"), list)
         else []
     )
+    ranked_targets = _prioritize_growth_targets(improvement_targets, weekly_latest)
     actionable_reason_counts = (
         feedback_summary.get("actionable_reason_counts")
         if isinstance(feedback_summary.get("actionable_reason_counts"), dict)
@@ -155,11 +222,20 @@ def collect_growth_focus(
         else []
     )
 
-    if improvement_targets:
+    if ranked_targets:
         lines.append("Priority targets:")
-        for target in improvement_targets[:3]:
+        for target in ranked_targets[:3]:
             if isinstance(target, dict):
-                lines.append(_format_growth_target(target))
+                perf = target.get("_performance") if isinstance(target.get("_performance"), dict) else {}
+                perf_suffix = ""
+                if perf:
+                    perf_suffix = (
+                        f" | success {int(perf.get('success_runs', 0) or 0)}/{int(perf.get('runs', 0) or 0)}"
+                        f" ({float(perf.get('success_rate', 0.0) or 0.0):.0%})"
+                        f", improved {int(perf.get('improved_runs', 0) or 0)}/{int(perf.get('measured_runs', 0) or 0)}"
+                        f", latest {str(perf.get('latest_patch_status') or '-')}"
+                    )
+                lines.append(f"{_format_growth_target(target)}{perf_suffix}")
                 suggested_files.extend(TARGET_FILE_RULES.get(str(target.get("target") or "").strip(), []))
 
     unresolved = memory_latest.get("unresolved") if isinstance(memory_latest.get("unresolved"), list) else []
@@ -226,7 +302,7 @@ def collect_growth_focus(
         "suggested_files": suggested_files,
         "target_labels": [
             str((target or {}).get("label") or (target or {}).get("target") or "").strip()
-            for target in improvement_targets[:3]
+            for target in ranked_targets[:3]
             if isinstance(target, dict)
         ],
         "unresolved": [str(item).strip() for item in unresolved[:5]],
@@ -235,6 +311,18 @@ def collect_growth_focus(
         "drill_failed": drill_failed,
         "drill_total": drill_total,
         "reason_counts": actionable_reason_counts,
+        "ranked_targets": [
+            {
+                "label": str((target or {}).get("label") or (target or {}).get("target") or "").strip(),
+                "target": str((target or {}).get("target") or "").strip(),
+                "score": float(target.get("_priority_score") or 0.0),
+                "latest_patch_status": str(((target.get("_performance") or {}) if isinstance(target, dict) else {}).get("latest_patch_status") or ""),
+                "success_rate": float(((target.get("_performance") or {}) if isinstance(target, dict) else {}).get("success_rate") or 0.0),
+                "improved_rate": float(((target.get("_performance") or {}) if isinstance(target, dict) else {}).get("improved_rate") or 0.0),
+            }
+            for target in ranked_targets[:5]
+            if isinstance(target, dict)
+        ],
     }
 
 
@@ -243,8 +331,9 @@ def summarize_growth_focus(
     feedback_latest: Dict[str, Any],
     eval_latest: Dict[str, Any],
     drill_latest: Dict[str, Any],
+    weekly_latest: Dict[str, Any] | None = None,
 ) -> str:
-    return collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)["summary_text"]
+    return collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest, weekly_latest)["summary_text"]
 
 
 def extract_touched_files(patch_text: str) -> List[str]:
@@ -506,7 +595,8 @@ def main() -> int:
     memory_latest = read_json(STATE_DIR / "memory_sync_state.json")
     eval_latest = read_json(STATE_DIR / "evals" / "latest.json")
     drill_latest = read_json(STATE_DIR / "drills" / "latest.json")
-    growth_focus = collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest)
+    weekly_latest = read_json(WEEKLY_LATEST)
+    growth_focus = collect_growth_focus(memory_latest, feedback_latest, eval_latest, drill_latest, weekly_latest)
     pre_quality = build_quality_snapshot(memory_latest, eval_latest, drill_latest)
     post_quality = dict(pre_quality)
     quality_delta = compute_quality_delta(pre_quality, post_quality)

@@ -152,6 +152,7 @@ class TestRobySelfGrowth(TestCase):
             },
             eval_latest={"failed": 1, "total": 7, "routes": {"gmail_pipeline": {"failed": 1}}},
             drill_latest={"failed": 0, "total": 13},
+            weekly_latest={},
         )
         self.assertIn("Candidate files:", focus["summary_text"])
         self.assertIn("skills/roby-mail/scripts/gmail_triage.py", focus["suggested_files"])
@@ -181,6 +182,7 @@ class TestRobySelfGrowth(TestCase):
             },
             eval_latest={"failed": 1, "total": 7, "routes": {"qa_gemini": {"failed": 1}}},
             drill_latest={"failed": 0, "total": 13},
+            weekly_latest={},
         )
         self.assertIn("GROWTH FOCUS", text)
         self.assertIn("Priority targets:", text)
@@ -190,8 +192,63 @@ class TestRobySelfGrowth(TestCase):
         self.assertIn("Runbook drill: 0/13 failed", text)
         self.assertIn("Top feedback reasons:", text)
 
+    def test_collect_growth_focus_prioritizes_targets_with_worse_history(self):
+        focus = self.mod.collect_growth_focus(
+            memory_latest={},
+            feedback_latest={
+                "summary": {
+                    "improvement_targets": [
+                        {
+                            "target": "gmail_promo_filtering",
+                            "label": "メルマガ判定",
+                            "count": 2,
+                            "recommendation": "archive 閾値を見直す。",
+                        },
+                        {
+                            "target": "gmail_review_vs_task",
+                            "label": "確認タスク判定",
+                            "count": 2,
+                            "recommendation": "review/task 境界を見直す。",
+                        },
+                    ]
+                }
+            },
+            eval_latest={},
+            drill_latest={},
+            weekly_latest={
+                "self_growth": {
+                    "target_stats": [
+                        {
+                            "label": "メルマガ判定",
+                            "runs": 2,
+                            "success_runs": 2,
+                            "success_rate": 1.0,
+                            "measured_runs": 1,
+                            "improved_runs": 1,
+                            "improved_rate": 1.0,
+                            "latest_patch_status": "no_change",
+                        },
+                        {
+                            "label": "確認タスク判定",
+                            "runs": 2,
+                            "success_runs": 0,
+                            "success_rate": 0.0,
+                            "measured_runs": 1,
+                            "improved_runs": 0,
+                            "improved_rate": 0.0,
+                            "latest_patch_status": "failed",
+                        },
+                    ]
+                }
+            },
+        )
+        ranked = focus["ranked_targets"]
+        self.assertEqual(ranked[0]["label"], "確認タスク判定")
+        self.assertIn("確認タスク判定", focus["summary_text"])
+        self.assertIn("latest failed", focus["summary_text"])
+
     def test_summarize_growth_focus_handles_missing_state(self):
-        text = self.mod.summarize_growth_focus({}, {}, {}, {})
+        text = self.mod.summarize_growth_focus({}, {}, {}, {}, {})
         self.assertEqual(text, "GROWTH FOCUS\n- no current focus")
 
     def test_main_skips_when_git_tree_dirty(self):
