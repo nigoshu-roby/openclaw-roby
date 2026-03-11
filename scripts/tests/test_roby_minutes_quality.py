@@ -159,9 +159,9 @@ class TestRobyMinutesQuality(TestCase):
             max_subtasks_per_parent=8,
         )
         self.assertEqual(len(cleaned), 1)
-        self.assertEqual(cleaned[0]["project"], "MIDジャパン-パチンコレポート")
-        self.assertTrue(cleaned[0]["title"].startswith("MIDジャパン-パチンコレポート / "))
-        self.assertTrue(all(x["project"] == "MIDジャパン-パチンコレポート" for x in cleaned[0]["subtasks"]))
+        self.assertEqual(cleaned[0]["project"], "ミッド・ガーデン・ジャパン")
+        self.assertTrue(cleaned[0]["title"].startswith("ミッド・ガーデン・ジャパン / "))
+        self.assertTrue(all(x["project"] == "ミッド・ガーデン・ジャパン" for x in cleaned[0]["subtasks"]))
 
     def test_normalize_minutes_parent_title_prefixes_specific_title_with_project(self):
         title = self.mod._normalize_minutes_parent_title(
@@ -170,6 +170,13 @@ class TestRobyMinutesQuality(TestCase):
             "渋谷Billage事務所情報",
         )
         self.assertEqual(title, "TOKIWAGI_MASTER / 渋谷Billage事務所情報")
+
+    def test_canonical_project_display_name_normalizes_mid_variants(self):
+        self.assertEqual(self.mod._canonical_project_display_name("MID"), "ミッド・ガーデン・ジャパン")
+        self.assertEqual(
+            self.mod._canonical_project_display_name("MIDジャパン-パチンコレポート"),
+            "ミッド・ガーデン・ジャパン",
+        )
 
     def test_run_with_doc_timeout_returns_function_result_when_alarm_is_stubbed(self):
         with patch.object(self.mod.signal, "signal"), patch.object(self.mod.signal, "setitimer"):

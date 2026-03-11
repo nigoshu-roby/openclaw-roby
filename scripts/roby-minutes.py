@@ -395,12 +395,25 @@ GENERIC_PROJECT_NAMES = {
     "GDocs",
 }
 
+PROJECT_DISPLAY_NORMALIZATION = {
+    "MID": "ミッド・ガーデン・ジャパン",
+    "MIDジャパン-パチンコレポート": "ミッド・ガーデン・ジャパン",
+    "ミッドガーデンジャパン": "ミッド・ガーデン・ジャパン",
+}
+
 
 def _clean_line(line: str) -> str:
     s = re.sub(r"^\s*[-*・●◯□■]+\s*", "", line.strip())
     s = re.sub(r"^\s*\d+[.)]\s*", "", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
+
+
+def _canonical_project_display_name(name: str) -> str:
+    raw = (name or "").strip()
+    if not raw:
+        return ""
+    return PROJECT_DISPLAY_NORMALIZATION.get(raw, raw)
 
 
 def _line_looks_like_project_heading(line: str, known_projects: List[str]) -> Optional[str]:
@@ -542,15 +555,15 @@ def _resolve_project_name(
     p = (project or "").strip()
     matched = _match_known_project_name(p, known_projects)
     if matched:
-        return matched
+        return _canonical_project_display_name(matched)
     inferred = _infer_project_from_text(" ".join([p or "", title or "", note or "", source_title or ""]), known_projects)
     if inferred:
-        return inferred
+        return _canonical_project_display_name(inferred)
     if p and _looks_plausible_project_label(p):
-        return p
+        return _canonical_project_display_name(p)
     if default_project and default_project not in GENERIC_PROJECT_NAMES:
-        return _match_known_project_name(default_project, known_projects) or default_project
-    return p or default_project or "TOKIWAGI"
+        return _canonical_project_display_name(_match_known_project_name(default_project, known_projects) or default_project)
+    return _canonical_project_display_name(p or default_project or "TOKIWAGI")
 
 
 def _project_aliases(name: str) -> List[str]:
@@ -699,7 +712,7 @@ def sanitize_extracted_tasks(
                 known_projects,
             )
             project = (
-                contextual_project
+                _canonical_project_display_name(contextual_project) if contextual_project else None
                 or _resolve_project_name(
                     raw_item_project,
                     title,
