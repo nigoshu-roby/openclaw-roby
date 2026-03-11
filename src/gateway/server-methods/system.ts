@@ -296,6 +296,7 @@ async function buildRobyStatus() {
     path.join(ROBY_STATE_ROOT, "reports", "weekly_latest.json"),
   );
   const feedbackLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "feedback_sync_state.json"));
+  const memoryLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "memory_sync_state.json"));
   const ollama = await readOllamaStatus();
   const liveFreshness = await buildLiveFreshness();
   const workspaceBootstrap = await buildWorkspaceBootstrapStatus();
@@ -502,6 +503,43 @@ async function buildRobyStatus() {
         updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
         originId: typeof row.origin_id === "string" ? row.origin_id : "",
       })),
+    },
+    memorySync: {
+      present: Boolean(memoryLatest),
+      ts: parseTimestampMs(memoryLatest?.updated_at),
+      heartbeatStatus:
+        typeof memoryLatest?.heartbeat_status === "string" ? memoryLatest.heartbeat_status : "",
+      unresolvedCount: Number(memoryLatest?.unresolved_count ?? 0),
+      unresolved: Array.isArray(memoryLatest?.unresolved)
+        ? memoryLatest.unresolved
+            .map((value) => (typeof value === "string" ? value.trim() : ""))
+            .filter(Boolean)
+        : [],
+      topTargets: Array.isArray(memoryLatest?.top_targets)
+        ? memoryLatest.top_targets
+            .filter((row) => row && typeof row === "object")
+            .map((row) => ({
+              target:
+                typeof (row as Record<string, unknown>).target === "string"
+                  ? ((row as Record<string, unknown>).target as string)
+                  : "",
+              label:
+                typeof (row as Record<string, unknown>).label === "string"
+                  ? ((row as Record<string, unknown>).label as string)
+                  : "",
+              count: Number((row as Record<string, unknown>).count ?? 0),
+              recommendation:
+                typeof (row as Record<string, unknown>).recommendation === "string"
+                  ? ((row as Record<string, unknown>).recommendation as string)
+                  : "",
+            }))
+        : [],
+      dailyNotePath:
+        typeof (memoryLatest?.paths as Record<string, unknown> | undefined)?.daily_note_path ===
+        "string"
+          ? (((memoryLatest?.paths as Record<string, unknown> | undefined)
+              ?.daily_note_path as string) ?? "")
+          : "",
     },
     localFirst: {
       ollamaCli: ollama.cliPresent,

@@ -29,6 +29,7 @@ FEEDBACK_SYNC_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-feedback-sync.py"
 EVAL_HARNESS_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-eval-harness.py"
 DRILL_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-drill.py"
 WEEKLY_REPORT_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-weekly-report.py"
+MEMORY_SYNC_SCRIPT = OPENCLAW_REPO / "scripts" / "roby-memory-sync.py"
 AB_ROUTER_CONFIG_PATH = OPENCLAW_REPO / "config" / "pbs" / "ab_router.json"
 AB_RUN_LOG_PATH = STATE_DIR / "ab_router_runs.jsonl"
 
@@ -43,6 +44,7 @@ ROUTE_FEEDBACK = "feedback_sync"
 ROUTE_EVAL = "evaluation_harness"
 ROUTE_DRILL = "runbook_drill"
 ROUTE_WEEKLY_REPORT = "weekly_report"
+ROUTE_MEMORY_SYNC = "memory_sync"
 
 CODING_HINTS = [
     "実装", "修正", "バグ", "テスト", "リファクタ", "コーディング", "コード", "ui", "ux", "画面", "api", "連携", "デプロイ", "再起動", "改善", "追加", "変更"
@@ -70,6 +72,9 @@ DRILL_HINTS = [
 ]
 WEEKLY_REPORT_HINTS = [
     "週次レポート", "weekly report", "週報", "運用レポート", "サマリレポート"
+]
+MEMORY_HINTS = [
+    "memory sync", "memory_sync", "heartbeat", "memory.md", "heartbeat.md", "記憶同期", "メモリ同期", "記憶更新", "heartbeat更新"
 ]
 
 
@@ -546,6 +551,8 @@ def classify_intent_heuristic(message: str) -> str:
         return ROUTE_NOTION_SYNC
     if any(k in lower for k in FEEDBACK_HINTS):
         return ROUTE_FEEDBACK
+    if any(k in lower for k in MEMORY_HINTS):
+        return ROUTE_MEMORY_SYNC
     if any(k in lower for k in WEEKLY_REPORT_HINTS):
         return ROUTE_WEEKLY_REPORT
     if any(k in lower for k in DRILL_HINTS):
@@ -624,10 +631,10 @@ def classify_intent_gemini(message: str, env: Dict[str, str]) -> Optional[Dict[s
     intent_text = extract_latest_user_request(message)
     prompt = (
         "Classify the user request for orchestration. Return ONLY JSON object with keys: route, reason, confidence. "
-        f"route must be one of: {ROUTE_QA}, {ROUTE_QA_LOCAL}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_FEEDBACK}, {ROUTE_EVAL}, {ROUTE_DRILL}, {ROUTE_WEEKLY_REPORT}."
+        f"route must be one of: {ROUTE_QA}, {ROUTE_QA_LOCAL}, {ROUTE_CODING}, {ROUTE_MINUTES}, {ROUTE_SELF_GROWTH}, {ROUTE_GMAIL}, {ROUTE_NOTION_SYNC}, {ROUTE_FEEDBACK}, {ROUTE_MEMORY_SYNC}, {ROUTE_EVAL}, {ROUTE_DRILL}, {ROUTE_WEEKLY_REPORT}."
     )
     parsed, raw = run_summarize_json(prompt, intent_text, env, max_tokens="300", timeout_sec=45)
-    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_QA_LOCAL, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_FEEDBACK, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT}:
+    if isinstance(parsed, dict) and parsed.get("route") in {ROUTE_QA, ROUTE_QA_LOCAL, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_FEEDBACK, ROUTE_MEMORY_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT}:
         parsed["raw"] = raw
         return parsed
     return None
@@ -869,6 +876,7 @@ def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
         ("議事録処理（Notion/GDocs）", MINUTES_SCRIPT),
         ("Gmail仕分け", GMAIL_TRIAGE_SCRIPT),
         ("Neuronic評価回収", FEEDBACK_SYNC_SCRIPT),
+        ("MEMORY/HEARTBEAT同期", MEMORY_SYNC_SCRIPT),
         ("自己成長ジョブ", SELF_GROWTH_SCRIPT),
         ("GitHub→Notion同期", NOTION_SYNC_SCRIPT),
     ]
@@ -896,6 +904,7 @@ def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
     gmail_last = read_last_jsonl(STATE_DIR / "gmail_triage_runs.jsonl")
     self_growth_last = read_last_jsonl(STATE_DIR / "self_growth_runs.jsonl")
     feedback_last = read_last_json(STATE_DIR / "feedback_sync_state.json")
+    memory_last = read_last_json(STATE_DIR / "memory_sync_state.json")
     eval_last = read_last_json(STATE_DIR / "evals" / "latest.json")
     drill_last = read_last_json(STATE_DIR / "drills" / "latest.json")
 
@@ -916,6 +925,10 @@ def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
             (
                 f"- feedback_loop: reviewed={int(((feedback_last or {}).get('summary') or {}).get('reviewed_count', 0))} "
                 f"actionable={int(((feedback_last or {}).get('summary') or {}).get('actionable_count', 0))}"
+            ),
+            (
+                f"- memory_sync: heartbeat={str((memory_last or {}).get('heartbeat_status', 'unknown'))} "
+                f"unresolved={int((memory_last or {}).get('unresolved_count', 0) or 0)}"
             ),
             "",
             "## 運用品質の最新状態",
@@ -940,6 +953,7 @@ def build_local_capability_summary(env: Optional[Dict[str, str]] = None) -> str:
             f"- {ROUTE_SELF_GROWTH}",
             f"- {ROUTE_NOTION_SYNC}",
             f"- {ROUTE_FEEDBACK}",
+            f"- {ROUTE_MEMORY_SYNC}",
             f"- {ROUTE_EVAL}",
             f"- {ROUTE_DRILL}",
             f"- {ROUTE_WEEKLY_REPORT}",
@@ -1042,6 +1056,7 @@ def build_runtime_status_summary(env: Dict[str, str]) -> str:
     lines.append(f"- Neuronic endpoint: {neuronic_url}")
     lines.append(f"- Neuronic token: {'設定済み' if neuronic_token else '未設定'}")
     feedback_last = read_last_json(STATE_DIR / "feedback_sync_state.json")
+    memory_last = read_last_json(STATE_DIR / "memory_sync_state.json")
     if feedback_last and isinstance(feedback_last.get("summary"), dict):
         s = feedback_last["summary"]
         counts = s.get("counts") if isinstance(s.get("counts"), dict) else {}
@@ -1050,6 +1065,11 @@ def build_runtime_status_summary(env: Dict[str, str]) -> str:
             f"reviewed={int(s.get('reviewed_count', 0))}, actionable={int(s.get('actionable_count', 0))}, "
             f"good={int(counts.get('good', 0))}, bad={int(counts.get('bad', 0))}, missed={int(counts.get('missed', 0))}"
         )
+    lines.append(
+        "- 直近 memory_sync: "
+        f"heartbeat={str((memory_last or {}).get('heartbeat_status', 'unknown'))}, "
+        f"unresolved={int(((memory_last or {}).get('unresolved_count', 0)) or 0)}"
+    )
 
     minutes_last = read_last_jsonl(STATE_DIR / "minutes_runs.jsonl")
     if minutes_last and isinstance(minutes_last.get("summary"), dict):
@@ -1086,6 +1106,7 @@ def build_runtime_status_summary(env: Dict[str, str]) -> str:
             f"- {ROUTE_SELF_GROWTH}",
             f"- {ROUTE_NOTION_SYNC}",
             f"- {ROUTE_FEEDBACK}",
+            f"- {ROUTE_MEMORY_SYNC}",
             f"- {ROUTE_EVAL}",
             f"- {ROUTE_DRILL}",
             f"- {ROUTE_WEEKLY_REPORT}",
@@ -2164,6 +2185,28 @@ def handle_feedback_sync(env: Dict[str, str], execute: bool, dry_run: bool = Fal
     return result
 
 
+def handle_memory_sync(env: Dict[str, str], execute: bool, dry_run: bool = False) -> Dict[str, Any]:
+    cmd = [
+        "python3", str(MEMORY_SYNC_SCRIPT),
+        "--json",
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    result: Dict[str, Any] = {
+        "route": ROUTE_MEMORY_SYNC,
+        "command": " ".join(shlex.quote(x) for x in cmd),
+        "executed": False,
+    }
+    if execute:
+        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        result["executed"] = True
+        result["ok"] = proc.returncode == 0
+        result["stdout"] = proc.stdout
+        result["stderr"] = proc.stderr
+        result["returncode"] = proc.returncode
+    return result
+
+
 def handle_eval_harness(env: Dict[str, str], execute: bool, verbose: bool) -> Dict[str, Any]:
     cmd = [
         "python3", str(EVAL_HARNESS_SCRIPT),
@@ -2503,8 +2546,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", default="")
     parser.add_argument("--message-stdin", action="store_true")
-    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_QA_LOCAL, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_FEEDBACK, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT], default="auto")
-    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "feedback_sync", "eval_harness", "runbook_drill", "weekly_report", "none"], default="none")
+    parser.add_argument("--route", choices=["auto", ROUTE_QA, ROUTE_QA_LOCAL, ROUTE_CODING, ROUTE_MINUTES, ROUTE_SELF_GROWTH, ROUTE_GMAIL, ROUTE_NOTION_SYNC, ROUTE_FEEDBACK, ROUTE_MEMORY_SYNC, ROUTE_EVAL, ROUTE_DRILL, ROUTE_WEEKLY_REPORT], default="auto")
+    parser.add_argument("--cron-task", choices=["self_growth", "minutes_sync", "gmail_triage", "notion_sync", "feedback_sync", "memory_sync", "eval_harness", "runbook_drill", "weekly_report", "none"], default="none")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -2558,6 +2601,14 @@ def main() -> int:
                     "Neuronicの評価フィードバックを同期",
                 )
             classify_meta = {"method": "cron_task", "cron_task": "feedback_sync"}
+        elif args.cron_task == "memory_sync":
+            route = ROUTE_MEMORY_SYNC
+            if not args.message:
+                args.message = env.get(
+                    "ROBY_ORCH_MEMORY_SYNC_CRON_MESSAGE",
+                    "MEMORY.md と HEARTBEAT.md を最新の運用状態へ同期",
+                )
+            classify_meta = {"method": "cron_task", "cron_task": "memory_sync"}
         elif args.cron_task == "eval_harness":
             route = ROUTE_EVAL
             if not args.message:
@@ -2615,6 +2666,10 @@ def main() -> int:
         msg_low = args.message.lower()
         dry = ("--dry-run" in msg_low) or ("dry-run" in msg_low) or ("ドライラン" in args.message)
         action = handle_feedback_sync(env, args.execute, dry_run=dry)
+    elif route == ROUTE_MEMORY_SYNC:
+        msg_low = args.message.lower()
+        dry = ("--dry-run" in msg_low) or ("dry-run" in msg_low) or ("ドライラン" in args.message)
+        action = handle_memory_sync(env, args.execute, dry_run=dry)
     elif route == ROUTE_EVAL:
         action = handle_eval_harness(env, args.execute, args.verbose)
     elif route == ROUTE_DRILL:

@@ -172,6 +172,7 @@ export function renderRoby(props: RobyProps) {
   const liveFreshness = ops?.liveFreshness;
   const weeklyStatus = ops?.weeklyReport;
   const feedbackLoop = ops?.feedbackLoop;
+  const memorySync = ops?.memorySync;
   const localFirst = ops?.localFirst;
   const workspaceBootstrap = ops?.workspaceBootstrap;
   const weeklyLoaded = Boolean(weeklyStatus);
@@ -296,7 +297,7 @@ export function renderRoby(props: RobyProps) {
         </div>
       </div>
     </section>
-    <section class="grid" style="margin-top: 18px; grid-template-columns: repeat(6, minmax(0, 1fr));">
+    <section class="grid" style="margin-top: 18px; grid-template-columns: repeat(7, minmax(0, 1fr));">
       ${renderOpsCard({
         title: "現在の稼働状況",
         status:
@@ -415,6 +416,48 @@ export function renderRoby(props: RobyProps) {
                   </div>
                 `,
               )}
+            `
+          : nothing,
+      })}
+      ${renderOpsCard({
+        title: "Memory / Heartbeat",
+        status:
+          memorySync?.present === false
+            ? "未取得"
+            : memorySync?.heartbeatStatus === "HEARTBEAT_OK"
+              ? "正常"
+              : "要対応",
+        tone:
+          memorySync?.present === false
+            ? "muted"
+            : memorySync?.heartbeatStatus === "HEARTBEAT_OK"
+              ? "ok"
+              : "warn",
+        subtitle: memorySync?.present
+          ? `heartbeat ${memorySync?.heartbeatStatus ?? "unknown"} / unresolved ${memorySync?.unresolvedCount ?? 0}`
+          : "MEMORY / HEARTBEAT 未同期",
+        meta: memorySync?.ts ? formatRelativeTimestamp(memorySync.ts) : "—",
+        details: memorySync?.present
+          ? html`
+              <div class="muted">未解消: ${joinList(memorySync?.unresolved, "なし")}</div>
+              <div class="muted">daily note: ${memorySync?.dailyNotePath || "未生成"}</div>
+              ${
+                (memorySync?.topTargets?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted" style="margin-top: 8px;">現在の改善フォーカス</div>
+                      ${memorySync?.topTargets?.slice(0, 4).map(
+                        (row) => html`
+                          <div class="muted">- ${row.label || row.target}: ${row.count}</div>
+                          ${
+                            row.recommendation
+                              ? html`<div class="muted" style="padding-left: 12px;">${row.recommendation}</div>`
+                              : nothing
+                          }
+                        `,
+                      )}
+                    `
+                  : nothing
+              }
             `
           : nothing,
       })}

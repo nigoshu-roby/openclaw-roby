@@ -62,6 +62,10 @@ class TestRobyOrchestratorRouting(TestCase):
         route = self.mod.classify_intent_heuristic(FULL_REGISTER_MESSAGE_WITH_DRILL_WORD)
         self.assertEqual(route, self.mod.ROUTE_MINUTES)
 
+    def test_classify_memory_sync_keywords(self):
+        route = self.mod.classify_intent_heuristic("HEARTBEAT.md を更新して")
+        self.assertEqual(route, self.mod.ROUTE_MEMORY_SYNC)
+
     def test_self_status_detection_not_triggered_by_wrapped_context(self):
         self.assertFalse(self.mod.is_self_status_request(WRAPPED_MESSAGE))
 
@@ -103,6 +107,7 @@ class TestRobyOrchestratorRouting(TestCase):
             ]),
             patch.object(self.mod, "read_last_json", side_effect=[
                 None,
+                None,
                 {"failed": 1, "total": 7, "gates": {"ok": False}, "latency": {"p95_ms": 1200}},
                 {"all_ok": True, "failed": 0, "total": 9, "skipped": 1},
             ]),
@@ -125,6 +130,7 @@ class TestRobyOrchestratorRouting(TestCase):
             ]),
             patch.object(self.mod, "read_last_json", side_effect=[
                 {"summary": {"reviewed_count": 6, "actionable_count": 2, "counts": {"good": 3, "bad": 1, "missed": 1}}},
+                None,
                 {"failed": 0, "total": 7, "gates": {"ok": True}, "latency": {"p95_ms": 900}},
                 {"all_ok": True, "failed": 0, "total": 8, "skipped": 0},
             ]),
@@ -137,6 +143,32 @@ class TestRobyOrchestratorRouting(TestCase):
                 }
             )
         self.assertIn("feedback_loop: reviewed=6, actionable=2, good=3, bad=1, missed=1", text)
+        self.assertIn("直近 memory_sync: heartbeat=unknown, unresolved=0", text)
+
+    def test_build_runtime_status_summary_includes_memory_sync(self):
+        with (
+            patch.object(self.mod, "read_last_jsonl", side_effect=[
+                None,
+                None,
+            ]),
+            patch.object(self.mod, "read_last_json", side_effect=[
+                {"summary": {"reviewed_count": 0, "actionable_count": 0, "counts": {}}},
+                {
+                    "heartbeat_status": "HEARTBEAT_ATTENTION",
+                    "unresolved_count": 2,
+                },
+                {"failed": 0, "total": 7, "gates": {"ok": True}, "latency": {"p95_ms": 900}},
+                {"all_ok": True, "failed": 0, "total": 8, "skipped": 0},
+            ]),
+        ):
+            text = self.mod.build_runtime_status_summary(
+                {
+                    "ROBY_ORCH_OLLAMA_BASE_URL": "http://127.0.0.1:11434",
+                    "NEURONIC_URL": "http://127.0.0.1:5174/api/v1/tasks/import",
+                    "NEURONIC_TOKEN": "dummy",
+                }
+            )
+        self.assertIn("直近 memory_sync: heartbeat=HEARTBEAT_ATTENTION, unresolved=2", text)
 
     def test_apply_minutes_llm_profile_hybrid_prefers_fast_local_preprocess(self):
         profile, overrides = self.mod.apply_minutes_llm_profile(
@@ -163,6 +195,7 @@ class TestRobyOrchestratorRouting(TestCase):
                 {"patch_status": "no_change"},
             ]),
             patch.object(self.mod, "read_last_json", side_effect=[
+                None,
                 None,
                 {"failed": 0, "total": 7, "gates": {"ok": True}, "latency": {"p95_ms": 900}},
                 {"all_ok": False, "failed": 2, "total": 8, "skipped": 0},

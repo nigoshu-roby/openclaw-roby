@@ -707,6 +707,19 @@ export type RobyLocalFirstStatus = {
   error?: string | null;
 };
 
+export type RobyMemorySyncStatus = RobyOpsHealthSummary & {
+  heartbeatStatus?: string;
+  unresolvedCount?: number;
+  unresolved?: string[];
+  topTargets?: Array<{
+    target: string;
+    label: string;
+    count: number;
+    recommendation?: string;
+  }>;
+  dailyNotePath?: string;
+};
+
 export type RobyWorkspaceBootstrapStatus = {
   present: boolean;
   ts: number | null;
@@ -728,6 +741,7 @@ export type RobyOpsStatus = {
   liveFreshness: RobyLiveFreshnessStatus;
   weeklyReport: RobyWeeklyStatus;
   feedbackLoop: RobyFeedbackLoopStatus;
+  memorySync: RobyMemorySyncStatus;
   localFirst: RobyLocalFirstStatus;
   workspaceBootstrap: RobyWorkspaceBootstrapStatus;
 };
