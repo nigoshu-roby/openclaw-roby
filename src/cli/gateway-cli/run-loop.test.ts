@@ -59,6 +59,20 @@ function removeNewSignalListeners(
   }
 }
 
+function addedSignalListener(
+  signal: NodeJS.Signals,
+  existing: Set<(...args: unknown[]) => void>,
+): (() => void) | null {
+  const listeners = process.listeners(signal) as Array<(...args: unknown[]) => void>;
+  for (let i = listeners.length - 1; i >= 0; i -= 1) {
+    const listener = listeners[i];
+    if (listener && !existing.has(listener)) {
+      return listener as () => void;
+    }
+  }
+  return null;
+}
+
 async function withIsolatedSignals(run: () => Promise<void>) {
   const beforeSigterm = new Set(
     process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>,
@@ -327,6 +341,49 @@ describe("runGatewayLoop", () => {
       );
     });
   });
+
+  it("exits 1 when restart shutdown times out", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      const beforeSigusr1 = new Set(
+        process.listeners("SIGUSR1") as Array<(...args: unknown[]) => void>,
+      );
+      let forceExit: (() => void) | null = null;
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+        fn: () => void,
+      ) => {
+        forceExit = fn;
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      }) as typeof setTimeout);
+      const clearTimeoutSpy = vi
+        .spyOn(globalThis, "clearTimeout")
+        .mockImplementation((() => {}) as typeof clearTimeout);
+      const close = vi.fn(async () => {
+        await new Promise(() => {});
+      });
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { loopPromise } = await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+      const sigusr1 = addedSignalListener("SIGUSR1", beforeSigusr1);
+      expect(sigusr1).not.toBeNull();
+
+      sigusr1?.();
+      expect(forceExit).not.toBeNull();
+      forceExit?.();
+
+      await expect(exited).resolves.toBe(1);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "shutdown timed out; exiting without full cleanup",
+      );
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+
+      void loopPromise.catch(() => {});
+    });
+  }, 15_000);
 });
 
 describe("gateway discover routing helpers", () => {
