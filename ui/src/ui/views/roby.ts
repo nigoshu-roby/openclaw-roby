@@ -168,6 +168,38 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
+function openOpsDialog(event: Event) {
+  const trigger = event.currentTarget as HTMLElement | null;
+  const card = trigger?.closest(".roby-ops-card");
+  const dialog = card?.querySelector(".roby-ops-card__dialog") as HTMLDialogElement | null;
+  if (!dialog || dialog.open) {
+    return;
+  }
+  dialog.showModal();
+}
+
+function closeOpsDialog(event: Event) {
+  const trigger = event.currentTarget as HTMLElement | null;
+  const dialog = trigger?.closest(".roby-ops-card__dialog") as HTMLDialogElement | null;
+  dialog?.close();
+}
+
+function closeOpsDialogOnBackdrop(event: MouseEvent) {
+  const dialog = event.currentTarget as HTMLDialogElement | null;
+  if (!dialog) {
+    return;
+  }
+  const rect = dialog.getBoundingClientRect();
+  const inside =
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom;
+  if (!inside) {
+    dialog.close();
+  }
+}
+
 export function renderRoby(props: RobyProps) {
   const job = findSelfGrowthJob(props.cronJobs);
   const isLoaded = job && props.cronRunsJobId === job.id;
@@ -328,7 +360,7 @@ export function renderRoby(props: RobyProps) {
         </div>
       </div>
     </section>
-    <section class="grid" style="margin-top: 18px; grid-template-columns: repeat(7, minmax(0, 1fr));">
+    <section class="grid roby-ops-grid" style="margin-top: 18px;">
       ${renderOpsCard({
         title: "現在の稼働状況",
         status:
@@ -809,7 +841,7 @@ function renderOpsCard(params: {
   cardStyle?: string;
 }) {
   return html`
-    <div class="card" style=${params.cardStyle ?? nothing}>
+    <div class="card roby-ops-card" style=${params.cardStyle ?? nothing}>
       <div class="card-title">${params.title}</div>
       <div class="row" style="margin-top: 12px;">
         <span class="pill ${params.tone}">${params.status}</span>
@@ -819,12 +851,29 @@ function renderOpsCard(params: {
       ${
         params.details && params.details !== nothing
           ? html`
-              <details style="margin-top: 12px;">
-                <summary class="link" style="cursor:pointer; font-weight: 600;">詳細を見る</summary>
-                <div style="margin-top: 10px; display:grid; gap: 6px;">
+              <button class="btn btn--ghost roby-ops-card__details-trigger" type="button" @click=${openOpsDialog}>
+                詳細を見る
+              </button>
+              <dialog class="roby-ops-card__dialog" @click=${closeOpsDialogOnBackdrop}>
+                <div class="roby-ops-card__dialog-header">
+                  <div>
+                    <div class="roby-ops-card__dialog-title">${params.title}</div>
+                    <div class="muted">${params.subtitle}</div>
+                  </div>
+                  <button
+                    class="btn btn--ghost roby-ops-card__dialog-close"
+                    type="button"
+                    aria-label="閉じる"
+                    title="閉じる"
+                    @click=${closeOpsDialog}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div class="roby-ops-card__dialog-body">
                   ${params.details}
                 </div>
-              </details>
+              </dialog>
             `
           : nothing
       }
