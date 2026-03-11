@@ -173,6 +173,7 @@ export function renderRoby(props: RobyProps) {
   const weeklyStatus = ops?.weeklyReport;
   const feedbackLoop = ops?.feedbackLoop;
   const localFirst = ops?.localFirst;
+  const workspaceBootstrap = ops?.workspaceBootstrap;
   const weeklyLoaded = Boolean(weeklyStatus);
   const currentIssues = [
     evalStatus?.present === true && evalStatus?.allOk === false,
@@ -295,7 +296,7 @@ export function renderRoby(props: RobyProps) {
         </div>
       </div>
     </section>
-    <section class="grid" style="margin-top: 18px; grid-template-columns: repeat(5, minmax(0, 1fr));">
+    <section class="grid" style="margin-top: 18px; grid-template-columns: repeat(6, minmax(0, 1fr));">
       ${renderOpsCard({
         title: "現在の稼働状況",
         status:
@@ -372,6 +373,49 @@ export function renderRoby(props: RobyProps) {
               : nothing
           }
         `
+          : nothing,
+      })}
+      ${renderOpsCard({
+        title: "Workspace Bootstrap",
+        status:
+          workspaceBootstrap?.present === false
+            ? "未取得"
+            : workspaceBootstrap?.allPresent
+              ? "正常"
+              : "不足あり",
+        tone:
+          workspaceBootstrap?.present === false
+            ? "muted"
+            : workspaceBootstrap?.allPresent
+              ? "ok"
+              : "warn",
+        subtitle: workspaceBootstrap?.present
+          ? `AGENTS / SOUL / MEMORY / HEARTBEAT`
+          : "workspace bootstrap 未取得",
+        meta: workspaceBootstrap?.ts ? formatRelativeTimestamp(workspaceBootstrap.ts) : "—",
+        details: workspaceBootstrap?.present
+          ? html`
+              <div class="muted">不足: ${joinList(workspaceBootstrap?.missing, "なし")}</div>
+              <div class="muted" style="margin-top: 8px;">構成ファイル</div>
+              ${workspaceBootstrap.files.map(
+                (row) => html`
+                  <div class="row" style="gap: 8px; align-items: flex-start;">
+                    <div style="display: grid; gap: 4px; flex: 1; min-width: 0;">
+                      <span class="pill ${row.present ? "ok" : "warn"}" style="width: fit-content;">
+                        ${row.name}
+                      </span>
+                      <span class="muted">
+                        ${
+                          row.present
+                            ? `${Math.max(1, Math.round(row.sizeBytes / 1024))}KB / ${row.mtimeMs ? formatRelativeTimestamp(row.mtimeMs) : "更新時刻不明"}`
+                            : "未作成"
+                        }
+                      </span>
+                    </div>
+                  </div>
+                `,
+              )}
+            `
           : nothing,
       })}
       ${renderOpsCard({

@@ -707,6 +707,20 @@ export type RobyLocalFirstStatus = {
   error?: string | null;
 };
 
+export type RobyWorkspaceBootstrapStatus = {
+  present: boolean;
+  ts: number | null;
+  allPresent: boolean;
+  missing: string[];
+  files: Array<{
+    key: string;
+    name: string;
+    present: boolean;
+    sizeBytes: number;
+    mtimeMs: number | null;
+  }>;
+};
+
 export type RobyOpsStatus = {
   generatedAtMs: number;
   evaluationHarness: RobyEvalStatus;
@@ -715,6 +729,7 @@ export type RobyOpsStatus = {
   weeklyReport: RobyWeeklyStatus;
   feedbackLoop: RobyFeedbackLoopStatus;
   localFirst: RobyLocalFirstStatus;
+  workspaceBootstrap: RobyWorkspaceBootstrapStatus;
 };
 
 export type SkillsStatusConfigCheck = {

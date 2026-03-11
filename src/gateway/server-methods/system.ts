@@ -200,6 +200,53 @@ async function buildLiveFreshness() {
   };
 }
 
+async function buildWorkspaceBootstrapStatus() {
+  const entries = [
+    { key: "agents", name: "AGENTS.md", filePath: path.join(OPENCLAW_REPO, "AGENTS.md") },
+    { key: "soul", name: "SOUL.md", filePath: path.join(OPENCLAW_REPO, "SOUL.md") },
+    { key: "memory", name: "MEMORY.md", filePath: path.join(OPENCLAW_REPO, "MEMORY.md") },
+    { key: "heartbeat", name: "HEARTBEAT.md", filePath: path.join(OPENCLAW_REPO, "HEARTBEAT.md") },
+  ] as const;
+
+  const files = [] as Array<{
+    key: string;
+    name: string;
+    present: boolean;
+    sizeBytes: number;
+    mtimeMs: number | null;
+  }>;
+
+  for (const entry of entries) {
+    try {
+      const stat = await fs.stat(entry.filePath);
+      files.push({
+        key: entry.key,
+        name: entry.name,
+        present: stat.isFile(),
+        sizeBytes: stat.size,
+        mtimeMs: stat.mtimeMs,
+      });
+    } catch {
+      files.push({
+        key: entry.key,
+        name: entry.name,
+        present: false,
+        sizeBytes: 0,
+        mtimeMs: null,
+      });
+    }
+  }
+
+  const missing = files.filter((file) => !file.present).map((file) => file.name);
+  return {
+    present: true,
+    ts: Date.now(),
+    allPresent: missing.length === 0,
+    missing,
+    files,
+  };
+}
+
 async function readOllamaStatus() {
   const cliPresent =
     spawnSync("sh", ["-lc", "command -v ollama >/dev/null 2>&1"], {
@@ -251,6 +298,7 @@ async function buildRobyStatus() {
   const feedbackLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "feedback_sync_state.json"));
   const ollama = await readOllamaStatus();
   const liveFreshness = await buildLiveFreshness();
+  const workspaceBootstrap = await buildWorkspaceBootstrapStatus();
   const evalResults = Array.isArray(evalLatest?.results)
     ? (evalLatest.results as Array<Record<string, unknown>>)
     : [];
@@ -490,6 +538,7 @@ async function buildRobyStatus() {
       ).trim(),
       error: ollama.error,
     },
+    workspaceBootstrap,
   };
 }
 
