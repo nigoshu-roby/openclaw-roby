@@ -498,7 +498,8 @@ def archive_thread(account: str, thread_id: str, env: Dict[str, str]) -> None:
     ]
     if account:
         cmd += ["--account", account]
-    subprocess.check_call(cmd, env=env)
+    timeout_sec = int((env.get("GMAIL_TRIAGE_ARCHIVE_TIMEOUT_SEC", "20") or "20").strip())
+    subprocess.run(cmd, env=env, check=True, timeout=timeout_sec)
 
 
 def send_slack(webhook_url: str, text: str) -> None:
