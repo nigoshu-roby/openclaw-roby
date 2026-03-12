@@ -248,6 +248,10 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
    - 自分担当外の明示 assignee は Neuronic へ送らない
    - assignee 不明は blank のまま扱い、勝手に `私` へ寄せない
    - owner mention から assignee を再推定し、`高田さん` などの他担当タスク混入を減らす
+9. project confidence gate 実装
+   - project の根拠が弱い task は Neuronic へ送らない
+   - `review.cross_project_actions` のような generic 候補は、明示的な project 根拠がある場合のみ送る
+   - conflict project が見つかった task は minutes precision を優先して除外する
 
 ### 4.4 主な成果物
 
@@ -290,6 +294,13 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 - `sanitize_extracted_tasks(...)` では title / note の owner mention を見て assignee を補正する
 - `build_neuronic_tasks(...)` では明示的な他担当 assignee を除外し、assignee 空欄は tag を付けない
 - 目的は「自分担当外の議事録メモが Neuronic に混入する」問題の抑制
+
+### 4.8 B9 実装メモ
+
+- `/Users/shu/OpenClaw/scripts/roby-minutes.py` に `project confidence gate` を追加する
+- `build_neuronic_tasks(...)` では title / note / source_title / registry hints を使って project 根拠を採点する
+- 根拠が弱い generic task や conflict project を含む task は Neuronic へ送らない
+- 目的は `wrong_project` を優先して減らし、minutes precision を先に引き上げること
 
 ---
 

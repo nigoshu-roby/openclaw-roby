@@ -9,7 +9,7 @@ import time
 import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 import urllib.request
 import urllib.error
 from roby_audit import append_audit_event
@@ -2486,6 +2486,83 @@ def _group_leaf_minutes_tasks_by_project(
     return grouped
 
 
+def _project_alias_hit_count(project: str, text: str) -> int:
+    blob = text or ""
+    if not blob or not project:
+        return 0
+    hits = 0
+    for alias in _project_aliases(project):
+        alias_text = str(alias or "").strip()
+        if not alias_text:
+            continue
+        if alias_text in blob:
+            hits += 1
+    return hits
+
+
+def _has_confident_minutes_project(
+    project: str,
+    title: str,
+    note: str,
+    source_title: str,
+    default_project: str,
+    known_projects: List[str],
+    registry: Optional[Dict[str, Any]] = None,
+) -> bool:
+    target = _canonical_project_display_name(project or "")
+    if not target:
+        return False
+
+    blob_parts = [str(title or ""), str(note or ""), str(source_title or "")]
+    blob = "\n".join([part for part in blob_parts if part]).strip()
+    explicit_project = _match_known_project_name(project, known_projects)
+    inferred_project = _infer_project_from_text(blob, known_projects)
+    registry_hints = infer_registry_project_hints(blob, source_title, registry or {})
+    alias_hits = _project_alias_hit_count(target, blob)
+    source_alias_hits = _project_alias_hit_count(target, source_title or "")
+
+    score = 0
+    if explicit_project and _canonical_project_display_name(explicit_project) == target:
+        score += 2
+    if alias_hits > 0:
+        score += 2 + min(alias_hits, 2)
+    if source_alias_hits > 0:
+        score += 1
+    if inferred_project and _canonical_project_display_name(inferred_project) == target:
+        score += 3
+    if target in registry_hints:
+        score += 2
+    if note and "review.project_sections.action_candidates" in note:
+        score += 1
+
+    has_conflict = bool(
+        inferred_project
+        and _canonical_project_display_name(inferred_project) != target
+        and _canonical_project_display_name(inferred_project) not in GENERIC_PROJECT_NAMES
+    )
+    if has_conflict:
+        score -= 3
+    if note and "review.cross_project_actions" in note:
+        score -= 2
+
+    inherited_only = not explicit_project or (
+        default_project
+        and _canonical_project_display_name(explicit_project or "") == _canonical_project_display_name(default_project)
+    )
+    target_is_generic = target in GENERIC_PROJECT_NAMES
+
+    if target_is_generic:
+        return score >= 4
+    if explicit_project and _canonical_project_display_name(explicit_project) == target and not has_conflict:
+        if not (note and "review.cross_project_actions" in note):
+            return score >= 2
+    if inherited_only and score < 3:
+        return False
+    if has_conflict and score < 5:
+        return False
+    return score >= 3
+
+
 def build_neuronic_tasks(
     extracted: List[Dict[str, Any]],
     source: str,
@@ -2494,9 +2571,25 @@ def build_neuronic_tasks(
     default_project: str,
     source_id: str,
     run_id: str,
+    known_projects: Optional[List[str]] = None,
+    registry: Optional[Dict[str, Any]] = None,
     include_legacy_group_tag: bool = False,
 ) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
+    effective_known_projects = list(known_projects or [])
+    if default_project:
+        effective_known_projects.append(default_project)
+    for item in extracted:
+        project_name = _canonical_project_display_name(str(item.get("project") or ""))
+        if project_name:
+            effective_known_projects.append(project_name)
+        for child in item.get("subtasks") or item.get("children") or []:
+            if not isinstance(child, dict):
+                continue
+            child_project = _canonical_project_display_name(str(child.get("project") or ""))
+            if child_project:
+                effective_known_projects.append(child_project)
+    effective_known_projects = list(dict.fromkeys([p for p in effective_known_projects if p]))
     grouped_extracted = _group_leaf_minutes_tasks_by_project(extracted, default_project, source_title)
     group_index = 0
     for item in grouped_extracted:
@@ -2514,6 +2607,16 @@ def build_neuronic_tasks(
                 if not sub_norm.get("title"):
                     continue
                 if not _should_emit_minutes_task(sub_norm.get("assignee") or ""):
+                    continue
+                if not _has_confident_minutes_project(
+                    sub_norm.get("project") or normalized.get("project") or default_project,
+                    sub_norm.get("title") or "",
+                    str(sub_norm.get("note") or ""),
+                    source_title,
+                    normalized.get("project") or default_project,
+                    effective_known_projects,
+                    registry=registry,
+                ):
                     continue
                 filtered_subtasks.append(sub_norm)
             subtasks = filtered_subtasks
@@ -2534,7 +2637,20 @@ def build_neuronic_tasks(
                     parent_assignee = ""
             else:
                 parent_assignee = ""
-        elif not _should_emit_minutes_task(parent_assignee):
+        else:
+            if not _should_emit_minutes_task(parent_assignee):
+                continue
+            if not _has_confident_minutes_project(
+                normalized.get("project") or default_project,
+                normalized.get("title") or "",
+                normalized.get("note") or "",
+                source_title,
+                default_project,
+                effective_known_projects,
+                registry=registry,
+            ):
+                continue
+        if not subtasks and not title:
             continue
 
         note = (
@@ -3389,6 +3505,8 @@ def main() -> int:
                 default_project,
                 page_id,
                 run_id,
+                known_projects=known_projects,
+                registry=registry,
                 include_legacy_group_tag=include_legacy_group_tag,
             )
             if max_tasks_per_run > 0:
@@ -3483,6 +3601,8 @@ def main() -> int:
                 default_project,
                 doc_id,
                 run_id,
+                known_projects=known_projects,
+                registry=registry,
                 include_legacy_group_tag=include_legacy_group_tag,
             )
             if max_tasks_per_run > 0:

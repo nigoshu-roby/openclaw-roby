@@ -62,16 +62,17 @@
 
 ## Sprint B: Minutes Precision Sprint
 
-| ID  | タスク                               | 状態 | GitHub Issue | 備考                                                                                  |
-| --- | ------------------------------------ | ---- | ------------ | ------------------------------------------------------------------------------------- |
-| B1  | TOKIWAGI corpus 読込設計             | 完了 | #14          | `TOKIWAGIインナー議事録` + `基礎情報` の237ページを corpus 化                         |
-| B2  | project registry 生成                | 完了 | #14          | `/Users/shu/.openclaw/roby/tokiwagi_master_registry_latest.json` に初期 registry 出力 |
-| B3  | owner registry 生成                  | 完了 | #14          | owner mention 抽出の初期版を実装・出力                                                |
-| B4  | action pattern registry 生成         | 完了 | #14          | action pattern 集計の初期版を実装・出力                                               |
-| B5  | project segmentation first 実装      | 完了 | #14          | registry hints を使って task 抽出前に案件分割を実装                                   |
-| B6  | task rewrite / decomposition 実装    | 完了 | #14          | 実行可能な粒度へ正規化。メモ系タイトルの書き換えと複数アクション分解を実装            |
-| B7  | minutes golden set / missed set 作成 | 完了 | #14          | `/Users/shu/OpenClaw/scripts/roby-minutes-eval-corpus.py` と local corpus 生成で接続  |
-| B8  | owner filter / assignee gating 実装  | 完了 | #14          | 自分担当外の明示 assignee を Neuronic へ送らないよう minutes 側でフィルタを追加       |
+| ID  | タスク                               | 状態 | GitHub Issue | 備考                                                                                       |
+| --- | ------------------------------------ | ---- | ------------ | ------------------------------------------------------------------------------------------ |
+| B1  | TOKIWAGI corpus 読込設計             | 完了 | #14          | `TOKIWAGIインナー議事録` + `基礎情報` の237ページを corpus 化                              |
+| B2  | project registry 生成                | 完了 | #14          | `/Users/shu/.openclaw/roby/tokiwagi_master_registry_latest.json` に初期 registry 出力      |
+| B3  | owner registry 生成                  | 完了 | #14          | owner mention 抽出の初期版を実装・出力                                                     |
+| B4  | action pattern registry 生成         | 完了 | #14          | action pattern 集計の初期版を実装・出力                                                    |
+| B5  | project segmentation first 実装      | 完了 | #14          | registry hints を使って task 抽出前に案件分割を実装                                        |
+| B6  | task rewrite / decomposition 実装    | 完了 | #14          | 実行可能な粒度へ正規化。メモ系タイトルの書き換えと複数アクション分解を実装                 |
+| B7  | minutes golden set / missed set 作成 | 完了 | #14          | `/Users/shu/OpenClaw/scripts/roby-minutes-eval-corpus.py` と local corpus 生成で接続       |
+| B8  | owner filter / assignee gating 実装  | 完了 | #14          | 自分担当外の明示 assignee を Neuronic へ送らないよう minutes 側でフィルタを追加            |
+| B9  | project confidence gate 実装         | 完了 | #14          | project 根拠が弱い task や conflict project を minutes 側で除外して `wrong_project` を抑制 |
 
 ## Sprint C: Eval Sprint
 

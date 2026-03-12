@@ -315,6 +315,108 @@ class TestRobyMinutesQuality(TestCase):
         self.assertEqual(len(tasks), 2)
         self.assertTrue(all("assignee:" not in " ".join(task.get("tags", [])) for task in tasks))
 
+    def test_build_neuronic_tasks_keeps_confident_project_task(self):
+        extracted = [
+            {"title": "ボーネルンドの見積項目を整理する", "project": "ボーネルンド", "assignee": "私"},
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://www.notion.so/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "BRODO"],
+            registry={},
+        )
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[0]["project"], "ボーネルンド")
+
+    def test_build_neuronic_tasks_drops_weak_generic_cross_project_task(self):
+        extracted = [
+            {
+                "title": "見積項目を整理する",
+                "project": "TOKIWAGI_MASTER",
+                "assignee": "私",
+                "note": "review.cross_project_actions",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://www.notion.so/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "BRODO"],
+            registry={},
+        )
+        self.assertEqual(tasks, [])
+
+    def test_build_neuronic_tasks_drops_conflicting_project_task(self):
+        extracted = [
+            {
+                "title": "BRODOの在庫整理を進める",
+                "project": "ボーネルンド",
+                "assignee": "私",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="gdocs",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "BRODO"],
+            registry={},
+        )
+        self.assertEqual(tasks, [])
+
+    def test_build_neuronic_tasks_keeps_only_confident_children(self):
+        extracted = [
+            {
+                "title": "ボーネルンド / 2026/03/10 社内定例MTG",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "subtasks": [
+                    {
+                        "title": "ボーネルンドの見積項目を整理する",
+                        "project": "ボーネルンド",
+                        "assignee": "私",
+                    },
+                    {
+                        "title": "BRODOの在庫整理を進める",
+                        "project": "ボーネルンド",
+                        "assignee": "私",
+                    },
+                    {
+                        "title": "議事録を見直す",
+                        "project": "TOKIWAGI_MASTER",
+                        "assignee": "私",
+                        "note": "review.cross_project_actions",
+                    },
+                ],
+            }
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://www.notion.so/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "BRODO"],
+            registry={},
+        )
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[0]["title"], "ボーネルンド / 2026/03/10 社内定例MTG")
+        self.assertEqual(tasks[1]["title"], "ボーネルンドの見積項目を整理する")
+
     def test_registry_aliases_extend_project_matching(self):
         registry = {
             "project_registry": [
