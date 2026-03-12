@@ -50,6 +50,33 @@
 - 代表コマンド:
   - `python3 /Users/shu/OpenClaw/scripts/roby-gemini-budget.py --label "minutes-corpus" --input-file <file> --input-file <file> --json`
 
+### 2.5 Precision KPI
+
+Precision Sprint では、まず `precision` を最優先で引き上げる。現時点では `missed` がまだ十分に蓄積されていないため、`recall` は暫定値として扱う。
+
+#### Sprint 1 目標（短期）
+
+- `gmail precision >= 0.55`
+- `minutes precision >= 0.45`
+- `overall precision >= 0.50`
+
+#### Sprint 2 目標（中期）
+
+- `gmail precision >= 0.70`
+- `minutes precision >= 0.60`
+- `overall precision >= 0.65`
+
+#### 補助指標
+
+- Gmail:
+  - `newsletter_false_positive` を半減
+  - `should_be_review_only` を半減
+- Minutes:
+  - `wrong_project`
+  - `too_broad`
+  - `not_actionable`
+    の件数を重点的に削減する
+
 ### 2.3 追跡方法
 
 - 正本仕様: このファイル

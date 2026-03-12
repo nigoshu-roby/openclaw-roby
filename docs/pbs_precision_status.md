@@ -11,6 +11,36 @@
 - 現在の優先領域: Precision Sprint（A/B/C）
 - 追加機能開発: 一旦ステイ
 
+## Precision KPI
+
+### 現在値（基準）
+
+- `overall precision`: `0.261`
+- `gmail precision`: `0.304`
+- `minutes precision`: `0.200`
+
+### Sprint 1 目標
+
+- `overall precision >= 0.50`
+- `gmail precision >= 0.55`
+- `minutes precision >= 0.45`
+
+### Sprint 2 目標
+
+- `overall precision >= 0.65`
+- `gmail precision >= 0.70`
+- `minutes precision >= 0.60`
+
+### 補助観測
+
+- Gmail:
+  - `newsletter_false_positive` の削減
+  - `should_be_review_only` の削減
+- Minutes:
+  - `wrong_project` の削減
+  - `too_broad` の削減
+  - `not_actionable` の削減
+
 ---
 
 ## 事前ゲート
