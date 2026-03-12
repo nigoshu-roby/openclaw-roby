@@ -44,6 +44,10 @@
   - 最新AI事情・OpenClaw関連情報を自動収集する。
   - Robyへの機能追加や有用機能の導入可否を継続検討する。
 
+- Workspace運用コードの本体統合
+  - ~/.openclaw/workspace 側にある重要スクリプト（Slack受信サーバー、bridge等）を、将来的に /Users/shu/OpenClaw 側へ段階移管する。
+  - 方針は「コードは repo、本番状態・secret・logs は ~/.openclaw」に寄せる。
+
 - Slack投稿の取りこぼし防止
   - ローカルで Roby が停止していた間に投稿された Slack 内容を、起動後に確認できるようにする。
   - オフライン期間中の投稿取りこぼしが発生しない設計にする。
