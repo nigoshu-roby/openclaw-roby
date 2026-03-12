@@ -632,7 +632,8 @@ def format_gmail_slack_message(msg: Dict[str, Any], category: str) -> str:
 def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     prompt = (
         "Extract actionable tasks from the message. "
-        "Return ONLY a JSON array of objects with keys: title, due_date, project, note. "
+        "Return ONLY a JSON array of objects with keys: title, due_date, project, note, task_kind. "
+        "task_kind must be one of reply or action. "
         "due_date must be YYYY-MM-DD or empty string. If no tasks, return []."
     )
     cmd = [
@@ -664,6 +665,102 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
             except Exception:
                 return []
         return []
+
+
+GENERIC_ACTION_PREFIXES = (
+    "対応:",
+    "対応：",
+    "タスク:",
+    "タスク：",
+    "要対応:",
+    "要対応：",
+    "ネクストアクション:",
+    "ネクストアクション：",
+    "アクション:",
+    "アクション：",
+)
+
+
+def _looks_like_reply_task(title: str, note: str = "") -> bool:
+    text = f"{title} {note}".lower()
+    hints = ("返信", "返答", "回答", "reply", "respond", "返事", "メール返信")
+    return any(h in text for h in hints)
+
+
+def _rewrite_email_action_title(title: str, raw_category: str, note: str = "") -> str:
+    text = (title or "").strip()
+    for prefix in GENERIC_ACTION_PREFIXES:
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    text = re.sub(r"^(確認事項|対応事項|タスク候補)\s*[:：-]\s*", "", text).strip()
+    if not text:
+        return "返信内容を確認して返信する" if raw_category == "needs_reply" else "メール内容を確認して対応する"
+
+    generic_only = {
+        "確認",
+        "確認する",
+        "対応",
+        "対応する",
+        "返信",
+        "返信する",
+        "返答する",
+        "回答する",
+        "連絡する",
+    }
+    if text in generic_only:
+        if raw_category == "needs_reply" or _looks_like_reply_task(text, note):
+            return "返信内容を確認して返信する"
+        return "メール内容を確認して対応する"
+    return text
+
+
+def normalize_extracted_actions(
+    extracted: List[Dict[str, Any]],
+    *,
+    raw_category: str,
+    subject: str,
+) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    has_reply = False
+
+    for item in extracted:
+        title = _rewrite_email_action_title(str(item.get("title") or ""), raw_category, str(item.get("note") or ""))
+        note = str(item.get("note") or "").strip()
+        task_kind = str(item.get("task_kind") or "").strip().lower()
+        if task_kind not in {"reply", "action"}:
+            task_kind = "reply" if _looks_like_reply_task(title, note) else "action"
+        if task_kind == "reply":
+            has_reply = True
+        key = (task_kind, title)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "title": title,
+                "due_date": str(item.get("due_date") or "").strip(),
+                "project": str(item.get("project") or "").strip() or "email",
+                "note": note,
+                "task_kind": task_kind,
+            }
+        )
+
+    if raw_category == "needs_reply" and not has_reply:
+        reply_title = f"【返信】{subject}" if subject else "返信内容を確認して返信する"
+        normalized.insert(
+            0,
+            {
+                "title": _rewrite_email_action_title(reply_title, raw_category),
+                "due_date": "",
+                "project": "email",
+                "note": "",
+                "task_kind": "reply",
+            },
+        )
+
+    return normalized
 
 
 def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
@@ -1329,6 +1426,8 @@ def build_tasks(
     category: str,
     tags: List[str],
     run_id: str,
+    *,
+    raw_category: str = "",
 ) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
     base_tags = ["source:gmail", f"category:{category}"] + tags
@@ -1376,9 +1475,15 @@ def build_tasks(
         due = (item.get("due_date") or "").strip()
         project = (item.get("project") or "").strip() or "email"
         note = (item.get("note") or "").strip()
-        item_tags = _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", "task_type:action"])
+        task_kind = str(item.get("task_kind") or "").strip().lower()
+        if task_kind not in {"reply", "action"}:
+            task_kind = "reply" if _looks_like_reply_task(title, note) else "action"
+        task_type_tag = "task_type:reply" if task_kind == "reply" else "task_type:action"
+        item_tags = _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", task_type_tag])
+        note_prefix = "返信対応" if task_kind == "reply" else "実行タスク"
         note = (
             (note + "\n\n" if note else "")
+            + f"Task Type: {note_prefix}\n"
             + f"Parent: {parent_task['title']}\n"
             + f"Email: {msg_subject}\n"
             + f"From: {msg.get('from','')}\n"
@@ -1386,7 +1491,7 @@ def build_tasks(
             + f"Link: {msg_url}"
         )
         task = {
-            "title": _decorate_email_task_title(title, sender_label),
+            "title": _decorate_email_task_title(_rewrite_email_action_title(title, raw_category, note), sender_label),
             "project": project,
             "due_date": due,
             "assignee": assignee,
@@ -1534,15 +1639,16 @@ def main() -> int:
                 extracted = []
             if not extracted:
                 if category == "needs_reply":
-                    fallback_title = f"メール返信: {subject}"
+                    fallback_title = f"【返信】{subject}" if subject else "返信内容を確認して返信する"
                 else:
                     fallback_title = f"メール対応: {subject}"
-                extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": ""}]
+                extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": "", "task_kind": ("reply" if category == "needs_reply" else "action")}]
+            extracted = normalize_extracted_actions(extracted, raw_category=category, subject=subject)
             before_cap = len(extracted)
             extracted = cap_extracted_actions(extracted, task_actions_max_per_mail)
             if len(extracted) < before_cap:
                 summary["task_actions_capped"] += (before_cap - len(extracted))
-            tasks = build_tasks(extracted, msg, work_bucket, tags, run_id=run_id)
+            tasks = build_tasks(extracted, msg, work_bucket, tags, run_id=run_id, raw_category=category)
             if task_items_max_per_run > 0:
                 remaining = task_items_max_per_run - int(summary.get("tasks", 0))
                 if remaining <= 0:

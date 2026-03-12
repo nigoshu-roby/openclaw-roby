@@ -148,6 +148,33 @@ class TestGmailTriageNeuronic(TestCase):
         self.assertEqual(tasks[1]["title"], "【高田彰】返信内容を確認する")
         self.assertEqual(tasks[1]["parent_origin_id"], tasks[0]["origin_id"])
 
+    def test_normalize_extracted_actions_inserts_reply_for_needs_reply(self):
+        rows = self.mod.normalize_extracted_actions(
+            [{"title": "見積書を確認する", "project": "email", "due_date": "", "note": ""}],
+            raw_category="needs_reply",
+            subject="見積書の件",
+        )
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual(rows[0]["task_kind"], "reply")
+        self.assertIn("返信", rows[0]["title"])
+
+    def test_build_tasks_marks_reply_and_action_tags(self):
+        msg = {
+            "subject": "ミーティング日程の件",
+            "threadId": "thread-2",
+            "id": "msg-2",
+            "from": "\"高田彰\" <a.takata@tokiwa-gi.com>",
+            "date": "2026-03-12 12:00",
+        }
+        extracted = [
+            {"title": "返信内容を確認する", "project": "email", "due_date": "", "note": "", "task_kind": "reply"},
+            {"title": "候補日を整理する", "project": "email", "due_date": "", "note": "", "task_kind": "action"},
+        ]
+        tasks = self.mod.build_tasks(extracted, msg, "task", [], "roby:gmail:test", raw_category="needs_reply")
+        self.assertEqual(len(tasks), 3)
+        self.assertIn("task_type:reply", tasks[1]["tags"])
+        self.assertIn("task_type:action", tasks[2]["tags"])
+
 
 if __name__ == "__main__":
     main()
