@@ -304,6 +304,27 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 - `roby-gmail-eval-corpus.py` は manual missed を取り込み、`gmail_missed_set.json` に統合する
 - これにより、Neuronic 側の bad/good だけでは拾えない false negative を後から育てられる
 
+### 5.6 C4 実装メモ
+
+- precision / recall / usefulness の算出は `/Users/shu/OpenClaw/scripts/roby-precision-metrics.py` を使う
+- 入力:
+  - `~/.openclaw/roby/gmail_eval_corpus_summary.json`
+  - `~/.openclaw/roby/minutes_eval_corpus_summary.json`
+  - `~/.openclaw/roby/gmail_golden_curated_summary.json`
+  - `~/.openclaw/roby/minutes_golden_curated_summary.json`
+- 出力:
+  - `~/.openclaw/roby/precision_metrics_latest.json`
+  - `~/.openclaw/roby/precision_metrics_runs.jsonl`
+- 指標:
+  - `precision = good / (good + bad)`
+  - `recall = good / (good + missed)`
+  - `usefulness = good / (good + bad + missed)`
+  - `review_coverage = (good + bad + missed) / reviewed_items`
+  - `curated_coverage = curated_items / curated_source_items`
+- 補足:
+  - `missed = 0` の場合、`recall = 1.0` でも false negative が十分観測できていない可能性がある
+  - そのため出力には `recall_provisional` を含め、暫定値であることを明示する
+
 1. Gmail golden set
 2. Minutes golden set
 3. false negative capture flow

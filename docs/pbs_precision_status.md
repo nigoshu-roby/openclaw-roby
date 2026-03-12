@@ -49,7 +49,7 @@
 | C1  | Gmail golden set 整備       | 完了   | #15          | `roby-gmail-golden-curate.py` で代表ケースを curated set 化          |
 | C2  | Minutes golden set 整備     | 完了   | #15          | `roby-minutes-golden-curate.py` で代表ケースを curated set 化        |
 | C3  | false negative capture flow | 完了   | #15          | `roby-gmail-missed-capture.py` と `gmail_eval_corpus` 連携で漏れ回収 |
-| C4  | precision / recall 指標化   | 未着手 | #15          | usefulness も含む                                                    |
+| C4  | precision / recall 指標化   | 完了   | #15          | `roby-precision-metrics.py` で Gmail / Minutes / overall を算出      |
 | C5  | weekly / dashboard 反映     | 未着手 | #15          | 傾向を可視化                                                         |
 
 ---
