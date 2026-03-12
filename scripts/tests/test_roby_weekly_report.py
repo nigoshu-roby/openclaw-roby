@@ -120,6 +120,37 @@ class TestRobyWeeklyReport(TestCase):
                     }
                 ],
             },
+            "precision": {
+                "overall": {
+                    "precision": 0.42,
+                    "recall": 1.0,
+                    "recall_provisional": True,
+                    "usefulness": 0.42,
+                    "review_coverage": 0.7,
+                },
+                "gmail": {
+                    "precision": 0.5,
+                    "recall": 1.0,
+                    "recall_provisional": True,
+                    "usefulness": 0.5,
+                    "reviewed_items": 10,
+                    "curated_coverage": 0.8,
+                    "top_feedback_reasons": [
+                        {"reason_code": "should_be_review_only", "count": 3},
+                    ],
+                },
+                "minutes": {
+                    "precision": 0.33,
+                    "recall": 1.0,
+                    "recall_provisional": True,
+                    "usefulness": 0.33,
+                    "reviewed_items": 8,
+                    "curated_coverage": 1.0,
+                    "top_feedback_reasons": [
+                        {"reason_code": "wrong_project", "count": 2},
+                    ],
+                },
+            },
             "audit": {"ok": True, "files": 1, "errors": 0},
             "freshness": {"present": True, "ok": True, "stale_count": 0, "stale_components": []},
             "ops": {},
@@ -132,7 +163,13 @@ class TestRobyWeeklyReport(TestCase):
         self.assertIn("feedback_effect: improved=True worsened=False", markdown)
         self.assertIn("target performance:", markdown)
         self.assertIn("gmail_promo_filtering: runs=2 success=2 (100%) improved=1/1 latest=変更適用", markdown)
+        self.assertIn("## Precision Metrics", markdown)
+        self.assertIn("- overall precision: 0.42", markdown)
+        self.assertIn("- recall: 1.0 (暫定)", markdown)
         self.assertIn("Self Growth 効果", slack)
+        self.assertIn("精度指標", slack)
+        self.assertIn("overall: precision 42.0% / recall 100.0%（暫定）", slack)
+        self.assertIn("gmail top reasons: should_be_review_only:3", slack)
         self.assertIn("latest feedback delta: good 2→4 / bad 3→2 / missed 1→0", slack)
         self.assertIn("top target performance: gmail_promo_filtering 2/2 (100%)", slack)
 

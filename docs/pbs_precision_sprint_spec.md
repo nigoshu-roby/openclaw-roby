@@ -325,6 +325,20 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - `missed = 0` の場合、`recall = 1.0` でも false negative が十分観測できていない可能性がある
   - そのため出力には `recall_provisional` を含め、暫定値であることを明示する
 
+### 5.7 C5 実装メモ
+
+- precision metrics の最新値は `/Users/shu/OpenClaw/scripts/roby-precision-metrics.py` が生成する
+- 最新値は local state のみで保持する
+  - `~/.openclaw/roby/precision_metrics_latest.json`
+- `roby-weekly-report.py` はこの latest を読み込んで週次集計へ含める
+- `roby_ops_notifications.py` は Slack 通知で precision / usefulness / review coverage を表示する
+- `roby.status` は最新 precision metrics を返し、Roby ダッシュボードで可視化する
+- ダッシュボードでは以下を表示する
+  - overall precision / usefulness / review coverage
+  - Gmail precision と主な Bad 理由
+  - Minutes precision と主な Bad 理由
+  - recall は `recall_provisional` の場合、暫定であることを明示する
+
 1. Gmail golden set
 2. Minutes golden set
 3. false negative capture flow

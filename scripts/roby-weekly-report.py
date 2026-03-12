@@ -23,6 +23,7 @@ REPORT_DIR = STATE_ROOT / "reports"
 LATEST_JSON = REPORT_DIR / "weekly_latest.json"
 LATEST_MD = REPORT_DIR / "weekly_latest.md"
 HISTORY_JSONL = REPORT_DIR / "weekly_history.jsonl"
+PRECISION_METRICS_LATEST = STATE_ROOT / "precision_metrics_latest.json"
 
 EVAL_HISTORY = STATE_ROOT / "evals" / "history.jsonl"
 DRILL_HISTORY = STATE_ROOT / "drills" / "history.jsonl"
@@ -112,6 +113,16 @@ def read_jsonl(path: Path) -> List[Dict[str, Any]]:
         except Exception:
             continue
     return out
+
+
+def read_json_file(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def in_window(items: List[Dict[str, Any]], since: datetime) -> List[Dict[str, Any]]:
@@ -522,6 +533,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
     ab_s = report["ab"]
     feedback_s = report.get("feedback") or {}
     self_growth_s = report.get("self_growth") or {}
+    precision_s = report.get("precision") or {}
     audit_s = report["audit"]
     lines = [
         "# PBS Weekly Ops Report",
@@ -648,6 +660,38 @@ def build_markdown(report: Dict[str, Any]) -> str:
                 f"improved={feedback_delta.get('improved', False)} "
                 f"worsened={feedback_delta.get('worsened', False)}"
             )
+    precision_overall = precision_s.get("overall") or {}
+    precision_gmail = precision_s.get("gmail") or {}
+    precision_minutes = precision_s.get("minutes") or {}
+    if precision_overall or precision_gmail or precision_minutes:
+        lines.extend(
+            [
+                "",
+                "## Precision Metrics",
+                f"- overall precision: {precision_overall.get('precision', 0)}",
+                f"- overall recall: {precision_overall.get('recall', 0)}"
+                + (" (暫定)" if precision_overall.get("recall_provisional") else ""),
+                f"- overall usefulness: {precision_overall.get('usefulness', 0)}",
+                f"- overall review_coverage: {precision_overall.get('review_coverage', 0)}",
+                "",
+                "### Gmail",
+                f"- precision: {precision_gmail.get('precision', 0)}",
+                f"- recall: {precision_gmail.get('recall', 0)}"
+                + (" (暫定)" if precision_gmail.get("recall_provisional") else ""),
+                f"- usefulness: {precision_gmail.get('usefulness', 0)}",
+                f"- reviewed_items: {precision_gmail.get('reviewed_items', 0)}",
+                f"- curated_coverage: {precision_gmail.get('curated_coverage', 0)}",
+                "",
+                "### Minutes",
+                f"- precision: {precision_minutes.get('precision', 0)}",
+                f"- recall: {precision_minutes.get('recall', 0)}"
+                + (" (暫定)" if precision_minutes.get("recall_provisional") else ""),
+                f"- usefulness: {precision_minutes.get('usefulness', 0)}",
+                f"- reviewed_items: {precision_minutes.get('reviewed_items', 0)}",
+                f"- curated_coverage: {precision_minutes.get('curated_coverage', 0)}",
+                "",
+            ]
+        )
     lines.append("")
     lines.extend(
         [
@@ -699,6 +743,7 @@ def main() -> int:
     self_growth_items = in_window(read_jsonl(SELF_GROWTH_HISTORY), since)
     audit_events = in_window(read_jsonl(AUDIT_FILE), since)
     audit_report = verify_audit([AUDIT_FILE])
+    precision_latest = read_json_file(PRECISION_METRICS_LATEST)
 
     report = {
         "generated_at": datetime.now(JST).isoformat(),
@@ -708,6 +753,7 @@ def main() -> int:
         "ab": summarize_ab(ab_items),
         "feedback": summarize_feedback(feedback_items),
         "self_growth": summarize_self_growth(self_growth_items, feedback_items),
+        "precision": precision_latest or {},
         "audit": audit_report,
         "ops": summarize_ops_from_audit(audit_events),
     }

@@ -648,6 +648,32 @@ export type RobyWeeklyStatus = RobyOpsHealthSummary & {
   }>;
 };
 
+export type RobyPrecisionReasonCount = {
+  reasonCode: string;
+  count: number;
+};
+
+export type RobyPrecisionDomainStatus = {
+  precision?: number | null;
+  recall?: number | null;
+  recallProvisional?: boolean | null;
+  usefulness?: number | null;
+  reviewCoverage?: number | null;
+  curatedCoverage?: number | null;
+  reviewedItems?: number | null;
+  good?: number | null;
+  bad?: number | null;
+  missed?: number | null;
+  pending?: number | null;
+  topFeedbackReasons?: RobyPrecisionReasonCount[];
+};
+
+export type RobyPrecisionMetricsStatus = RobyOpsHealthSummary & {
+  overall?: RobyPrecisionDomainStatus | null;
+  gmail?: RobyPrecisionDomainStatus | null;
+  minutes?: RobyPrecisionDomainStatus | null;
+};
+
 export type RobyFeedbackLoopStatus = RobyOpsHealthSummary & {
   totalTasks?: number;
   reviewedCount?: number;
@@ -859,6 +885,7 @@ export type RobyOpsStatus = {
   runbookDrill: RobyDrillStatus;
   liveFreshness: RobyLiveFreshnessStatus;
   weeklyReport: RobyWeeklyStatus;
+  precisionMetrics: RobyPrecisionMetricsStatus;
   feedbackLoop: RobyFeedbackLoopStatus;
   memorySync: RobyMemorySyncStatus;
   localFirst: RobyLocalFirstStatus;

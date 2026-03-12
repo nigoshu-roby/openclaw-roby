@@ -106,6 +106,7 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
     drill_s = report.get("drill") or {}
     feedback_s = report.get("feedback") or {}
     self_growth_s = report.get("self_growth") or {}
+    precision_s = report.get("precision") or {}
     audit_s = report.get("audit") or {}
     freshness = report.get("freshness") or {}
     ab_s = report.get("ab") or {}
@@ -188,6 +189,44 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
                 if isinstance(row, dict)
             )
         )
+    overall_precision = precision_s.get("overall") if isinstance(precision_s.get("overall"), dict) else {}
+    gmail_precision = precision_s.get("gmail") if isinstance(precision_s.get("gmail"), dict) else {}
+    minutes_precision = precision_s.get("minutes") if isinstance(precision_s.get("minutes"), dict) else {}
+    precision_rows = [
+        (
+            f"・overall: precision {float(overall_precision.get('precision', 0.0) or 0.0):.1%} / "
+            f"recall {float(overall_precision.get('recall', 0.0) or 0.0):.1%}"
+            + ("（暫定）" if overall_precision.get("recall_provisional") else "")
+        ),
+        (
+            f"・gmail: precision {float(gmail_precision.get('precision', 0.0) or 0.0):.1%} / "
+            f"usefulness {float(gmail_precision.get('usefulness', 0.0) or 0.0):.1%}"
+        ),
+        (
+            f"・minutes: precision {float(minutes_precision.get('precision', 0.0) or 0.0):.1%} / "
+            f"usefulness {float(minutes_precision.get('usefulness', 0.0) or 0.0):.1%}"
+        ),
+    ]
+    if gmail_precision.get("top_feedback_reasons"):
+        precision_rows.append(
+            "・gmail top reasons: "
+            + " / ".join(
+                f"{str(row.get('reason_code') or '-')}:"
+                f"{int(row.get('count', 0) or 0)}"
+                for row in list(gmail_precision.get("top_feedback_reasons") or [])[:3]
+                if isinstance(row, dict)
+            )
+        )
+    if minutes_precision.get("top_feedback_reasons"):
+        precision_rows.append(
+            "・minutes top reasons: "
+            + " / ".join(
+                f"{str(row.get('reason_code') or '-')}:"
+                f"{int(row.get('count', 0) or 0)}"
+                for row in list(minutes_precision.get("top_feedback_reasons") or [])[:3]
+                if isinstance(row, dict)
+            )
+        )
     return build_slack_message(
         "PBS 週次運用レポート",
         status,
@@ -197,6 +236,7 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
             ("運用実行数", ops_rows),
             ("鮮度とAB Router", freshness_rows),
             ("Neuronic評価", feedback_rows),
+            ("精度指標", precision_rows),
             ("Self Growth 効果", self_growth_rows),
         ],
     )

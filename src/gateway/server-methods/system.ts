@@ -602,6 +602,9 @@ async function buildRobyStatus() {
   const weeklyLatest = await readJsonFile(
     path.join(ROBY_STATE_ROOT, "reports", "weekly_latest.json"),
   );
+  const precisionLatest = await readJsonFile(
+    path.join(ROBY_STATE_ROOT, "precision_metrics_latest.json"),
+  );
   const feedbackLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "feedback_sync_state.json"));
   const feedbackHistory = await readJsonLines(
     path.join(ROBY_STATE_ROOT, "feedback_sync_runs.jsonl"),
@@ -696,6 +699,39 @@ async function buildRobyStatus() {
   const weeklySelfGrowthTargetStats = Array.isArray(weeklySelfGrowth.target_stats)
     ? (weeklySelfGrowth.target_stats as Array<Record<string, unknown>>)
     : [];
+  const precisionOverall = asRecord(precisionLatest?.overall);
+  const precisionGmail = asRecord(precisionLatest?.gmail);
+  const precisionMinutes = asRecord(precisionLatest?.minutes);
+
+  function mapPrecisionSection(section: Record<string, unknown>) {
+    const topReasons = Array.isArray(section.top_feedback_reasons)
+      ? (section.top_feedback_reasons as Array<Record<string, unknown>>)
+          .filter((row) => row && typeof row === "object")
+          .map((row) => ({
+            reasonCode:
+              typeof row.reason_code === "string"
+                ? row.reason_code
+                : typeof row.reasonCode === "string"
+                  ? row.reasonCode
+                  : "",
+            count: Number(row.count ?? 0),
+          }))
+      : [];
+    return {
+      precision: Number(section.precision ?? 0),
+      recall: Number(section.recall ?? 0),
+      recallProvisional: Boolean(section.recall_provisional),
+      usefulness: Number(section.usefulness ?? 0),
+      reviewCoverage: Number(section.review_coverage ?? 0),
+      curatedCoverage: Number(section.curated_coverage ?? 0),
+      reviewedItems: Number(section.reviewed_items ?? 0),
+      good: Number(section.good ?? 0),
+      bad: Number(section.bad ?? 0),
+      missed: Number(section.missed ?? 0),
+      pending: Number(section.pending ?? 0),
+      topFeedbackReasons: topReasons,
+    };
+  }
 
   return {
     generatedAtMs: Date.now(),
@@ -791,6 +827,13 @@ async function buildRobyStatus() {
       remedyCommands,
       auditErrors: Number(audit.errors ?? 0),
       opsErrors,
+    },
+    precisionMetrics: {
+      present: Boolean(precisionLatest),
+      ts: parseTimestampMs(precisionLatest?.generated_at),
+      overall: mapPrecisionSection(precisionOverall),
+      gmail: mapPrecisionSection(precisionGmail),
+      minutes: mapPrecisionSection(precisionMinutes),
     },
     feedbackLoop: {
       present: Boolean(feedbackLatest),

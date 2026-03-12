@@ -78,6 +78,13 @@ function joinList(items: string[] | undefined, fallback = "なし") {
   return items.join(" / ");
 }
 
+function formatPercent(value?: number | null, digits = 1) {
+  if (value == null || !Number.isFinite(value)) {
+    return "—";
+  }
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
 function feedbackReasonLabel(code?: string | null) {
   switch ((code ?? "").trim()) {
     case "not_actionable":
@@ -254,6 +261,7 @@ export function renderRoby(props: RobyProps) {
   const drillStatus = ops?.runbookDrill;
   const liveFreshness = ops?.liveFreshness;
   const weeklyStatus = ops?.weeklyReport;
+  const precisionMetrics = ops?.precisionMetrics;
   const feedbackLoop = ops?.feedbackLoop;
   const memorySync = ops?.memorySync;
   const selfGrowthLatest = ops?.selfGrowthLatest;
@@ -858,7 +866,7 @@ export function renderRoby(props: RobyProps) {
           : nothing,
       })}
     </section>
-    <section style="margin-top: 18px;">
+    <section class="grid grid-cols-2" style="margin-top: 18px;">
       ${renderOpsCard({
         title: "評価ループ",
         status:
@@ -938,6 +946,95 @@ export function renderRoby(props: RobyProps) {
                           ) ?? nothing
                       }
                     `
+              }
+            `
+          : nothing,
+      })}
+      ${renderOpsCard({
+        title: "精度指標",
+        status:
+          precisionMetrics?.present === false
+            ? "未生成"
+            : (precisionMetrics?.overall?.precision ?? 0) >= 0.5 &&
+                (precisionMetrics?.overall?.usefulness ?? 0) >= 0.4
+              ? "正常"
+              : (precisionMetrics?.overall?.precision ?? 0) >= 0.25
+                ? "改善中"
+                : "要対応",
+        tone:
+          precisionMetrics?.present === false
+            ? "muted"
+            : (precisionMetrics?.overall?.precision ?? 0) >= 0.5 &&
+                (precisionMetrics?.overall?.usefulness ?? 0) >= 0.4
+              ? "ok"
+              : (precisionMetrics?.overall?.precision ?? 0) >= 0.25
+                ? "warn"
+                : "danger",
+        subtitle: precisionMetrics?.present
+          ? `overall precision ${formatPercent(precisionMetrics?.overall?.precision)} / usefulness ${formatPercent(precisionMetrics?.overall?.usefulness)} / review ${formatPercent(precisionMetrics?.overall?.reviewCoverage)}`
+          : "精度指標未生成",
+        meta: precisionMetrics?.ts ? formatRelativeTimestamp(precisionMetrics.ts) : "—",
+        details: precisionMetrics?.present
+          ? html`
+              <div class="muted">総合</div>
+              <div class="muted">- precision: ${formatPercent(precisionMetrics?.overall?.precision)}</div>
+              <div class="muted">
+                - recall: ${formatPercent(precisionMetrics?.overall?.recall)}${precisionMetrics?.overall?.recallProvisional ? "（暫定）" : ""}
+              </div>
+              <div class="muted">- usefulness: ${formatPercent(precisionMetrics?.overall?.usefulness)}</div>
+              <div class="muted">- review coverage: ${formatPercent(precisionMetrics?.overall?.reviewCoverage)}</div>
+              <div class="muted">- curated coverage: ${formatPercent(precisionMetrics?.overall?.curatedCoverage)}</div>
+              <div class="muted">
+                - reviewed/good/bad/missed/pending:
+                ${precisionMetrics?.overall?.reviewedItems ?? 0}/${precisionMetrics?.overall?.good ?? 0}/${precisionMetrics?.overall?.bad ?? 0}/${precisionMetrics?.overall?.missed ?? 0}/${precisionMetrics?.overall?.pending ?? 0}
+              </div>
+              <div class="muted" style="margin-top: 8px;">Gmail</div>
+              <div class="muted">- precision: ${formatPercent(precisionMetrics?.gmail?.precision)}</div>
+              <div class="muted">
+                - recall: ${formatPercent(precisionMetrics?.gmail?.recall)}${precisionMetrics?.gmail?.recallProvisional ? "（暫定）" : ""}
+              </div>
+              <div class="muted">- usefulness: ${formatPercent(precisionMetrics?.gmail?.usefulness)}</div>
+              <div class="muted">- review coverage: ${formatPercent(precisionMetrics?.gmail?.reviewCoverage)}</div>
+              <div class="muted">
+                - reviewed/good/bad/missed/pending:
+                ${precisionMetrics?.gmail?.reviewedItems ?? 0}/${precisionMetrics?.gmail?.good ?? 0}/${precisionMetrics?.gmail?.bad ?? 0}/${precisionMetrics?.gmail?.missed ?? 0}/${precisionMetrics?.gmail?.pending ?? 0}
+              </div>
+              ${
+                (precisionMetrics?.gmail?.topFeedbackReasons?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted">- 主なBad理由</div>
+                      ${precisionMetrics?.gmail?.topFeedbackReasons
+                        ?.slice(0, 5)
+                        .map(
+                          (row) =>
+                            html`<div class="muted" style="padding-left: 12px;">${feedbackReasonLabel(row.reasonCode)}: ${row.count}</div>`,
+                        )}
+                    `
+                  : nothing
+              }
+              <div class="muted" style="margin-top: 8px;">Minutes</div>
+              <div class="muted">- precision: ${formatPercent(precisionMetrics?.minutes?.precision)}</div>
+              <div class="muted">
+                - recall: ${formatPercent(precisionMetrics?.minutes?.recall)}${precisionMetrics?.minutes?.recallProvisional ? "（暫定）" : ""}
+              </div>
+              <div class="muted">- usefulness: ${formatPercent(precisionMetrics?.minutes?.usefulness)}</div>
+              <div class="muted">- review coverage: ${formatPercent(precisionMetrics?.minutes?.reviewCoverage)}</div>
+              <div class="muted">
+                - reviewed/good/bad/missed/pending:
+                ${precisionMetrics?.minutes?.reviewedItems ?? 0}/${precisionMetrics?.minutes?.good ?? 0}/${precisionMetrics?.minutes?.bad ?? 0}/${precisionMetrics?.minutes?.missed ?? 0}/${precisionMetrics?.minutes?.pending ?? 0}
+              </div>
+              ${
+                (precisionMetrics?.minutes?.topFeedbackReasons?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted">- 主なBad理由</div>
+                      ${precisionMetrics?.minutes?.topFeedbackReasons
+                        ?.slice(0, 5)
+                        .map(
+                          (row) =>
+                            html`<div class="muted" style="padding-left: 12px;">${feedbackReasonLabel(row.reasonCode)}: ${row.count}</div>`,
+                        )}
+                    `
+                  : nothing
               }
             `
           : nothing,
