@@ -21,14 +21,14 @@
 
 ## Sprint A: Email Precision Sprint
 
-| ID  | タスク                                    | 状態   | GitHub Issue | 備考                                                                                |
-| --- | ----------------------------------------- | ------ | ------------ | ----------------------------------------------------------------------------------- |
-| A1  | Reply history / contact importance index  | 完了   | #13          | `gmail_contact_index.py` でローカル索引化し、triage に known-contact 昇格を接続     |
-| A2  | 4分類（archive/digest/review/task）導入   | 完了   | #13          | 運用バケット導入済み。Slack通知は digest/review/task、Neuronic投入は task のみ      |
-| A3  | newsletter / tool notify の重み付け見直し | 完了   | #13          | weighted bucket 導入。marketing は digest に寄せ、既知 tool notice は review に昇格 |
-| A4  | 実行タスク・返信タスク抽出の再設計        | 完了   | #13          | reply / action を分離し、needs_reply は reply task を最低1件補完                    |
-| A5  | Neuronic投入ゲート強化                    | 完了   | #13          | task bucket を confidence gate に通し、低信頼メールは review に降格                 |
-| A6  | Gmail golden set / missed set 作成        | 未着手 | #13          | Eval Sprint と接続                                                                  |
+| ID  | タスク                                    | 状態 | GitHub Issue | 備考                                                                                |
+| --- | ----------------------------------------- | ---- | ------------ | ----------------------------------------------------------------------------------- |
+| A1  | Reply history / contact importance index  | 完了 | #13          | `gmail_contact_index.py` でローカル索引化し、triage に known-contact 昇格を接続     |
+| A2  | 4分類（archive/digest/review/task）導入   | 完了 | #13          | 運用バケット導入済み。Slack通知は digest/review/task、Neuronic投入は task のみ      |
+| A3  | newsletter / tool notify の重み付け見直し | 完了 | #13          | weighted bucket 導入。marketing は digest に寄せ、既知 tool notice は review に昇格 |
+| A4  | 実行タスク・返信タスク抽出の再設計        | 完了 | #13          | reply / action を分離し、needs_reply は reply task を最低1件補完                    |
+| A5  | Neuronic投入ゲート強化                    | 完了 | #13          | task bucket を confidence gate に通し、低信頼メールは review に降格                 |
+| A6  | Gmail golden set / missed set 作成        | 完了 | #13          | `/Users/shu/OpenClaw/scripts/roby-gmail-eval-corpus.py` で local corpus 生成に接続  |
 
 ## Sprint B: Minutes Precision Sprint
 
