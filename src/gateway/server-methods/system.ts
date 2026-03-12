@@ -57,6 +57,30 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function asBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  return false;
+}
+
 function parseTimestampDate(value: unknown): Date | null {
   const ms = parseTimestampMs(value);
   if (ms !== null) {
