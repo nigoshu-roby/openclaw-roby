@@ -349,13 +349,13 @@ export function renderChat(props: ChatProps) {
       ? "メッセージまたは画像を追加してください"
       : "";
   const composeHint = hasAttachments
-    ? `画像 ${attachmentCount} 件を添付中（最大8件 / 1件8MB）。⌘+Enterで送信できます。`
-    : "画像は貼り付け/ドラッグ&ドロップ/📎で添付できます（最大8件 / 1件8MB）。";
+    ? `画像 ${attachmentCount} 件を添付中（最大8件 / 1件8MB）。Enterで送信、Shift+Enterで改行。`
+    : "画像は貼り付け/ドラッグ&ドロップ/📎で添付できます（最大8件 / 1件8MB）。Enterで送信、Shift+Enterで改行。";
   const composeStatus = props.sending ? props.stream?.trim() || "送信中…" : "";
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "メッセージを追加するか、画像を貼り付け/ドラッグしてください…"
-      : "メッセージ（⌘+↩で送信 / ↩で改行 / 画像貼り付け・ドラッグ可）"
+      : "メッセージ（Enterで送信 / Shift+Enterで改行 / 画像貼り付け・ドラッグ可）"
     : "ゲートウェイに接続してチャットを開始…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -583,16 +583,15 @@ export function renderChat(props: ChatProps) {
                 if (e.isComposing || e.keyCode === 229) {
                   return;
                 }
-                if (!e.metaKey || e.shiftKey || e.ctrlKey || e.altKey) {
+                if (!props.connected || !canCompose) {
                   return;
                 }
-                if (!props.connected) {
+                // Enter: send, Shift+Enter: newline. Keep Alt+Enter as newline.
+                if (e.shiftKey || e.altKey) {
                   return;
                 }
                 e.preventDefault();
-                if (canCompose) {
-                  props.onSend();
-                }
+                props.onSend();
               }}
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
@@ -648,7 +647,7 @@ export function renderChat(props: ChatProps) {
               title=${submitDisabledReason}
               @click=${props.onSend}
             >
-              ${isBusy ? "キュー" : "送信"}<kbd class="btn-kbd">⌘↵</kbd>
+              ${isBusy ? "キュー" : "送信"}<kbd class="btn-kbd">↵</kbd>
             </button>
           </div>
         </div>
