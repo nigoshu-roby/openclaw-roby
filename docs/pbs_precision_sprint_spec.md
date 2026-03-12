@@ -244,6 +244,10 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 7. minutes golden set / missed set 作成
    - `/Users/shu/OpenClaw/scripts/roby-minutes-eval-corpus.py` で local corpus を生成する
    - 生成物は機密保護のため `~/.openclaw/roby/minutes_golden_set.json` / `minutes_missed_set.json` に保存する
+8. owner filter / assignee gating 実装
+   - 自分担当外の明示 assignee は Neuronic へ送らない
+   - assignee 不明は blank のまま扱い、勝手に `私` へ寄せない
+   - owner mention から assignee を再推定し、`高田さん` などの他担当タスク混入を減らす
 
 ### 4.4 主な成果物
 
@@ -279,6 +283,13 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - project の偏りを抑える
   - source_doc_title の偏りを抑える
   - eval 用の固定代表ケースとして使う
+
+### 4.7 B8 実装メモ
+
+- `/Users/shu/OpenClaw/scripts/roby-minutes.py` に self alias / owner hint の正規化を追加する
+- `sanitize_extracted_tasks(...)` では title / note の owner mention を見て assignee を補正する
+- `build_neuronic_tasks(...)` では明示的な他担当 assignee を除外し、assignee 空欄は tag を付けない
+- 目的は「自分担当外の議事録メモが Neuronic に混入する」問題の抑制
 
 ---
 

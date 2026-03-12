@@ -499,6 +499,19 @@ OWNER_NOISE_HINTS = {
     "一広",
 }
 
+DEFAULT_SELF_OWNER_ALIASES = (
+    "私",
+    "自分",
+    "新後",
+    "新後周平",
+    "周平",
+    "にーご",
+    "shu",
+    "nigo",
+    "s.nigo",
+    "snigo",
+)
+
 GENERIC_PROJECT_NAMES = {
     "",
     "TOKIWAGI",
@@ -540,6 +553,75 @@ def extract_owner_mentions(text: str) -> List[str]:
             if owner:
                 owners.append(owner)
     return owners
+
+
+def _get_self_owner_aliases(env: Optional[Dict[str, str]] = None) -> set[str]:
+    aliases = list(DEFAULT_SELF_OWNER_ALIASES)
+    raw = str((env or os.environ).get("ROBY_MINUTES_SELF_ALIASES", "") or "").strip()
+    if raw:
+        aliases.extend(re.split(r"[\n,]+", raw))
+    normalized: set[str] = set()
+    for alias in aliases:
+        compact = re.sub(r"[\s\u3000]+", "", str(alias or "").strip())
+        if compact in {"私", "自分"}:
+            normalized.add("私")
+            continue
+        owner = _normalize_owner_hint_candidate(str(alias or ""))
+        if owner:
+            normalized.add(owner)
+    return normalized
+
+
+def _canonicalize_assignee(raw: str, env: Optional[Dict[str, str]] = None) -> str:
+    compact = re.sub(r"[\s\u3000]+", "", str(raw or "").strip())
+    if compact in {"私", "自分"}:
+        return "私"
+    owner = _normalize_owner_hint_candidate(raw or "")
+    if not owner:
+        return ""
+    if owner in _get_self_owner_aliases(env):
+        return "私"
+    return owner
+
+
+def _resolve_assignee_hint(
+    raw_assignee: str,
+    title: str,
+    note: str,
+    parent_assignee: str = "",
+    env: Optional[Dict[str, str]] = None,
+) -> str:
+    direct = _canonicalize_assignee(raw_assignee, env)
+    mentioned_owners = [
+        _canonicalize_assignee(owner, env)
+        for owner in (extract_owner_mentions(title or "") + extract_owner_mentions((note or "")[:400]))
+    ]
+    mentioned_owners = [owner for owner in mentioned_owners if owner]
+    if direct and direct != "私":
+        return direct
+    for normalized in mentioned_owners:
+        if normalized and normalized != "私":
+            return normalized
+    if direct:
+        return direct
+    for normalized in mentioned_owners:
+        if normalized:
+            return normalized
+    parent = _canonicalize_assignee(parent_assignee or "", env)
+    if parent:
+        return parent
+    return ""
+
+
+def _is_self_assignee(assignee: str, env: Optional[Dict[str, str]] = None) -> bool:
+    return _canonicalize_assignee(assignee or "", env) == "私"
+
+
+def _should_emit_minutes_task(assignee: str, env: Optional[Dict[str, str]] = None) -> bool:
+    normalized = _canonicalize_assignee(assignee or "", env)
+    if not normalized:
+        return True
+    return normalized == "私"
 
 
 def classify_action_patterns(line: str) -> List[str]:
@@ -1162,7 +1244,11 @@ def sanitize_extracted_tasks(
         title = _clean_line(str(item.get("title") or ""))
         note = (item.get("note") or "").strip()
         due_date = (item.get("due_date") or "").strip()
-        assignee = (item.get("assignee") or "").strip() or "私"
+        assignee = _resolve_assignee_hint(
+            str(item.get("assignee") or ""),
+            title,
+            note,
+        )
         raw_item_project = str(item.get("project") or "")
         project = _resolve_project_name(
             raw_item_project,
@@ -1182,7 +1268,12 @@ def sanitize_extracted_tasks(
                 st = _clean_line(str(sub.get("title") or ""))
                 sn = (sub.get("note") or "").strip()
                 sd = (sub.get("due_date") or "").strip()
-                sa = (sub.get("assignee") or "").strip() or assignee
+                sa = _resolve_assignee_hint(
+                    str(sub.get("assignee") or ""),
+                    st,
+                    sn,
+                    parent_assignee=assignee,
+                )
                 sp = _resolve_project_name(
                     str(sub.get("project") or project),
                     st,
@@ -2314,7 +2405,7 @@ def _normalize_task_item(item: Dict[str, Any], default_project: str) -> Dict[str
     due_date = (item.get("due_date") or "").strip()
     if due_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", due_date):
         due_date = ""
-    assignee = (item.get("assignee") or "").strip() or "私"
+    assignee = _canonicalize_assignee(str(item.get("assignee") or ""))
     note = (item.get("note") or "").strip()
     return {
         "title": title,
@@ -2371,12 +2462,22 @@ def _group_leaf_minutes_tasks_by_project(
 
     for project, subtasks in flat_by_project.items():
         parent_note = "自動グループ化: 同一議事録・同一プロジェクトの抽出タスクを親子化"
+        visible_assignees = [
+            _canonicalize_assignee(str(sub.get("assignee") or ""))
+            for sub in subtasks
+            if _canonicalize_assignee(str(sub.get("assignee") or ""))
+        ]
+        parent_assignee = ""
+        if visible_assignees:
+            unique_assignees = list(dict.fromkeys(visible_assignees))
+            if len(unique_assignees) == 1:
+                parent_assignee = unique_assignees[0]
         grouped.append(
             {
                 "title": _build_minutes_group_parent_title(project, source_title),
                 "project": project,
                 "due_date": "",
-                "assignee": subtasks[0].get("assignee") or "私",
+                "assignee": parent_assignee,
                 "note": parent_note,
                 "subtasks": subtasks,
             }
@@ -2404,6 +2505,37 @@ def build_neuronic_tasks(
         if not title:
             continue
         subtasks = item.get("subtasks") or item.get("children") or []
+        parent_assignee = normalized.get("assignee") or ""
+
+        filtered_subtasks: List[Dict[str, Any]] = []
+        if isinstance(subtasks, list) and subtasks:
+            for sub in subtasks:
+                sub_norm = _normalize_task_item(sub, normalized.get("project") or default_project)
+                if not sub_norm.get("title"):
+                    continue
+                if not _should_emit_minutes_task(sub_norm.get("assignee") or ""):
+                    continue
+                filtered_subtasks.append(sub_norm)
+            subtasks = filtered_subtasks
+            if not subtasks:
+                continue
+            child_assignees = [
+                _canonicalize_assignee(str(sub.get("assignee") or ""))
+                for sub in subtasks
+                if _canonicalize_assignee(str(sub.get("assignee") or ""))
+            ]
+            if child_assignees:
+                unique_child_assignees = list(dict.fromkeys(child_assignees))
+                if len(unique_child_assignees) == 1:
+                    parent_assignee = unique_child_assignees[0]
+                elif "私" in unique_child_assignees and len(unique_child_assignees) == 1:
+                    parent_assignee = "私"
+                else:
+                    parent_assignee = ""
+            else:
+                parent_assignee = ""
+        elif not _should_emit_minutes_task(parent_assignee):
+            continue
 
         note = (
             (normalized.get("note") + "\n\n" if normalized.get("note") else "")
@@ -2411,17 +2543,16 @@ def build_neuronic_tasks(
             + f"Title: {source_title}\n"
             + f"URL: {source_url}"
         )
-        tags = _dedupe_tags([
-            f"source:{source}",
-            f"project:{normalized.get('project')}",
-            f"assignee:{normalized.get('assignee')}",
-        ])
+        tags = [f"source:{source}", f"project:{normalized.get('project')}"]
+        if parent_assignee:
+            tags.append(f"assignee:{parent_assignee}")
+        tags = _dedupe_tags(tags)
 
         parent_task = {
             "title": title,
             "project": normalized.get("project"),
             "due_date": normalized.get("due_date"),
-            "assignee": normalized.get("assignee"),
+            "assignee": parent_assignee,
             "note": note,
             "source": "roby",
             "status": "inbox",
@@ -2446,8 +2577,6 @@ def build_neuronic_tasks(
             tasks.append(parent_task)
             for sub_idx, sub in enumerate(subtasks):
                 sub_norm = _normalize_task_item(sub, normalized.get("project") or default_project)
-                if not sub_norm.get("title"):
-                    continue
                 sub_note = (
                     (sub_norm.get("note") + "\n\n" if sub_norm.get("note") else "")
                     + f"Parent: {title}\n"
@@ -2455,11 +2584,10 @@ def build_neuronic_tasks(
                     + f"Title: {source_title}\n"
                     + f"URL: {source_url}"
                 )
-                sub_tags = _dedupe_tags([
-                    f"source:{source}",
-                    f"project:{sub_norm.get('project')}",
-                    f"assignee:{sub_norm.get('assignee')}",
-                ])
+                sub_tags = [f"source:{source}", f"project:{sub_norm.get('project')}"]
+                if sub_norm.get("assignee"):
+                    sub_tags.append(f"assignee:{sub_norm.get('assignee')}")
+                sub_tags = _dedupe_tags(sub_tags)
                 if include_legacy_group_tag:
                     sub_tags = _dedupe_tags(sub_tags + [group_ref])
                 child_task = {

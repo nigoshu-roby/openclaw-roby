@@ -258,6 +258,63 @@ class TestRobyMinutesQuality(TestCase):
             "ミッド・ガーデン・ジャパン",
         )
 
+    def test_owner_mentions_override_default_self_assignee(self):
+        extracted = [
+            {
+                "title": "対応",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "note": "高田さんに確認を依頼する",
+            }
+        ]
+        cleaned = self.mod.sanitize_extracted_tasks(
+            extracted=extracted,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド"],
+            source_title="2026/03/10 社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        self.assertEqual(len(cleaned), 1)
+        self.assertEqual(cleaned[0]["assignee"], "高田")
+
+    def test_build_neuronic_tasks_filters_non_self_assignees(self):
+        extracted = [
+            {"title": "私が見積項目を整理する", "project": "ボーネルンド", "assignee": "私"},
+            {"title": "高田さんが顧客へ共有する", "project": "ボーネルンド", "assignee": "高田"},
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://www.notion.so/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+        )
+        parent_tasks = [x for x in tasks if x.get("parent_origin_id") is None]
+        child_tasks = [x for x in tasks if x.get("parent_origin_id")]
+        self.assertEqual(len(parent_tasks), 1)
+        self.assertEqual(len(child_tasks), 1)
+        self.assertEqual(child_tasks[0]["title"], "私が見積項目を整理する")
+        self.assertEqual(child_tasks[0]["assignee"], "私")
+
+    def test_build_neuronic_tasks_omits_assignee_tag_when_blank(self):
+        extracted = [
+            {"title": "見積項目を整理する", "project": "ボーネルンド", "assignee": ""},
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://www.notion.so/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+        )
+        self.assertEqual(len(tasks), 2)
+        self.assertTrue(all("assignee:" not in " ".join(task.get("tags", [])) for task in tasks))
+
     def test_registry_aliases_extend_project_matching(self):
         registry = {
             "project_registry": [
