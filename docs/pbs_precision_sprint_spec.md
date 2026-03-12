@@ -122,6 +122,18 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 - action pattern registry
 - minutes eval corpus
 
+### 4.5 初期実装の入口
+
+- 初期の TOKIWAGI_MASTER registry 構築は `scripts/roby-tokiwagi-master-registry.py` を使う
+- 対象DB:
+  - `TOKIWAGIインナー議事録`
+  - `基礎情報`
+- 方針:
+  - Notion 全文はローカルで読み込む
+  - project / owner / action pattern の候補を構造化する
+  - Ollama は project ごとの evidence を要約・補助知識化する
+  - Gemini はこの段階では使わず、必要時のみ budget gate を通して投入する
+
 ---
 
 ## 5. Sprint C: Eval Sprint
