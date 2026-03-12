@@ -40,6 +40,14 @@ KEYCHAIN_SECRET_KEYS = {
 DEFAULT_QUERY = "newer_than:2d in:inbox"
 DEFAULT_MAX = 50
 
+WORK_BUCKETS = ("archive", "digest", "review", "task")
+WORK_BUCKET_LABELS = {
+    "archive": "アーカイブ候補",
+    "digest": "後で確認",
+    "review": "要確認",
+    "task": "タスク化",
+}
+
 
 def build_run_id(prefix: str = "gmail") -> str:
     seed = f"{time.time_ns()}|{os.getpid()}|{prefix}"
@@ -604,13 +612,7 @@ def send_slack(webhook_url: str, text: str) -> None:
 
 
 def format_gmail_slack_message(msg: Dict[str, Any], category: str) -> str:
-    labels = {
-        "needs_reply": "返信要",
-        "needs_review": "要確認",
-        "later_check": "後で確認",
-        "archive": "アーカイブ候補",
-    }
-    category_label = labels.get(category, category)
+    category_label = WORK_BUCKET_LABELS.get(category, category)
     subject = str(msg.get("subject", "") or "(件名なし)").strip()
     sender = str(msg.get("from", "") or "-").strip()
     date = str(msg.get("date", "") or "-").strip()
@@ -830,6 +832,26 @@ def _sender_label(raw_from: str) -> str:
 def _decorate_email_task_title(title: str, sender_label: str) -> str:
     base = (title or "").strip() or "メール確認タスク"
     return f"【{sender_label}】{base}"
+
+
+def decide_work_bucket(category: str, needs_reply: bool, meta: Dict[str, Any]) -> Tuple[str, str]:
+    signals = meta.get("signals") if isinstance(meta, dict) else {}
+    if not isinstance(signals, dict):
+        signals = {}
+
+    if category == "archive":
+        return "archive", "promo_or_low_value"
+    if category == "later_check":
+        return "digest", "tool_notice_or_digest"
+    if category == "needs_reply" or needs_reply:
+        return "task", "explicit_reply_or_action"
+
+    if category == "needs_review":
+        if signals.get("meeting_coordination"):
+            return "task", "coordination_requires_followup"
+        return "review", "human_review_needed"
+
+    return "review", "default_review"
 
 
 def _parse_jsonish_text(raw: str) -> Any:
@@ -1078,6 +1100,7 @@ def classify_message(
     is_promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
     is_actionable_notice = any(h.lower() in text for h in ACTIONABLE_NOTICE_HINTS)
     has_business_review_signal = any(k in text for k in BUSINESS_REVIEW_KEYWORDS)
+    meeting_coordination = any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"])
 
     is_marketing_sender = any(x in sender_lower for x in [
         "seminar",
@@ -1089,6 +1112,18 @@ def classify_message(
         "運営事務局",
     ])
     is_promo_sender_domain = any(dom in sender_lower for dom in PROMO_SENDER_DOMAINS)
+    meta["signals"] = {
+        "urgent": urgent,
+        "alert": is_alert,
+        "promo_subject": is_promo_subject,
+        "ad_hint": is_ad_hint,
+        "actionable_notice": is_actionable_notice,
+        "business_review": has_business_review_signal,
+        "marketing_sender": is_marketing_sender,
+        "promo_sender_domain": is_promo_sender_domain,
+        "meeting_coordination": meeting_coordination,
+        "is_noreply": is_noreply,
+    }
 
     # Sender-domain blacklist is authoritative for known promotional sources.
     # Their bodies often contain words like "更新", "確認", "reply-to" that trigger false positives.
@@ -1122,7 +1157,7 @@ def classify_message(
         return category, tags, needs_reply, None, meta
 
     # Meeting / coordination mails should remain visible.
-    if any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"]):
+    if meeting_coordination:
         category, tags, meta = apply_contact_override(("needs_reply" if needs_reply else "needs_review"), tags, meta, contact_meta, is_noreply=is_noreply)
         return category, tags, needs_reply, None, meta
 
@@ -1248,7 +1283,7 @@ def build_tasks(
         ),
         "source": "roby",
         "status": "inbox",
-        "priority": 1 if category in ("needs_reply", "needs_review") else 0,
+        "priority": 1 if category == "task" else 0,
         "tags": _dedupe_tags(base_tags + ["project:email", f"assignee:{assignee}", "task_type:email_review"]),
         "parent_origin_id": None,
         "sibling_order": 0,
@@ -1286,7 +1321,7 @@ def build_tasks(
             "note": note,
             "source": "roby",
             "status": "inbox",
-            "priority": 1 if category in ("needs_reply", "needs_review") else 0,
+            "priority": 1 if category == "task" else 0,
             "tags": item_tags,
             "parent_origin_id": parent_origin,
             "sibling_order": i,
@@ -1348,6 +1383,7 @@ def main() -> int:
     summary["run_id"] = run_id
     last_neuronic_error: str | None = None
     category_counts: Dict[str, int] = {}
+    raw_category_counts: Dict[str, int] = {}
 
     skip_tasks = args.skip_tasks or args.dry_run
     llm_enabled = (env.get("GMAIL_TRIAGE_LLM_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -1394,13 +1430,17 @@ def main() -> int:
                 category = llm_category
                 summary["llm_overrides"] += 1
                 tags = _dedupe_tags(tags + ["llm:override"])
-        category_counts[category] = category_counts.get(category, 0) + 1
+        work_bucket, bucket_reason = decide_work_bucket(category, needs_reply, classify_meta)
+        classify_meta["work_bucket"] = work_bucket
+        classify_meta["work_bucket_reason"] = bucket_reason
+        raw_category_counts[category] = raw_category_counts.get(category, 0) + 1
+        category_counts[work_bucket] = category_counts.get(work_bucket, 0) + 1
         summary["new"] += 1
 
         # Slack notify
         slack_url = env.get("SLACK_WEBHOOK_URL")
-        if slack_url and not args.dry_run and category in ("needs_reply", "needs_review", "later_check"):
-            text = format_gmail_slack_message(msg, category)
+        if slack_url and not args.dry_run and work_bucket in ("task", "review", "digest"):
+            text = format_gmail_slack_message(msg, work_bucket)
             if notify_max_per_run <= 0 or summary["notified"] < notify_max_per_run:
                 send_slack(slack_url, text)
                 summary["notified"] += 1
@@ -1409,7 +1449,7 @@ def main() -> int:
 
         # Task extraction
         tasks = []
-        if (not skip_tasks) and category in ("needs_reply", "needs_review", "later_check"):
+        if (not skip_tasks) and work_bucket == "task":
             try:
                 extracted = summarize_tasks(
                     f"Subject: {subject}\n"
@@ -1423,8 +1463,6 @@ def main() -> int:
             if not extracted:
                 if category == "needs_reply":
                     fallback_title = f"メール返信: {subject}"
-                elif category == "later_check":
-                    fallback_title = f"メール確認: {subject}"
                 else:
                     fallback_title = f"メール対応: {subject}"
                 extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": ""}]
@@ -1432,7 +1470,7 @@ def main() -> int:
             extracted = cap_extracted_actions(extracted, task_actions_max_per_mail)
             if len(extracted) < before_cap:
                 summary["task_actions_capped"] += (before_cap - len(extracted))
-            tasks = build_tasks(extracted, msg, category, tags, run_id=run_id)
+            tasks = build_tasks(extracted, msg, work_bucket, tags, run_id=run_id)
             if task_items_max_per_run > 0:
                 remaining = task_items_max_per_run - int(summary.get("tasks", 0))
                 if remaining <= 0:
@@ -1458,7 +1496,7 @@ def main() -> int:
                         summary["order_applied"] = resp.get("order_applied")
 
         # Archive ads
-        if category == "archive" and args.archive_ads and not args.dry_run:
+        if work_bucket == "archive" and args.archive_ads and not args.dry_run:
             try:
                 archive_thread(args.account, msg.get("threadId", ""), env)
                 summary["archived"] += 1
@@ -1468,7 +1506,8 @@ def main() -> int:
         if args.verbose:
             row = {
                 "id": msg_id,
-                "category": category,
+                "category": work_bucket,
+                "raw_category": category,
                 "subject": subject,
                 "from": sender,
                 "cc": cc,
@@ -1482,6 +1521,7 @@ def main() -> int:
                 row["llm_reason"] = llm_reason
             if isinstance(classify_meta, dict) and classify_meta.get("local_reason"):
                 row["local_reason"] = classify_meta.get("local_reason")
+            row["bucket_reason"] = bucket_reason
             print(json.dumps(row, ensure_ascii=False))
 
         if not args.dry_run:
@@ -1498,6 +1538,7 @@ def main() -> int:
     })
 
     summary["categories"] = category_counts
+    summary["raw_categories"] = raw_category_counts
     summary["rules_path"] = str(rules_path)
     if args.verbose and last_neuronic_error:
         summary["last_neuronic_error"] = last_neuronic_error

@@ -217,6 +217,34 @@ class TestGmailTriageClassify(TestCase):
         self.assertIn("contact:override", tags)
         self.assertEqual(meta.get("contact_reason"), "known_contact_promoted_from_later_check")
 
+    def test_work_bucket_maps_later_check_to_digest(self):
+        bucket, reason = self.mod.decide_work_bucket("later_check", False, {"signals": {}})
+        self.assertEqual(bucket, "digest")
+        self.assertEqual(reason, "tool_notice_or_digest")
+
+    def test_work_bucket_maps_needs_reply_to_task(self):
+        bucket, reason = self.mod.decide_work_bucket("needs_reply", True, {"signals": {}})
+        self.assertEqual(bucket, "task")
+        self.assertEqual(reason, "explicit_reply_or_action")
+
+    def test_work_bucket_keeps_plain_review_as_review(self):
+        bucket, reason = self.mod.decide_work_bucket(
+            "needs_review",
+            False,
+            {"signals": {"meeting_coordination": False}},
+        )
+        self.assertEqual(bucket, "review")
+        self.assertEqual(reason, "human_review_needed")
+
+    def test_work_bucket_promotes_meeting_coordination_to_task(self):
+        bucket, reason = self.mod.decide_work_bucket(
+            "needs_review",
+            False,
+            {"signals": {"meeting_coordination": True}},
+        )
+        self.assertEqual(bucket, "task")
+        self.assertEqual(reason, "coordination_requires_followup")
+
 
 if __name__ == "__main__":
     main()
