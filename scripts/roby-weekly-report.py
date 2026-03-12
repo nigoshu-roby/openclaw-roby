@@ -24,6 +24,7 @@ LATEST_JSON = REPORT_DIR / "weekly_latest.json"
 LATEST_MD = REPORT_DIR / "weekly_latest.md"
 HISTORY_JSONL = REPORT_DIR / "weekly_history.jsonl"
 PRECISION_METRICS_LATEST = STATE_ROOT / "precision_metrics_latest.json"
+PRECISION_EVAL_LATEST = STATE_ROOT / "precision_eval_latest.json"
 
 EVAL_HISTORY = STATE_ROOT / "evals" / "history.jsonl"
 DRILL_HISTORY = STATE_ROOT / "drills" / "history.jsonl"
@@ -534,6 +535,7 @@ def build_markdown(report: Dict[str, Any]) -> str:
     feedback_s = report.get("feedback") or {}
     self_growth_s = report.get("self_growth") or {}
     precision_s = report.get("precision") or {}
+    precision_eval = report.get("precision_eval") or {}
     audit_s = report["audit"]
     lines = [
         "# PBS Weekly Ops Report",
@@ -692,6 +694,29 @@ def build_markdown(report: Dict[str, Any]) -> str:
                 "",
             ]
         )
+    precision_eval_overall = precision_eval.get("overall") or {}
+    precision_eval_gmail = precision_eval.get("gmail") or {}
+    precision_eval_minutes = precision_eval.get("minutes") or {}
+    if precision_eval:
+        lines.extend(
+            [
+                "",
+                "## Precision Eval",
+                f"- gate: {precision_eval.get('gate', '-')}",
+                f"- summary: {precision_eval.get('summary', '-')}",
+                "",
+                "### Domain Status",
+                f"- overall: {precision_eval_overall.get('status', '-')} / precision {precision_eval_overall.get('precision', 0)} / target {precision_eval_overall.get('target_precision', 0)}",
+                f"- gmail: {precision_eval_gmail.get('status', '-')} / precision {precision_eval_gmail.get('precision', 0)} / target {precision_eval_gmail.get('target_precision', 0)}",
+                f"- minutes: {precision_eval_minutes.get('status', '-')} / precision {precision_eval_minutes.get('precision', 0)} / target {precision_eval_minutes.get('target_precision', 0)}",
+                "",
+            ]
+        )
+        issues = precision_eval.get("issues") or []
+        if isinstance(issues, list) and issues:
+            lines.append("### Issues")
+            lines.extend(f"- {str(issue)}" for issue in issues[:8])
+            lines.append("")
     lines.append("")
     lines.extend(
         [
@@ -744,6 +769,7 @@ def main() -> int:
     audit_events = in_window(read_jsonl(AUDIT_FILE), since)
     audit_report = verify_audit([AUDIT_FILE])
     precision_latest = read_json_file(PRECISION_METRICS_LATEST)
+    precision_eval_latest = read_json_file(PRECISION_EVAL_LATEST)
 
     report = {
         "generated_at": datetime.now(JST).isoformat(),
@@ -754,6 +780,7 @@ def main() -> int:
         "feedback": summarize_feedback(feedback_items),
         "self_growth": summarize_self_growth(self_growth_items, feedback_items),
         "precision": precision_latest or {},
+        "precision_eval": precision_eval_latest or {},
         "audit": audit_report,
         "ops": summarize_ops_from_audit(audit_events),
     }

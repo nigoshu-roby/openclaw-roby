@@ -107,6 +107,7 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
     feedback_s = report.get("feedback") or {}
     self_growth_s = report.get("self_growth") or {}
     precision_s = report.get("precision") or {}
+    precision_eval = report.get("precision_eval") or {}
     audit_s = report.get("audit") or {}
     freshness = report.get("freshness") or {}
     ab_s = report.get("ab") or {}
@@ -227,6 +228,23 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
                 if isinstance(row, dict)
             )
         )
+    precision_eval_rows = []
+    if precision_eval:
+        precision_eval_rows.append(f"・gate: {_clean_value(precision_eval.get('gate'))}")
+        precision_eval_rows.append(f"・summary: {_clean_value(precision_eval.get('summary'))}")
+        for name in ("overall", "gmail", "minutes"):
+            row = precision_eval.get(name) if isinstance(precision_eval.get(name), dict) else {}
+            if row:
+                precision_eval_rows.append(
+                    f"・{name}: {_clean_value(row.get('status'))} / "
+                    f"precision {float(row.get('precision', 0.0) or 0.0):.1%} / "
+                    f"target {float(row.get('target_precision', 0.0) or 0.0):.1%}"
+                )
+        issues = precision_eval.get("issues") if isinstance(precision_eval.get("issues"), list) else []
+        if issues:
+            precision_eval_rows.append(
+                "・issues: " + " / ".join(str(issue) for issue in issues[:3])
+            )
     return build_slack_message(
         "PBS 週次運用レポート",
         status,
@@ -237,6 +255,7 @@ def format_weekly_slack(report: Dict[str, Any]) -> str:
             ("鮮度とAB Router", freshness_rows),
             ("Neuronic評価", feedback_rows),
             ("精度指標", precision_rows),
+            ("精度評価", precision_eval_rows),
             ("Self Growth 効果", self_growth_rows),
         ],
     )

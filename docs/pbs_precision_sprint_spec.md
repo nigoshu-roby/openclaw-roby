@@ -339,6 +339,12 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - Minutes precision と主な Bad 理由
   - recall は `recall_provisional` の場合、暫定であることを明示する
 
+### 5.8 C6. Precision Eval Job
+
+- curated corpus と precision metrics を読み、`ok / attention / fail / insufficient` を判定する `roby-precision-eval.py` を追加。
+- `precision_eval_latest.json` と `precision_eval_runs.jsonl` をローカル保存し、immutable audit に `precision.eval` を記録。
+- weekly report / Slack / Roby ダッシュボードへ `Precision Eval` を反映し、overall / Gmail / Minutes の評価状態と issue を確認できるようにする。
+
 1. Gmail golden set
 2. Minutes golden set
 3. false negative capture flow

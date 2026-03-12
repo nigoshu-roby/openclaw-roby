@@ -674,6 +674,29 @@ export type RobyPrecisionMetricsStatus = RobyOpsHealthSummary & {
   minutes?: RobyPrecisionDomainStatus | null;
 };
 
+export type RobyPrecisionEvalSection = {
+  status?: string | null;
+  precision?: number | null;
+  targetPrecision?: number | null;
+  reviewCoverage?: number | null;
+  minReviewCoverage?: number | null;
+  curatedCoverage?: number | null;
+  minCuratedCoverage?: number | null;
+  recall?: number | null;
+  recallProvisional?: boolean | null;
+  reviewedItems?: number | null;
+  issues?: string[];
+};
+
+export type RobyPrecisionEvalStatus = RobyOpsHealthSummary & {
+  gate?: string | null;
+  summary?: string | null;
+  issues?: string[];
+  overall?: RobyPrecisionEvalSection | null;
+  gmail?: RobyPrecisionEvalSection | null;
+  minutes?: RobyPrecisionEvalSection | null;
+};
+
 export type RobyFeedbackLoopStatus = RobyOpsHealthSummary & {
   totalTasks?: number;
   reviewedCount?: number;
@@ -886,6 +909,7 @@ export type RobyOpsStatus = {
   liveFreshness: RobyLiveFreshnessStatus;
   weeklyReport: RobyWeeklyStatus;
   precisionMetrics: RobyPrecisionMetricsStatus;
+  precisionEval: RobyPrecisionEvalStatus;
   feedbackLoop: RobyFeedbackLoopStatus;
   memorySync: RobyMemorySyncStatus;
   localFirst: RobyLocalFirstStatus;

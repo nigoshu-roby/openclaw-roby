@@ -85,6 +85,51 @@ function formatPercent(value?: number | null, digits = 1) {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function precisionEvalGateLabel(value?: string | null) {
+  switch ((value ?? "").trim()) {
+    case "ok":
+      return "正常";
+    case "attention":
+      return "改善中";
+    case "fail":
+      return "要対応";
+    case "insufficient":
+      return "未計測";
+    default:
+      return "未取得";
+  }
+}
+
+function precisionEvalGateTone(value?: string | null) {
+  switch ((value ?? "").trim()) {
+    case "ok":
+      return "ok";
+    case "attention":
+      return "warn";
+    case "fail":
+      return "danger";
+    case "insufficient":
+      return "muted";
+    default:
+      return "muted";
+  }
+}
+
+function precisionEvalStatusLabel(value?: string | null) {
+  switch ((value ?? "").trim()) {
+    case "ok":
+      return "正常";
+    case "attention":
+      return "改善中";
+    case "fail":
+      return "要対応";
+    case "insufficient":
+      return "未計測";
+    default:
+      return "—";
+  }
+}
+
 function feedbackReasonLabel(code?: string | null) {
   switch ((code ?? "").trim()) {
     case "not_actionable":
@@ -262,6 +307,7 @@ export function renderRoby(props: RobyProps) {
   const liveFreshness = ops?.liveFreshness;
   const weeklyStatus = ops?.weeklyReport;
   const precisionMetrics = ops?.precisionMetrics;
+  const precisionEval = ops?.precisionEval;
   const feedbackLoop = ops?.feedbackLoop;
   const memorySync = ops?.memorySync;
   const selfGrowthLatest = ops?.selfGrowthLatest;
@@ -946,6 +992,111 @@ export function renderRoby(props: RobyProps) {
                           ) ?? nothing
                       }
                     `
+              }
+            `
+          : nothing,
+      })}
+      ${renderOpsCard({
+        title: "精度評価",
+        status: precisionEvalGateLabel(precisionEval?.gate),
+        tone: precisionEvalGateTone(precisionEval?.gate),
+        subtitle: precisionEval?.present
+          ? precisionEval?.summary?.trim() || "curated corpus 継続採点"
+          : "精度評価未生成",
+        meta: precisionEval?.ts ? formatRelativeTimestamp(precisionEval.ts) : "—",
+        details: precisionEval?.present
+          ? html`
+              <div class="muted">総合ゲート</div>
+              <div class="muted">- gate: ${precisionEvalGateLabel(precisionEval?.gate)}</div>
+              <div class="muted">- summary: ${precisionEval?.summary || "—"}</div>
+              ${
+                (precisionEval?.issues?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted">- issues</div>
+                      ${precisionEval?.issues?.map(
+                        (issue) =>
+                          html`<div class="muted" style="padding-left: 12px;">${issue}</div>`,
+                      )}
+                    `
+                  : nothing
+              }
+              <div class="muted" style="margin-top: 8px;">Overall</div>
+              <div class="muted">- status: ${precisionEvalStatusLabel(precisionEval?.overall?.status)}</div>
+              <div class="muted">
+                - precision: ${formatPercent(precisionEval?.overall?.precision)} / target ${formatPercent(precisionEval?.overall?.targetPrecision)}
+              </div>
+              <div class="muted">
+                - review coverage: ${formatPercent(precisionEval?.overall?.reviewCoverage)} / min ${formatPercent(precisionEval?.overall?.minReviewCoverage)}
+              </div>
+              <div class="muted">
+                - curated coverage: ${formatPercent(precisionEval?.overall?.curatedCoverage)} / min ${formatPercent(precisionEval?.overall?.minCuratedCoverage)}
+              </div>
+              <div class="muted">
+                - recall: ${formatPercent(precisionEval?.overall?.recall)}${precisionEval?.overall?.recallProvisional ? "（暫定）" : ""}
+              </div>
+              <div class="muted">- reviewed items: ${precisionEval?.overall?.reviewedItems ?? 0}</div>
+              ${
+                (precisionEval?.overall?.issues?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted">- issues</div>
+                      ${precisionEval?.overall?.issues?.map(
+                        (issue) =>
+                          html`<div class="muted" style="padding-left: 12px;">${issue}</div>`,
+                      )}
+                    `
+                  : nothing
+              }
+              <div class="muted" style="margin-top: 8px;">Gmail</div>
+              <div class="muted">- status: ${precisionEvalStatusLabel(precisionEval?.gmail?.status)}</div>
+              <div class="muted">
+                - precision: ${formatPercent(precisionEval?.gmail?.precision)} / target ${formatPercent(precisionEval?.gmail?.targetPrecision)}
+              </div>
+              <div class="muted">
+                - review coverage: ${formatPercent(precisionEval?.gmail?.reviewCoverage)} / min ${formatPercent(precisionEval?.gmail?.minReviewCoverage)}
+              </div>
+              <div class="muted">
+                - curated coverage: ${formatPercent(precisionEval?.gmail?.curatedCoverage)} / min ${formatPercent(precisionEval?.gmail?.minCuratedCoverage)}
+              </div>
+              <div class="muted">
+                - recall: ${formatPercent(precisionEval?.gmail?.recall)}${precisionEval?.gmail?.recallProvisional ? "（暫定）" : ""}
+              </div>
+              <div class="muted">- reviewed items: ${precisionEval?.gmail?.reviewedItems ?? 0}</div>
+              ${
+                (precisionEval?.gmail?.issues?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted">- issues</div>
+                      ${precisionEval?.gmail?.issues?.map(
+                        (issue) =>
+                          html`<div class="muted" style="padding-left: 12px;">${issue}</div>`,
+                      )}
+                    `
+                  : nothing
+              }
+              <div class="muted" style="margin-top: 8px;">Minutes</div>
+              <div class="muted">- status: ${precisionEvalStatusLabel(precisionEval?.minutes?.status)}</div>
+              <div class="muted">
+                - precision: ${formatPercent(precisionEval?.minutes?.precision)} / target ${formatPercent(precisionEval?.minutes?.targetPrecision)}
+              </div>
+              <div class="muted">
+                - review coverage: ${formatPercent(precisionEval?.minutes?.reviewCoverage)} / min ${formatPercent(precisionEval?.minutes?.minReviewCoverage)}
+              </div>
+              <div class="muted">
+                - curated coverage: ${formatPercent(precisionEval?.minutes?.curatedCoverage)} / min ${formatPercent(precisionEval?.minutes?.minCuratedCoverage)}
+              </div>
+              <div class="muted">
+                - recall: ${formatPercent(precisionEval?.minutes?.recall)}${precisionEval?.minutes?.recallProvisional ? "（暫定）" : ""}
+              </div>
+              <div class="muted">- reviewed items: ${precisionEval?.minutes?.reviewedItems ?? 0}</div>
+              ${
+                (precisionEval?.minutes?.issues?.length ?? 0) > 0
+                  ? html`
+                      <div class="muted">- issues</div>
+                      ${precisionEval?.minutes?.issues?.map(
+                        (issue) =>
+                          html`<div class="muted" style="padding-left: 12px;">${issue}</div>`,
+                      )}
+                    `
+                  : nothing
               }
             `
           : nothing,

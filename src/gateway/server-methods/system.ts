@@ -605,6 +605,9 @@ async function buildRobyStatus() {
   const precisionLatest = await readJsonFile(
     path.join(ROBY_STATE_ROOT, "precision_metrics_latest.json"),
   );
+  const precisionEvalLatest = await readJsonFile(
+    path.join(ROBY_STATE_ROOT, "precision_eval_latest.json"),
+  );
   const feedbackLatest = await readJsonFile(path.join(ROBY_STATE_ROOT, "feedback_sync_state.json"));
   const feedbackHistory = await readJsonLines(
     path.join(ROBY_STATE_ROOT, "feedback_sync_runs.jsonl"),
@@ -702,6 +705,9 @@ async function buildRobyStatus() {
   const precisionOverall = asRecord(precisionLatest?.overall);
   const precisionGmail = asRecord(precisionLatest?.gmail);
   const precisionMinutes = asRecord(precisionLatest?.minutes);
+  const precisionEvalOverall = asRecord(precisionEvalLatest?.overall);
+  const precisionEvalGmail = asRecord(precisionEvalLatest?.gmail);
+  const precisionEvalMinutes = asRecord(precisionEvalLatest?.minutes);
 
   function mapPrecisionSection(section: Record<string, unknown>) {
     const topReasons = Array.isArray(section.top_feedback_reasons)
@@ -730,6 +736,27 @@ async function buildRobyStatus() {
       missed: Number(section.missed ?? 0),
       pending: Number(section.pending ?? 0),
       topFeedbackReasons: topReasons,
+    };
+  }
+
+  function mapPrecisionEvalSection(section: Record<string, unknown>) {
+    const issues = Array.isArray(section.issues)
+      ? (section.issues as unknown[])
+          .map((value) => (typeof value === "string" ? value.trim() : ""))
+          .filter(Boolean)
+      : [];
+    return {
+      status: typeof section.status === "string" ? section.status : "",
+      precision: asNumber(section.precision),
+      targetPrecision: asNumber(section.target_precision),
+      reviewCoverage: asNumber(section.review_coverage),
+      minReviewCoverage: asNumber(section.min_review_coverage),
+      curatedCoverage: asNumber(section.curated_coverage),
+      minCuratedCoverage: asNumber(section.min_curated_coverage),
+      recall: asNumber(section.recall),
+      recallProvisional: asBoolean(section.recall_provisional),
+      reviewedItems: asNumber(section.reviewed_items),
+      issues,
     };
   }
 
@@ -834,6 +861,20 @@ async function buildRobyStatus() {
       overall: mapPrecisionSection(precisionOverall),
       gmail: mapPrecisionSection(precisionGmail),
       minutes: mapPrecisionSection(precisionMinutes),
+    },
+    precisionEval: {
+      present: Boolean(precisionEvalLatest),
+      ts: parseTimestampMs(precisionEvalLatest?.generated_at),
+      gate: typeof precisionEvalLatest?.gate === "string" ? precisionEvalLatest.gate : "",
+      summary: typeof precisionEvalLatest?.summary === "string" ? precisionEvalLatest.summary : "",
+      issues: Array.isArray(precisionEvalLatest?.issues)
+        ? (precisionEvalLatest.issues as unknown[])
+            .map((value) => (typeof value === "string" ? value.trim() : ""))
+            .filter(Boolean)
+        : [],
+      overall: mapPrecisionEvalSection(precisionEvalOverall),
+      gmail: mapPrecisionEvalSection(precisionEvalGmail),
+      minutes: mapPrecisionEvalSection(precisionEvalMinutes),
     },
     feedbackLoop: {
       present: Boolean(feedbackLatest),

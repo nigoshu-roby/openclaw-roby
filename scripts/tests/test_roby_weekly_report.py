@@ -151,6 +151,26 @@ class TestRobyWeeklyReport(TestCase):
                     ],
                 },
             },
+            "precision_eval": {
+                "gate": "attention",
+                "summary": "overall: attention / gmail: fail / minutes: ok",
+                "issues": ["gmail precision below target"],
+                "overall": {
+                    "status": "attention",
+                    "precision": 0.5,
+                    "target_precision": 0.55,
+                },
+                "gmail": {
+                    "status": "fail",
+                    "precision": 0.3,
+                    "target_precision": 0.4,
+                },
+                "minutes": {
+                    "status": "ok",
+                    "precision": 0.35,
+                    "target_precision": 0.3,
+                },
+            },
             "audit": {"ok": True, "files": 1, "errors": 0},
             "freshness": {"present": True, "ok": True, "stale_count": 0, "stale_components": []},
             "ops": {},
@@ -164,10 +184,13 @@ class TestRobyWeeklyReport(TestCase):
         self.assertIn("target performance:", markdown)
         self.assertIn("gmail_promo_filtering: runs=2 success=2 (100%) improved=1/1 latest=変更適用", markdown)
         self.assertIn("## Precision Metrics", markdown)
+        self.assertIn("## Precision Eval", markdown)
+        self.assertIn("- gate: attention", markdown)
         self.assertIn("- overall precision: 0.42", markdown)
         self.assertIn("- recall: 1.0 (暫定)", markdown)
         self.assertIn("Self Growth 効果", slack)
         self.assertIn("精度指標", slack)
+        self.assertIn("精度評価", slack)
         self.assertIn("overall: precision 42.0% / recall 100.0%（暫定）", slack)
         self.assertIn("gmail top reasons: should_be_review_only:3", slack)
         self.assertIn("latest feedback delta: good 2→4 / bad 3→2 / missed 1→0", slack)
