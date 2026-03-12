@@ -133,6 +133,10 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - project / owner / action pattern の候補を構造化する
   - Ollama は project ごとの evidence を要約・補助知識化する
   - Gemini はこの段階では使わず、必要時のみ budget gate を通して投入する
+- `scripts/roby-minutes.py` では、この registry を使って以下を先行実装する
+  - project alias の正規化
+  - project segmentation first
+  - registry hints を local preprocess / Gemini review / Gemini extraction prompt に注入
 
 ---
 

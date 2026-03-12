@@ -178,6 +178,54 @@ class TestRobyMinutesQuality(TestCase):
             "ミッド・ガーデン・ジャパン",
         )
 
+    def test_registry_aliases_extend_project_matching(self):
+        registry = {
+            "project_registry": [
+                {
+                    "project": "ボーネルンド",
+                    "aliases": ["BONELAND"],
+                    "top_owners": [{"value": "飯野", "count": 2}],
+                    "top_action_patterns": [{"value": "資料作成", "count": 3}],
+                    "local_llm": {"aliases": ["BORNELAND"], "owner_hints": ["飯野さん"]},
+                }
+            ]
+        }
+        self.mod.apply_tokiwagi_master_registry(registry)
+        matched = self.mod._match_known_project_name("BONELAND案件", ["ボーネルンド"])
+        self.assertEqual(matched, "ボーネルンド")
+        self.assertIn("飯野", self.mod.PROJECT_OWNER_HINTS_REGISTRY["ボーネルンド"])
+
+    def test_segment_minutes_text_marks_multiple_projects(self):
+        registry = {
+            "project_registry": [
+                {"project": "ボーネルンド", "aliases": ["BONELAND"]},
+                {"project": "BRODO", "aliases": ["BRODO"]},
+            ]
+        }
+        self.mod.apply_tokiwagi_master_registry(registry)
+        text = (
+            "ボーネルンド\n"
+            "見積項目を整理して共有する\n"
+            "BRODO\n"
+            "在庫整理の手順を確認する\n"
+        )
+        segmented, meta = self.mod.segment_minutes_text(
+            text,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "BRODO"],
+            source_title="2026/03/10 社内定例MTG",
+        )
+        self.assertTrue(meta["segmented"])
+        self.assertIn("[Project: ボーネルンド]", segmented)
+        self.assertIn("[Project: BRODO]", segmented)
+        self.assertIn("ボーネルンド", meta["project_hints"])
+        self.assertIn("BRODO", meta["project_hints"])
+
+    def test_normalize_owner_hint_candidate_filters_noise(self):
+        self.assertEqual(self.mod._normalize_owner_hint_candidate("高田さん"), "高田")
+        self.assertEqual(self.mod._normalize_owner_hint_candidate("AI"), "")
+        self.assertEqual(self.mod._normalize_owner_hint_candidate("一広"), "")
+
     def test_run_with_doc_timeout_returns_function_result_when_alarm_is_stubbed(self):
         with patch.object(self.mod.signal, "signal"), patch.object(self.mod.signal, "setitimer"):
             result = self.mod.run_with_doc_timeout(1, lambda x: x + 1, 2)

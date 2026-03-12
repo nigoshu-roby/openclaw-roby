@@ -21,6 +21,7 @@ DEBUG_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_debug.jsonl"
 NEURONIC_LOG_PATH = Path.home() / ".openclaw" / "roby" / "neuronic_import_runs.jsonl"
 FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
 HIERARCHY_STATE_PATH = Path.home() / ".openclaw" / "roby" / "neuronic_hierarchy_state.json"
+TOKIWAGI_MASTER_REGISTRY_PATH = Path.home() / ".openclaw" / "roby" / "tokiwagi_master_registry_latest.json"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 NOTION_KEY_PATH = Path.home() / ".config" / "notion" / "api_key"
 
@@ -28,6 +29,10 @@ DEFAULT_DAYS = 14
 DEFAULT_MAX = 200
 
 JST = timezone(timedelta(hours=9))
+PROJECT_ALIAS_REGISTRY: Dict[str, str] = {}
+PROJECT_EXTRA_ALIASES: Dict[str, List[str]] = {}
+PROJECT_OWNER_HINTS_REGISTRY: Dict[str, List[str]] = {}
+PROJECT_ACTION_HINTS_REGISTRY: Dict[str, List[str]] = {}
 
 
 class MinutesDocTimeout(RuntimeError):
@@ -107,6 +112,101 @@ def ensure_state() -> Dict[str, Any]:
 def save_state(state: Dict[str, Any]) -> None:
     state["updated_at"] = int(time.time())
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        return {}
+    return {}
+
+
+def _normalize_owner_hint_candidate(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", "", text).strip()
+    text = re.sub(r"[\s\u3000]+", "", text)
+    text = re.sub(r"(さん|氏|様|店長|本部長)$", "", text)
+    text = re.sub(r"(の件は|から|より).*$", "", text)
+    if "@" in text:
+        text = text.split("@", 1)[0]
+    text = text.strip(" -_/：:")
+    lowered = text.lower()
+    if not text or lowered in OWNER_NOISE_HINTS:
+        return ""
+    if len(text) <= 1 and not text.isascii():
+        return ""
+    if len(text) > 14:
+        return ""
+    if re.search(r"(議事録|タスク|資料|対応|会議|確認|共有|連携|レポート|社|会社)", text):
+        return ""
+    return text
+
+
+def load_tokiwagi_master_registry(path: Optional[Path] = None) -> Dict[str, Any]:
+    payload = _read_json_file(path or TOKIWAGI_MASTER_REGISTRY_PATH)
+    if not payload:
+        return {}
+    apply_tokiwagi_master_registry(payload)
+    return payload
+
+
+def apply_tokiwagi_master_registry(registry: Dict[str, Any]) -> None:
+    PROJECT_ALIAS_REGISTRY.clear()
+    PROJECT_EXTRA_ALIASES.clear()
+    PROJECT_OWNER_HINTS_REGISTRY.clear()
+    PROJECT_ACTION_HINTS_REGISTRY.clear()
+    for project_entry in registry.get("project_registry", []) or []:
+        if not isinstance(project_entry, dict):
+            continue
+        canonical = _canonical_project_display_name(str(project_entry.get("project") or ""))
+        if not canonical:
+            continue
+        aliases = []
+        for raw in (project_entry.get("aliases") or []):
+            alias = str(raw or "").strip()
+            if alias:
+                aliases.append(alias)
+        local_llm = project_entry.get("local_llm") or {}
+        for raw in (local_llm.get("aliases") or []):
+            alias = str(raw or "").strip()
+            if alias:
+                aliases.append(alias)
+        for alias in aliases:
+            PROJECT_EXTRA_ALIASES.setdefault(canonical, [])
+            if alias and alias not in PROJECT_EXTRA_ALIASES[canonical]:
+                PROJECT_EXTRA_ALIASES[canonical].append(alias)
+            alias_norm = _normalize_project_token(alias)
+            if alias_norm:
+                PROJECT_ALIAS_REGISTRY[alias_norm] = canonical
+        owners: List[str] = []
+        for row in (project_entry.get("top_owners") or []):
+            if isinstance(row, dict):
+                owner = _normalize_owner_hint_candidate(str(row.get("value") or ""))
+                if owner:
+                    owners.append(owner)
+        for raw in (local_llm.get("owner_hints") or []):
+            owner = _normalize_owner_hint_candidate(str(raw or ""))
+            if owner:
+                owners.append(owner)
+        PROJECT_OWNER_HINTS_REGISTRY[canonical] = list(dict.fromkeys(owners))[:8]
+        actions: List[str] = []
+        for row in (project_entry.get("top_action_patterns") or []):
+            if isinstance(row, dict):
+                label = str(row.get("value") or "").strip()
+                if label:
+                    actions.append(label)
+        for raw in (local_llm.get("action_patterns") or []):
+            label = str(raw or "").strip()
+            if label:
+                actions.append(label)
+        PROJECT_ACTION_HINTS_REGISTRY[canonical] = list(dict.fromkeys(actions))[:8]
 
 
 def log_run(entry: Dict[str, Any]) -> None:
@@ -386,6 +486,19 @@ MEMO_NOISE_HINTS = [
     "議論",
 ]
 
+OWNER_NOISE_HINTS = {
+    "",
+    "ai",
+    "midj",
+    "担当者",
+    "システム開発部",
+    "プロジェクト管理室",
+    "広告部",
+    "マーケティング部",
+    "デジタルマーケティングチーム",
+    "一広",
+}
+
 GENERIC_PROJECT_NAMES = {
     "",
     "TOKIWAGI",
@@ -407,6 +520,45 @@ def _clean_line(line: str) -> str:
     s = re.sub(r"^\s*\d+[.)]\s*", "", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
+
+
+def extract_owner_mentions(text: str) -> List[str]:
+    owners: List[str] = []
+    patterns = [
+        r"([一-龥ぁ-んァ-ヶA-Za-z0-9]+(?:さん|氏|様))",
+        r"([一-龥ぁ-んァ-ヶA-Za-z0-9]+(?:店長|本部長))",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, text or ""):
+            owner = _normalize_owner_hint_candidate(str(match or ""))
+            if owner:
+                owners.append(owner)
+    return owners
+
+
+def classify_action_patterns(line: str) -> List[str]:
+    text = line or ""
+    mapping = [
+        ("会議調整", [r"日程", r"打ち合わせ", r"会議", r"ミーティング", r"定例"]),
+        ("資料作成", [r"資料", r"提案", r"見積", r"案内", r"レポート"]),
+        ("確認・調査", [r"確認", r"調査", r"把握", r"見直し", r"チェック"]),
+        ("実装・設定", [r"実装", r"設定", r"開発", r"修正", r"連携"]),
+        ("連携・共有", [r"共有", r"連絡", r"依頼", r"送付", r"引き継ぎ"]),
+        ("分析・評価", [r"分析", r"評価", r"検証", r"比較", r"集計"]),
+    ]
+    labels: List[str] = []
+    for label, patterns in mapping:
+        if any(re.search(pattern, text) for pattern in patterns):
+            labels.append(label)
+    return labels
+
+
+def _increment_counter_map(target: Dict[str, int], values: Iterable[str]) -> None:
+    for value in values:
+        key = (value or "").strip()
+        if not key:
+            continue
+        target[key] = int(target.get(key, 0)) + 1
 
 
 def _canonical_project_display_name(name: str) -> str:
@@ -516,6 +668,9 @@ def _match_known_project_name(label: str, known_projects: List[str]) -> Optional
     norm = _normalize_project_token(raw)
     if not norm:
         return None
+    registry_match = PROJECT_ALIAS_REGISTRY.get(norm)
+    if registry_match:
+        return registry_match
     for project in sorted(set([x for x in known_projects if x and x not in GENERIC_PROJECT_NAMES]), key=len, reverse=True):
         project_norm = _normalize_project_token(project)
         if not project_norm:
@@ -586,6 +741,8 @@ def _project_aliases(name: str) -> List[str]:
         head_space,
         latin_head,
     }
+    for alias in PROJECT_EXTRA_ALIASES.get(_canonical_project_display_name(base), []):
+        aliases.add(alias)
     return [a for a in aliases if a and len(a) >= 2]
 
 
@@ -618,6 +775,216 @@ def infer_primary_project(
     if best_project and best_score >= 10:
         return best_project
     return fallback_project or "TOKIWAGI"
+
+
+def extract_project_sections(
+    text: str,
+    *,
+    default_project: str,
+    known_projects: List[str],
+    source_title: str,
+    mod: Any,
+) -> Dict[str, Dict[str, Any]]:
+    inferred_primary = mod.infer_primary_project(
+        text=text,
+        known_projects=known_projects,
+        source_title=source_title,
+        fallback_project=default_project,
+    )
+    current_project = mod._canonical_project_display_name(inferred_primary or default_project)
+    sections: Dict[str, Dict[str, Any]] = {}
+
+    def ensure_section(project_name: str) -> Dict[str, Any]:
+        canonical = mod._canonical_project_display_name(project_name or default_project or "TOKIWAGI_MASTER")
+        if canonical not in sections:
+            sections[canonical] = {
+                "project": canonical,
+                "line_count": 0,
+                "action_count": 0,
+                "sample_lines": [],
+                "owners": {},
+                "action_patterns": {},
+            }
+        return sections[canonical]
+
+    ensure_section(current_project)
+
+    for raw in text.splitlines():
+        line = mod._clean_line(raw)
+        if not line:
+            continue
+        heading = mod._line_looks_like_project_heading(raw, known_projects)
+        if heading:
+            matched = mod._match_known_project_name(heading, known_projects)
+            if matched:
+                current_project = mod._canonical_project_display_name(matched)
+                ensure_section(current_project)
+                continue
+        elif "：" in raw or ":" in raw:
+            leading = raw.split("：", 1)[0].split(":", 1)[0]
+            matched = mod._match_known_project_name(leading, known_projects)
+            if matched:
+                current_project = mod._canonical_project_display_name(matched)
+                ensure_section(current_project)
+
+        matched_inline = mod._infer_project_from_text(line, known_projects)
+        project_name = mod._canonical_project_display_name(matched_inline or current_project or default_project)
+        section = ensure_section(project_name)
+        section["line_count"] += 1
+        action_patterns = classify_action_patterns(line)
+        if mod._line_looks_actionable(line) or action_patterns or re.search(r"(する|した|して|ます|予定|必要|依頼|確認)$", line):
+            section["action_count"] += 1
+        if len(section["sample_lines"]) < 8 and line not in section["sample_lines"]:
+            section["sample_lines"].append(line[:180])
+        _increment_counter_map(section["owners"], extract_owner_mentions(line))
+        _increment_counter_map(section["action_patterns"], action_patterns)
+
+    return sections
+
+
+def extend_known_projects_with_registry(known_projects: List[str], registry: Dict[str, Any]) -> List[str]:
+    merged: List[str] = []
+    for project in known_projects:
+        canonical = _canonical_project_display_name(project)
+        if canonical and canonical not in merged:
+            merged.append(canonical)
+    for entry in registry.get("project_registry", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        canonical = _canonical_project_display_name(str(entry.get("project") or ""))
+        if canonical and canonical not in merged:
+            merged.append(canonical)
+    return merged
+
+
+def infer_registry_project_hints(
+    text: str,
+    source_title: str,
+    registry: Dict[str, Any],
+    max_hints: int = 6,
+) -> List[str]:
+    if not registry:
+        return []
+    blob = f"{source_title}\n{text}"[:80000]
+    scores: Dict[str, int] = {}
+    for entry in registry.get("project_registry", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        canonical = _canonical_project_display_name(str(entry.get("project") or ""))
+        if not canonical or canonical in GENERIC_PROJECT_NAMES:
+            continue
+        score = 0
+        aliases = []
+        aliases.extend(entry.get("aliases") or [])
+        local_llm = entry.get("local_llm") or {}
+        aliases.extend(local_llm.get("aliases") or [])
+        aliases.extend(entry.get("sample_doc_titles") or [])
+        for alias in aliases:
+            alias_text = str(alias or "").strip()
+            if not alias_text:
+                continue
+            count = blob.count(alias_text)
+            if count > 0:
+                score += min(count, 5) * max(4, min(len(alias_text), 18))
+        for row in (entry.get("top_action_patterns") or []):
+            if isinstance(row, dict):
+                label = str(row.get("value") or "").strip()
+                if label and label in blob:
+                    score += 2
+        if score > 0:
+            scores[canonical] = score
+    ordered = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return [name for name, _ in ordered[:max_hints]]
+
+
+def build_registry_context(project_hints: List[str], registry: Dict[str, Any], limit: int = 4) -> str:
+    if not registry or not project_hints:
+        return ""
+    registry_map = {
+        _canonical_project_display_name(str(entry.get("project") or "")): entry
+        for entry in (registry.get("project_registry") or [])
+        if isinstance(entry, dict)
+    }
+    lines: List[str] = []
+    for project in project_hints[:limit]:
+        entry = registry_map.get(_canonical_project_display_name(project))
+        if not entry:
+            continue
+        owner_hints = PROJECT_OWNER_HINTS_REGISTRY.get(project) or []
+        action_hints = PROJECT_ACTION_HINTS_REGISTRY.get(project) or []
+        local_llm = entry.get("local_llm") or {}
+        summary = str(local_llm.get("summary") or "").strip()
+        lines.append(f"- project: {project}")
+        if owner_hints:
+            lines.append(f"  owners: {', '.join(owner_hints[:4])}")
+        if action_hints:
+            lines.append(f"  patterns: {', '.join(action_hints[:4])}")
+        if summary:
+            lines.append(f"  context: {summary}")
+    return "\n".join(lines)
+
+
+def segment_minutes_text(
+    text: str,
+    default_project: str,
+    known_projects: List[str],
+    source_title: str,
+) -> Tuple[str, Dict[str, Any]]:
+    class _Adapter:
+        infer_primary_project = staticmethod(infer_primary_project)
+        _canonical_project_display_name = staticmethod(_canonical_project_display_name)
+        _line_looks_like_project_heading = staticmethod(_line_looks_like_project_heading)
+        _match_known_project_name = staticmethod(_match_known_project_name)
+        _infer_project_from_text = staticmethod(_infer_project_from_text)
+        _clean_line = staticmethod(_clean_line)
+        _line_looks_actionable = staticmethod(_line_looks_actionable)
+
+    sections = extract_project_sections(
+        text,
+        default_project=default_project,
+        known_projects=known_projects,
+        source_title=source_title,
+        mod=_Adapter,
+    )
+    ordered_projects = [
+        name
+        for name, data in sorted(
+            sections.items(),
+            key=lambda item: (-int(item[1].get("action_count") or 0), -int(item[1].get("line_count") or 0), item[0]),
+        )
+        if name and name not in GENERIC_PROJECT_NAMES
+    ]
+    if len(ordered_projects) <= 1:
+        return text, {
+            "segmented": False,
+            "project_hints": ordered_projects[:1],
+            "section_count": len(ordered_projects),
+        }
+    body_lines: List[str] = []
+    for project in ordered_projects:
+        section = sections.get(project) or {}
+        sample_lines = section.get("sample_lines") or []
+        if not sample_lines:
+            continue
+        body_lines.append(f"[Project: {project}]")
+        for line in sample_lines[:8]:
+            body_lines.append(f"- {line}")
+        owner_hints = PROJECT_OWNER_HINTS_REGISTRY.get(project) or []
+        if owner_hints:
+            body_lines.append(f"- owner_hints: {', '.join(owner_hints[:4])}")
+        body_lines.append("")
+    if not body_lines:
+        return text, {
+            "segmented": False,
+            "project_hints": ordered_projects[:1],
+            "section_count": len(ordered_projects),
+        }
+    segmented_text = "\n".join(body_lines).strip()
+    return segmented_text, {
+        "segmented": True,
+        "project_hints": ordered_projects[:6],
+        "section_count": len(ordered_projects),
+    }
 
 
 def sanitize_extracted_tasks(
@@ -1092,6 +1459,7 @@ def local_preprocess_minutes(
     default_project: str,
     known_projects: List[str],
     today: str,
+    registry_context: str = "",
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     if not env_flag(env, "MINUTES_LOCAL_PREPROCESS_ENABLE", True):
         return None, {"enabled": False, "reason": "disabled"}
@@ -1108,7 +1476,8 @@ def local_preprocess_minutes(
         "project_hints must be an array of likely project names. "
         "action_candidates must be an array of short concrete action lines only. "
         "noise_notes must be an array of memo/status lines that should not become tasks. "
-        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
+        + (f"Project registry hints:\n{registry_context}" if registry_context else "")
     )
     model = (env.get("MINUTES_LOCAL_PREPROCESS_MODEL") or env.get("ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL") or "qwen2.5:7b").strip()
     parsed, meta = run_ollama_json(
@@ -1242,6 +1611,7 @@ def review_minutes_with_gemini(
     default_project: str,
     known_projects: List[str],
     today: str,
+    registry_context: str = "",
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     known = ", ".join(sorted(set([p for p in known_projects if p]))[:30])
     prompt = (
@@ -1253,7 +1623,8 @@ def review_minutes_with_gemini(
         "Preserve project names explicitly and prefer known project names when text indicates them. "
         "cross_project_actions is an array of short actionable statements. "
         "noise_notes is an array of non-action memo lines that should not become tasks. "
-        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
+        + (f"Project registry hints:\n{registry_context}" if registry_context else "")
     )
     parsed, raw = _run_gemini_json_prompt_with_retry(
         text,
@@ -1279,6 +1650,7 @@ def extract_tasks_with_gemini_from_review(
     default_project: str,
     known_projects: List[str],
     today: str,
+    registry_context: str = "",
 ) -> Tuple[List[Dict[str, Any]], str]:
     known = ", ".join(sorted(set([p for p in known_projects if p]))[:30])
     review_text = json.dumps(review, ensure_ascii=False)
@@ -1292,7 +1664,8 @@ def extract_tasks_with_gemini_from_review(
         "Project must be one of Known projects when applicable; for internal MTG items, infer the specific project from project_sections instead of using a generic label. "
         "due_date must be YYYY-MM-DD or empty string. "
         "If due date is relative, infer date using Today(JST). "
-        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}."
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
+        + (f"Project registry hints:\n{registry_context}" if registry_context else "")
     )
     parsed, raw = _run_gemini_json_prompt_with_retry(
         review_text,
@@ -1322,6 +1695,7 @@ def extract_coverage_tasks_from_review(
     default_project: str,
     known_projects: List[str],
     today: str,
+    registry_context: str = "",
 ) -> Tuple[List[Dict[str, Any]], str]:
     known = ", ".join(sorted(set([p for p in known_projects if p]))[:30])
     review_text = json.dumps(review, ensure_ascii=False)
@@ -1335,7 +1709,8 @@ def extract_coverage_tasks_from_review(
         "Project must be specific (avoid generic TOKIWAGI for internal MTG if section suggests project). "
         "due_date must be YYYY-MM-DD or empty string. "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
-        f"Existing titles: {existing_titles}."
+        f"Existing titles: {existing_titles}. "
+        + (f"Project registry hints:\n{registry_context}" if registry_context else "")
     )
     parsed, raw = _run_gemini_json_prompt_with_retry(
         review_text,
@@ -1439,23 +1814,52 @@ def local_recall_boost_tasks(
     return boosted
 
 
-def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_projects: List[str], today: str) -> Tuple[List[Dict[str, Any]], str]:
-    working_text = text
-    working_default_project = default_project
-    working_known_projects = list(known_projects)
+def summarize_tasks(
+    text: str,
+    env: Dict[str, str],
+    default_project: str,
+    known_projects: List[str],
+    today: str,
+    source_title: str = "",
+) -> Tuple[List[Dict[str, Any]], str]:
+    registry = load_tokiwagi_master_registry()
+    working_known_projects = extend_known_projects_with_registry(list(known_projects), registry)
+    segmented_text, segment_meta = segment_minutes_text(
+        text,
+        default_project=default_project,
+        known_projects=working_known_projects,
+        source_title=source_title or default_project,
+    )
+    registry_project_hints = infer_registry_project_hints(segmented_text, source_title or default_project, registry)
+    if registry_project_hints:
+        working_known_projects = list(dict.fromkeys(working_known_projects + registry_project_hints))
+    working_default_project = infer_primary_project(
+        text=segmented_text,
+        known_projects=working_known_projects,
+        source_title=source_title or default_project,
+        fallback_project=default_project,
+    )
+    registry_context = build_registry_context(
+        segment_meta.get("project_hints", []) or registry_project_hints,
+        registry,
+    )
+    working_text = segmented_text
     local_hint_tasks: List[Dict[str, Any]] = []
     local_meta: Dict[str, Any] = {"enabled": False}
 
     local_preprocess, local_preprocess_meta = local_preprocess_minutes(
-        text,
+        working_text,
         env,
-        default_project,
-        known_projects,
+        working_default_project,
+        working_known_projects,
         today,
+        registry_context=registry_context,
     )
     local_meta = {
         "enabled": True,
         "result": local_preprocess_meta,
+        "segmentation": segment_meta,
+        "registry_hints": registry_project_hints[:6],
     }
     if isinstance(local_preprocess, dict):
         cleaned_text = str(local_preprocess.get("cleaned_text") or "").strip()
@@ -1502,6 +1906,7 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
         working_default_project,
         working_known_projects,
         today,
+        registry_context=registry_context,
     )
     if review:
         llm_tasks, task_raw = extract_tasks_with_gemini_from_review(
@@ -1510,6 +1915,7 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
             working_default_project,
             working_known_projects,
             today,
+            registry_context=registry_context,
         )
         review_tasks = tasks_from_review_object(
             review,
@@ -1533,6 +1939,7 @@ def summarize_tasks(text: str, env: Dict[str, str], default_project: str, known_
                 working_default_project,
                 working_known_projects,
                 today,
+                registry_context=registry_context,
             )
             if coverage_tasks:
                 merged_review_tasks = _merge_tasks(
@@ -2535,6 +2942,7 @@ def main() -> int:
     candidates: List[Dict[str, Any]] = []
     known_projects: List[str] = []
     heuristic_used_docs = 0
+    registry = load_tokiwagi_master_registry()
 
     # Notion structure
     if not args.skip_notion and notion_root:
@@ -2542,7 +2950,10 @@ def main() -> int:
         if not structure or args.refresh:
             structure = build_notion_structure(notion_root, token, env.get("NOTION_VERSION", "2025-09-03"), args.max)
             save_cached_structure(structure)
-        known_projects = [db.get("project") for db in structure.get("databases", [])]
+        known_projects = extend_known_projects_with_registry(
+            [db.get("project") for db in structure.get("databases", [])],
+            registry,
+        )
 
         for db in structure.get("databases", []):
             db_id = db.get("id")
@@ -2564,6 +2975,9 @@ def main() -> int:
                     "updated": last_edit,
                     "url": page.get("url", ""),
                 })
+
+    if not known_projects:
+        known_projects = extend_known_projects_with_registry([], registry)
 
     # Google Docs
     if not args.skip_gdocs and drive_folder:
@@ -2656,6 +3070,7 @@ def main() -> int:
                     default_project,
                     known_projects,
                     today_str,
+                    item.get("title", ""),
                 )
             except MinutesDocTimeout:
                 timed_out = True
@@ -2749,6 +3164,7 @@ def main() -> int:
                     default_project,
                     known_projects,
                     today_str,
+                    item.get("title", ""),
                 )
             except MinutesDocTimeout:
                 timed_out = True
