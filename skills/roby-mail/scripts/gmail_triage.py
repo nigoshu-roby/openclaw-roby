@@ -834,21 +834,93 @@ def _decorate_email_task_title(title: str, sender_label: str) -> str:
     return f"【{sender_label}】{base}"
 
 
-def decide_work_bucket(category: str, needs_reply: bool, meta: Dict[str, Any]) -> Tuple[str, str]:
+def decide_work_bucket(
+    category: str,
+    needs_reply: bool,
+    meta: Dict[str, Any],
+    tags: List[str] | None = None,
+) -> Tuple[str, str]:
     signals = meta.get("signals") if isinstance(meta, dict) else {}
     if not isinstance(signals, dict):
         signals = {}
+    contact_meta = meta.get("contact_importance") if isinstance(meta, dict) else {}
+    if not isinstance(contact_meta, dict):
+        contact_meta = {}
+    tag_list = tags or []
+    has_tool_tag = any(str(tag).startswith("tool:") for tag in tag_list)
+
+    newsletter_score = 0
+    review_score = 0
+    task_score = 0
+
+    if signals.get("promo_subject"):
+        newsletter_score += 3
+    if signals.get("marketing_sender"):
+        newsletter_score += 2
+    if signals.get("promo_sender_domain"):
+        newsletter_score += 3
+    if signals.get("ad_hint"):
+        newsletter_score += 1
+    if signals.get("is_noreply"):
+        newsletter_score += 1
+
+    if signals.get("business_review"):
+        review_score += 4
+    if signals.get("actionable_notice"):
+        review_score += 3
+    if signals.get("alert"):
+        review_score += 3
+    if signals.get("urgent"):
+        review_score += 1
+    if has_tool_tag:
+        review_score += 1
+
+    tier = str(contact_meta.get("tier") or "none")
+    if contact_meta.get("thread_replied"):
+        review_score += 3
+    elif tier == "high":
+        review_score += 2
+    elif tier == "medium":
+        review_score += 1
+
+    if needs_reply:
+        task_score += 4
+    if signals.get("meeting_coordination"):
+        task_score += 3
+    if signals.get("urgent"):
+        task_score += 1
+    if signals.get("actionable_notice"):
+        task_score += 1
+
+    meta["bucket_scores"] = {
+        "newsletter": newsletter_score,
+        "review": review_score,
+        "task": task_score,
+        "has_tool_tag": has_tool_tag,
+    }
 
     if category == "archive":
+        if task_score >= 4:
+            return "task", "weighted_action_override"
+        if review_score >= 4:
+            return "review", "weighted_review_override"
         return "archive", "promo_or_low_value"
     if category == "later_check":
+        if task_score >= 4:
+            return "task", "weighted_task_from_tool_notice"
+        if review_score >= 3:
+            return "review", "weighted_review_from_tool_notice"
+        if newsletter_score >= 5 and not has_tool_tag:
+            return "archive", "newsletter_low_value"
         return "digest", "tool_notice_or_digest"
     if category == "needs_reply" or needs_reply:
         return "task", "explicit_reply_or_action"
 
     if category == "needs_review":
-        if signals.get("meeting_coordination"):
+        if task_score >= 3:
             return "task", "coordination_requires_followup"
+        if newsletter_score >= 4 and review_score == 0:
+            return "digest", "newsletter_review_downgraded"
         return "review", "human_review_needed"
 
     return "review", "default_review"
@@ -1430,7 +1502,7 @@ def main() -> int:
                 category = llm_category
                 summary["llm_overrides"] += 1
                 tags = _dedupe_tags(tags + ["llm:override"])
-        work_bucket, bucket_reason = decide_work_bucket(category, needs_reply, classify_meta)
+        work_bucket, bucket_reason = decide_work_bucket(category, needs_reply, classify_meta, tags)
         classify_meta["work_bucket"] = work_bucket
         classify_meta["work_bucket_reason"] = bucket_reason
         raw_category_counts[category] = raw_category_counts.get(category, 0) + 1

@@ -218,12 +218,12 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(meta.get("contact_reason"), "known_contact_promoted_from_later_check")
 
     def test_work_bucket_maps_later_check_to_digest(self):
-        bucket, reason = self.mod.decide_work_bucket("later_check", False, {"signals": {}})
+        bucket, reason = self.mod.decide_work_bucket("later_check", False, {"signals": {}}, [])
         self.assertEqual(bucket, "digest")
         self.assertEqual(reason, "tool_notice_or_digest")
 
     def test_work_bucket_maps_needs_reply_to_task(self):
-        bucket, reason = self.mod.decide_work_bucket("needs_reply", True, {"signals": {}})
+        bucket, reason = self.mod.decide_work_bucket("needs_reply", True, {"signals": {}}, [])
         self.assertEqual(bucket, "task")
         self.assertEqual(reason, "explicit_reply_or_action")
 
@@ -232,6 +232,7 @@ class TestGmailTriageClassify(TestCase):
             "needs_review",
             False,
             {"signals": {"meeting_coordination": False}},
+            [],
         )
         self.assertEqual(bucket, "review")
         self.assertEqual(reason, "human_review_needed")
@@ -241,9 +242,61 @@ class TestGmailTriageClassify(TestCase):
             "needs_review",
             False,
             {"signals": {"meeting_coordination": True}},
+            [],
         )
         self.assertEqual(bucket, "task")
         self.assertEqual(reason, "coordination_requires_followup")
+
+    def test_work_bucket_downgrades_marketing_review_to_digest(self):
+        bucket, reason = self.mod.decide_work_bucket(
+            "needs_review",
+            False,
+            {
+                "signals": {
+                    "meeting_coordination": False,
+                    "promo_subject": True,
+                    "marketing_sender": True,
+                    "promo_sender_domain": False,
+                    "ad_hint": True,
+                    "is_noreply": True,
+                    "business_review": False,
+                    "actionable_notice": False,
+                    "alert": False,
+                    "urgent": False,
+                }
+            },
+            [],
+        )
+        self.assertEqual(bucket, "digest")
+        self.assertEqual(reason, "newsletter_review_downgraded")
+
+    def test_work_bucket_promotes_known_tool_notice_to_review(self):
+        bucket, reason = self.mod.decide_work_bucket(
+            "later_check",
+            False,
+            {
+                "signals": {
+                    "business_review": False,
+                    "actionable_notice": False,
+                    "alert": False,
+                    "urgent": False,
+                    "promo_subject": False,
+                    "marketing_sender": False,
+                    "promo_sender_domain": False,
+                    "ad_hint": False,
+                    "is_noreply": True,
+                    "meeting_coordination": False,
+                },
+                "contact_importance": {
+                    "known": True,
+                    "thread_replied": True,
+                    "tier": "high",
+                },
+            },
+            ["tool:google"],
+        )
+        self.assertEqual(bucket, "review")
+        self.assertEqual(reason, "weighted_review_from_tool_notice")
 
 
 if __name__ == "__main__":
