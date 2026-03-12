@@ -39,7 +39,7 @@
 | B3  | owner registry 生成                  | 完了   | #14          | owner mention 抽出の初期版を実装・出力                                                |
 | B4  | action pattern registry 生成         | 完了   | #14          | action pattern 集計の初期版を実装・出力                                               |
 | B5  | project segmentation first 実装      | 完了   | #14          | registry hints を使って task 抽出前に案件分割を実装                                   |
-| B6  | task rewrite / decomposition 実装    | 未着手 | #14          | 実行可能な粒度へ正規化                                                                |
+| B6  | task rewrite / decomposition 実装    | 完了   | #14          | 実行可能な粒度へ正規化。メモ系タイトルの書き換えと複数アクション分解を実装            |
 | B7  | minutes golden set / missed set 作成 | 未着手 | #14          | Eval Sprint と接続                                                                    |
 
 ## Sprint C: Eval Sprint

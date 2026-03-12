@@ -514,6 +514,12 @@ PROJECT_DISPLAY_NORMALIZATION = {
     "ミッドガーデンジャパン": "ミッド・ガーデン・ジャパン",
 }
 
+TASK_REWRITE_PREFIXES = [
+    r"^(?:現状|進捗|報告|背景|備考|所感|課題|論点|検討事項|要確認|対応|予定|ネクストアクション|次(?:の)?アクション|本日の重点タスク|重点タスク|TODO|ToDo|タスク)[:：]\s*",
+    r"^(?:-|\*|・|●|◯|□|■|→|⇒|↳)\s*",
+    r"^\d+[.)]\s*",
+]
+
 
 def _clean_line(line: str) -> str:
     s = re.sub(r"^\s*[-*・●◯□■]+\s*", "", line.strip())
@@ -602,6 +608,8 @@ def _has_action_signal(text: str) -> bool:
         return True
     if re.search(r"(まで|期限|予定|必要|依頼|確認|対応|実施|作成|調整|共有|連携|設定|修正|実装|準備|追跡|ヒアリング|検討)", s):
         return True
+    if re.search(r"(する|したい|進める|行う|送る|まとめる|整理する|確認する|共有する|提出する|依頼する)$", s):
+        return True
     if re.search(r"\d{4}[/-]\d{1,2}[/-]\d{1,2}", s):
         return True
     return False
@@ -628,6 +636,130 @@ def _looks_noise_task_title(title: str) -> bool:
     if s.endswith("について") and not _has_action_signal(s):
         return True
     return False
+
+
+def _strip_project_heading_prefix(text: str, known_projects: List[str]) -> str:
+    raw = (text or "").strip()
+    if not raw or ("：" not in raw and ":" not in raw):
+        return raw
+    leading, rest = re.split(r"[：:]", raw, maxsplit=1)
+    matched = _match_known_project_name(leading.strip(), known_projects)
+    if matched:
+        return rest.strip()
+    return raw
+
+
+def _strip_task_prefixes(text: str) -> str:
+    current = (text or "").strip()
+    while current:
+        updated = current
+        for pattern in TASK_REWRITE_PREFIXES:
+            updated = re.sub(pattern, "", updated).strip()
+        if updated == current:
+            break
+        current = updated
+    return current.strip("。.!? \t")
+
+
+def _normalize_action_clause(text: str, known_projects: List[str]) -> str:
+    clause = _clean_line(text or "")
+    if not clause:
+        return ""
+    clause = _strip_project_heading_prefix(clause, known_projects)
+    clause = _strip_task_prefixes(clause)
+    clause = re.sub(r"^\(([^)]*)\)\s*", "", clause).strip()
+    clause = clause.strip("。.!? \t")
+    if not clause:
+        return ""
+    if _looks_noise_task_title(clause) and not _has_action_signal(clause):
+        return ""
+    if not (_line_looks_actionable(clause) or _has_action_signal(clause)):
+        return ""
+    return clause[:120]
+
+
+def _extract_action_clauses(text: str, known_projects: List[str], max_items: int = 6) -> List[str]:
+    if not text:
+        return []
+    candidates: List[str] = []
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"[。!?！？]", "\n", line)
+        line = line.replace("↳", "\n").replace("→", "\n")
+        for segment in line.splitlines():
+            parts = [segment]
+            if "・" in segment:
+                split_parts = [p.strip() for p in segment.split("・") if p.strip()]
+                actionable_split_parts = [
+                    p for p in split_parts
+                    if _has_action_signal(p) or _line_looks_actionable(p)
+                ]
+                if len(actionable_split_parts) >= 2:
+                    parts = actionable_split_parts
+            for part in parts:
+                clause = _normalize_action_clause(part, known_projects)
+                if clause:
+                    candidates.append(clause)
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for clause in candidates:
+        key = clause.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(clause)
+        if max_items > 0 and len(ordered) >= max_items:
+            break
+    return ordered
+
+
+def _compact_task_note(note: str, selected_titles: List[str], known_projects: List[str]) -> str:
+    lines: List[str] = []
+    seen: set[str] = set()
+    selected_keys = {(x or "").strip().lower() for x in selected_titles if x}
+    for raw_line in str(note or "").splitlines():
+        line = _clean_line(raw_line)
+        if not line:
+            continue
+        normalized = _normalize_action_clause(line, known_projects)
+        key = normalized.lower() if normalized else line.lower()
+        if key in selected_keys or key in seen:
+            continue
+        seen.add(key)
+        lines.append(line[:180])
+        if len(lines) >= 3:
+            break
+    return "\n".join(lines).strip()
+
+
+def _rewrite_leaf_task_candidates(
+    title: str,
+    note: str,
+    known_projects: List[str],
+    max_items: int = 4,
+) -> List[str]:
+    title_clause = _normalize_action_clause(title, known_projects)
+    note_clauses = _extract_action_clauses(note, known_projects, max_items=max_items)
+
+    if title_clause and not note_clauses:
+        return [title_clause]
+    if not title_clause:
+        return note_clauses[:max_items]
+
+    candidates: List[str] = [title_clause]
+    title_key = title_clause.lower()
+    for clause in note_clauses:
+        if clause.lower() == title_key:
+            continue
+        candidates.append(clause)
+        if max_items > 0 and len(candidates) >= max_items:
+            break
+
+    if _looks_noise_task_title(title) and note_clauses:
+        return note_clauses[:max_items]
+    return candidates[:max_items]
 
 
 def _infer_project_from_text(text: str, known_projects: List[str]) -> Optional[str]:
@@ -998,6 +1130,24 @@ def sanitize_extracted_tasks(
     cleaned: List[Dict[str, Any]] = []
     seen: set[str] = set()
 
+    def _append_leaf(title_value: str, project_value: str, due_value: str, assignee_value: str, note_value: str) -> None:
+        title_clean = _clean_line(title_value)
+        if not title_clean:
+            return
+        if _looks_noise_task_title(title_clean) and not _has_action_signal(title_clean) and not due_value:
+            return
+        fp = _fingerprint(title_clean, project_value, due_value, note_value)
+        if fp in seen:
+            return
+        seen.add(fp)
+        cleaned.append({
+            "title": title_clean[:120],
+            "project": project_value,
+            "due_date": due_value,
+            "assignee": assignee_value,
+            "note": note_value,
+        })
+
     def _fingerprint(title: str, project: str, due_date: str, note: str) -> str:
         return "|".join([
             _clean_line(title).lower(),
@@ -1041,23 +1191,22 @@ def sanitize_extracted_tasks(
                     project,
                     known_projects,
                 )
-                if _looks_noise_task_title(st) and not _has_action_signal(st) and not sd:
-                    continue
-                if not st:
-                    continue
-                sub_fp = _fingerprint(st, sp, sd, sn)
-                if sub_fp in seen:
-                    continue
-                seen.add(sub_fp)
-                if max_subtasks_per_parent > 0 and len(subtasks) >= max_subtasks_per_parent:
-                    continue
-                subtasks.append({
-                    "title": st,
-                    "project": sp,
-                    "due_date": sd,
-                    "assignee": sa,
-                    "note": sn,
-                })
+                rewritten_titles = _rewrite_leaf_task_candidates(st, sn, known_projects)
+                compact_note = _compact_task_note(sn, rewritten_titles, known_projects)
+                for rewritten_title in rewritten_titles:
+                    if max_subtasks_per_parent > 0 and len(subtasks) >= max_subtasks_per_parent:
+                        break
+                    sub_fp = _fingerprint(rewritten_title, sp, sd, compact_note)
+                    if sub_fp in seen:
+                        continue
+                    seen.add(sub_fp)
+                    subtasks.append({
+                        "title": rewritten_title,
+                        "project": sp,
+                        "due_date": sd,
+                        "assignee": sa,
+                        "note": compact_note,
+                    })
 
         if subtasks and len(subtasks) == 1 and ((not title) or _looks_noise_task_title(title)):
             single = subtasks[0]
@@ -1121,21 +1270,12 @@ def sanitize_extracted_tasks(
             continue
 
         # Leaf task
-        if not title:
-            continue
-        if _looks_noise_task_title(title) and not _has_action_signal(title) and not due_date:
-            continue
-        fp = _fingerprint(title, project, due_date, note)
-        if fp in seen:
-            continue
-        seen.add(fp)
-        cleaned.append({
-            "title": title[:120],
-            "project": project,
-            "due_date": due_date,
-            "assignee": assignee,
-            "note": note,
-        })
+        rewritten_titles = _rewrite_leaf_task_candidates(title, note, known_projects)
+        compact_note = _compact_task_note(note, rewritten_titles, known_projects)
+        for rewritten_title in rewritten_titles:
+            _append_leaf(rewritten_title, project, due_date, assignee, compact_note)
+            if max_tasks_per_doc > 0 and len(cleaned) >= max_tasks_per_doc:
+                return cleaned[:max_tasks_per_doc]
 
     if max_tasks_per_doc > 0:
         return cleaned[:max_tasks_per_doc]

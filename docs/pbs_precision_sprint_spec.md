@@ -137,6 +137,7 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - project alias の正規化
   - project segmentation first
   - registry hints を local preprocess / Gemini review / Gemini extraction prompt に注入
+  - task rewrite / decomposition（generic なメモ題名の書き換え、note 内複数アクションの分解）
 
 ---
 

@@ -163,6 +163,86 @@ class TestRobyMinutesQuality(TestCase):
         self.assertTrue(cleaned[0]["title"].startswith("ミッド・ガーデン・ジャパン / "))
         self.assertTrue(all(x["project"] == "ミッド・ガーデン・ジャパン" for x in cleaned[0]["subtasks"]))
 
+    def test_sanitize_rewrites_generic_leaf_title_from_note(self):
+        extracted = [
+            {
+                "title": "進捗",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "note": "ネクストアクション: 見積項目を整理して共有する",
+            }
+        ]
+        cleaned = self.mod.sanitize_extracted_tasks(
+            extracted=extracted,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド"],
+            source_title="2026/03/10 社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        self.assertEqual(len(cleaned), 1)
+        self.assertEqual(cleaned[0]["title"], "見積項目を整理して共有する")
+
+    def test_sanitize_decomposes_multiple_action_clauses_from_note(self):
+        extracted = [
+            {
+                "title": "対応",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "note": (
+                    "ネクストアクション:\n"
+                    "見積項目を整理して共有する。\n"
+                    "新しい日報テンプレートを作成する。"
+                ),
+            }
+        ]
+        cleaned = self.mod.sanitize_extracted_tasks(
+            extracted=extracted,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド"],
+            source_title="2026/03/10 社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        titles = [item["title"] for item in cleaned]
+        self.assertEqual(len(cleaned), 2)
+        self.assertIn("見積項目を整理して共有する", titles)
+        self.assertIn("新しい日報テンプレートを作成する", titles)
+
+    def test_subtask_note_can_expand_into_multiple_actionable_subtasks(self):
+        extracted = [
+            {
+                "title": "ボーネルンド / 2026/03/10 社内定例MTG",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "subtasks": [
+                    {
+                        "title": "対応",
+                        "project": "ボーネルンド",
+                        "assignee": "私",
+                        "note": (
+                            "ネクストアクション:\n"
+                            "既存の旧レジでオープンする案を推奨する。\n"
+                            "新しい日報テンプレートを作成する。"
+                        ),
+                    }
+                ],
+            }
+        ]
+        cleaned = self.mod.sanitize_extracted_tasks(
+            extracted=extracted,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド"],
+            source_title="2026/03/10 社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        self.assertEqual(len(cleaned), 1)
+        self.assertEqual(len(cleaned[0]["subtasks"]), 2)
+        titles = [item["title"] for item in cleaned[0]["subtasks"]]
+        self.assertIn("既存の旧レジでオープンする案を推奨する", titles)
+        self.assertIn("新しい日報テンプレートを作成する", titles)
+
     def test_normalize_minutes_parent_title_prefixes_specific_title_with_project(self):
         title = self.mod._normalize_minutes_parent_title(
             "渋谷Billage事務所情報",
