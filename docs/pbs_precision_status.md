@@ -21,14 +21,14 @@
 
 ## Sprint A: Email Precision Sprint
 
-| ID  | タスク                                    | 状態   | GitHub Issue | 備考                             |
-| --- | ----------------------------------------- | ------ | ------------ | -------------------------------- |
-| A1  | Reply history / contact importance index  | 未着手 | #13          | 過去返信履歴を重要信号として使う |
-| A2  | 4分類（archive/digest/review/task）導入   | 未着手 | #13          | Neuronic投入は task のみ         |
-| A3  | newsletter / tool notify の重み付け見直し | 未着手 | #13          | 請求/見積/契約は例外強化         |
-| A4  | 実行タスク・返信タスク抽出の再設計        | 未着手 | #13          | 子タスクの実用性改善             |
-| A5  | Neuronic投入ゲート強化                    | 未着手 | #13          | high-confidence only             |
-| A6  | Gmail golden set / missed set 作成        | 未着手 | #13          | Eval Sprint と接続               |
+| ID  | タスク                                    | 状態   | GitHub Issue | 備考                                                                            |
+| --- | ----------------------------------------- | ------ | ------------ | ------------------------------------------------------------------------------- |
+| A1  | Reply history / contact importance index  | 完了   | #13          | `gmail_contact_index.py` でローカル索引化し、triage に known-contact 昇格を接続 |
+| A2  | 4分類（archive/digest/review/task）導入   | 未着手 | #13          | Neuronic投入は task のみ                                                        |
+| A3  | newsletter / tool notify の重み付け見直し | 未着手 | #13          | 請求/見積/契約は例外強化                                                        |
+| A4  | 実行タスク・返信タスク抽出の再設計        | 未着手 | #13          | 子タスクの実用性改善                                                            |
+| A5  | Neuronic投入ゲート強化                    | 未着手 | #13          | high-confidence only                                                            |
+| A6  | Gmail golden set / missed set 作成        | 未着手 | #13          | Eval Sprint と接続                                                              |
 
 ## Sprint B: Minutes Precision Sprint
 

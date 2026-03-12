@@ -23,6 +23,7 @@ STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
+CONTACT_INDEX_PATH = Path.home() / ".openclaw" / "roby" / "gmail_contact_index.json"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
@@ -484,6 +485,97 @@ def gog_search(account: str, query: str, max_results: int, env: Dict[str, str]) 
         return []
 
 
+def load_contact_index(path: Path | None = None) -> Dict[str, Any]:
+    target = (path or CONTACT_INDEX_PATH).expanduser()
+    if not target.exists():
+        return {}
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return {}
+    return {}
+
+
+def contact_importance(thread_id: str, sender: str, index: Dict[str, Any] | None) -> Dict[str, Any]:
+    info = {
+        "known": False,
+        "thread_replied": False,
+        "sender_email": "",
+        "sender_domain": "",
+        "sender_thread_count": 0,
+        "domain_thread_count": 0,
+        "tier": "none",
+        "score": 0,
+    }
+    if not index:
+        return info
+    _sender_name, sender_email = parseaddr(sender or "")
+    sender_email = (sender_email or "").strip().lower()
+    sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else ""
+    thread_index = index.get("thread_index") or {}
+    sender_index = index.get("sender_index") or {}
+    domain_index = index.get("domain_index") or {}
+    thread_info = thread_index.get((thread_id or "").strip())
+    sender_info = sender_index.get(sender_email, {})
+    domain_info = domain_index.get(sender_domain, {})
+
+    info["sender_email"] = sender_email
+    info["sender_domain"] = sender_domain
+    info["thread_replied"] = bool(thread_info)
+    info["sender_thread_count"] = int(sender_info.get("thread_count", 0) or 0)
+    info["domain_thread_count"] = int(domain_info.get("thread_count", 0) or 0)
+    info["known"] = info["thread_replied"] or info["sender_thread_count"] > 0 or info["domain_thread_count"] > 0
+
+    score = 0
+    if info["thread_replied"]:
+        score += 6
+    if info["sender_thread_count"] >= 6:
+        score += 4
+    elif info["sender_thread_count"] >= 3:
+        score += 3
+    elif info["sender_thread_count"] >= 1:
+        score += 2
+    if info["domain_thread_count"] >= 12:
+        score += 3
+    elif info["domain_thread_count"] >= 6:
+        score += 2
+    elif info["domain_thread_count"] >= 2:
+        score += 1
+    info["score"] = score
+    if score >= 8:
+        info["tier"] = "high"
+    elif score >= 4:
+        info["tier"] = "medium"
+    elif score >= 2:
+        info["tier"] = "low"
+    return info
+
+
+def apply_contact_override(
+    category: str,
+    tags: List[str],
+    meta: Dict[str, Any],
+    contact_meta: Dict[str, Any],
+    *,
+    is_noreply: bool,
+) -> Tuple[str, List[str], Dict[str, Any]]:
+    if not contact_meta.get("known"):
+        return category, tags, meta
+    tier = contact_meta.get("tier")
+    if category == "archive":
+        if contact_meta.get("thread_replied") or (tier in {"high", "medium"} and not is_noreply):
+            category = "needs_review"
+            tags = _dedupe_tags(tags + ["contact:override"])
+            meta["contact_reason"] = "known_contact_promoted_from_archive"
+    elif category == "later_check" and tier in {"high", "medium"}:
+        category = "needs_review"
+        tags = _dedupe_tags(tags + ["contact:override"])
+        meta["contact_reason"] = "known_contact_promoted_from_later_check"
+    return category, tags, meta
+
+
 def archive_thread(account: str, thread_id: str, env: Dict[str, str]) -> None:
     cmd = [
         "gog",
@@ -934,6 +1026,8 @@ def classify_message(
     rules: Dict[str, Any] | None = None,
     cc: str = "",
     env: Dict[str, str] | None = None,
+    thread_id: str = "",
+    contact_index: Dict[str, Any] | None = None,
 ) -> Tuple[str, List[str], bool, str | None, Dict[str, Any]]:
     text = f"{subject} {sender} {cc} {body}".lower()
     header_text = f"{subject} {sender} {cc}".lower()
@@ -944,6 +1038,15 @@ def classify_message(
     cc_lower = (cc or "").lower()
     subject_lower = (subject or "").lower()
     is_noreply = "no-reply" in sender_lower or "noreply" in sender_lower
+    contact_meta = contact_importance(thread_id, sender, contact_index)
+    meta["contact_importance"] = contact_meta.copy()
+    if contact_meta.get("known"):
+        tags.append("contact:known")
+        tier = str(contact_meta.get("tier") or "none")
+        if tier and tier != "none":
+            tags.append(f"contact:tier:{tier}")
+        if contact_meta.get("thread_replied"):
+            tags.append("contact:replied_thread")
 
     def _tool_match(tool: str) -> bool:
         t = tool.lower()
@@ -1005,28 +1108,35 @@ def classify_message(
                     needs_reply = True
                 if local_reason:
                     meta["local_reason"] = local_reason
+        category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
         return category, tags, needs_reply, None, meta
 
     # Tool-specific operational notifications we still want to see.
     if ("support@crmstyle.com" in sender_lower or "synergy" in text) and "アカウント発行" in (subject or ""):
-        return "needs_review", tags, needs_reply, None, meta
+        category, tags, meta = apply_contact_override("needs_review", tags, meta, contact_meta, is_noreply=is_noreply)
+        return category, tags, needs_reply, None, meta
 
     # AWS / batch job notifications are operationally important even on success.
     if "aws" in text and ("pipeline" in text or "etl" in text):
-        return "needs_review", tags, needs_reply, None, meta
+        category, tags, meta = apply_contact_override("needs_review", tags, meta, contact_meta, is_noreply=is_noreply)
+        return category, tags, needs_reply, None, meta
 
     # Meeting / coordination mails should remain visible.
     if any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"]):
-        return ("needs_reply" if needs_reply else "needs_review"), tags, needs_reply, None, meta
+        category, tags, meta = apply_contact_override(("needs_reply" if needs_reply else "needs_review"), tags, meta, contact_meta, is_noreply=is_noreply)
+        return category, tags, needs_reply, None, meta
 
     # Frequent ad-platform auto notices (approval/budget consumed/news) are noisy by default.
     if ("line.me" in sender_lower or "mail.yahoo.co.jp" in sender_lower) and is_noreply:
         if has_business_review_signal or is_actionable_notice or is_alert:
-            return "needs_review", tags, needs_reply, None, meta
+            category, tags, meta = apply_contact_override("needs_review", tags, meta, contact_meta, is_noreply=is_noreply)
+            return category, tags, needs_reply, None, meta
         if any(k in (subject or "") for k in ["広告が承認されました", "広告アカウントが承認されました", "予算が消化されました"]):
-            return "archive", tags, needs_reply, None, meta
+            category, tags, meta = apply_contact_override("archive", tags, meta, contact_meta, is_noreply=is_noreply)
+            return category, tags, needs_reply, None, meta
         if "ads update" in subject_lower or "新着情報" in (subject or ""):
-            return "archive", tags, needs_reply, None, meta
+            category, tags, meta = apply_contact_override("archive", tags, meta, contact_meta, is_noreply=is_noreply)
+            return category, tags, needs_reply, None, meta
 
     # Strong promotional signals override reply heuristics to reduce false positives.
     if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice and not has_business_review_signal:
@@ -1041,6 +1151,7 @@ def classify_message(
                     needs_reply = True
                 if local_reason:
                     meta["local_reason"] = local_reason
+        category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
         return category, tags, needs_reply, None, meta
 
     reply_text = re.sub(r"reply-to", " ", text)
@@ -1080,6 +1191,7 @@ def classify_message(
                     needs_reply = True
                 if local_reason:
                     meta["local_reason"] = local_reason
+        category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
         return category, tags, needs_reply, None, meta
 
     if urgent:
@@ -1100,7 +1212,8 @@ def classify_message(
             if local_reason:
                 meta["local_reason"] = local_reason
 
-    return category, tags, needs_reply, None, meta
+    category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
+    return category, _dedupe_tags(tags), needs_reply, None, meta
 
 
 def build_tasks(
@@ -1211,6 +1324,7 @@ def main() -> int:
     env = load_env()
     rules_path = Path(args.rules_path).expanduser() if args.rules_path else Path(env.get("ROBY_GMAIL_TRIAGE_RULES_PATH", str(RULES_PATH))).expanduser()
     rules = load_rules(rules_path)
+    contact_index = load_contact_index(Path(env.get("ROBY_GMAIL_CONTACT_INDEX_PATH", str(CONTACT_INDEX_PATH))))
     state = ensure_state()
     processed = state.get("processed", {})
 
@@ -1262,6 +1376,8 @@ def main() -> int:
             rules=rules,
             cc=cc,
             env=env,
+            thread_id=str(msg.get("threadId", "") or ""),
+            contact_index=contact_index,
         )
         local_meta = classify_meta.get("local_preclassify") if isinstance(classify_meta, dict) else None
         if isinstance(local_meta, dict) and local_meta.get("enabled") is not False:

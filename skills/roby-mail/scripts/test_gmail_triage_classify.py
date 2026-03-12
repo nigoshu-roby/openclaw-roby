@@ -166,6 +166,57 @@ class TestGmailTriageClassify(TestCase):
         finally:
             self.mod.local_preclassify_email = original
 
+    def test_known_replied_thread_promotes_archive_to_review(self):
+        contact_index = {
+            "thread_index": {
+                "thread-1": {
+                    "thread_id": "thread-1",
+                    "sender_email": "hello@mapbox.com",
+                    "sender_domain": "mapbox.com",
+                }
+            },
+            "sender_index": {
+                "hello@mapbox.com": {"thread_count": 1}
+            },
+            "domain_index": {
+                "mapbox.com": {"thread_count": 1}
+            },
+        }
+        category, tags, _, _, meta = self.mod.classify_message(
+            subject="Not sure where to start with Mapbox?",
+            sender="Team Mapbox <hello@mapbox.com>",
+            body="イベントのご案内です",
+            rules={},
+            thread_id="thread-1",
+            contact_index=contact_index,
+        )
+        self.assertEqual(category, "needs_review")
+        self.assertIn("contact:override", tags)
+        self.assertEqual(meta.get("contact_reason"), "known_contact_promoted_from_archive")
+
+    def test_known_high_contact_promotes_later_check_to_review(self):
+        contact_index = {
+            "thread_index": {},
+            "sender_index": {
+                "ops@example.com": {"thread_count": 4}
+            },
+            "domain_index": {
+                "example.com": {"thread_count": 6}
+            },
+        }
+        category, tags, _, _, meta = self.mod.classify_message(
+            subject="設定のお知らせ",
+            sender="Google Ops <ops@example.com>",
+            body="Google と AWS の設定です",
+            rules={},
+            thread_id="thread-2",
+            contact_index=contact_index,
+        )
+        self.assertEqual(category, "needs_review")
+        self.assertIn("contact:known", tags)
+        self.assertIn("contact:override", tags)
+        self.assertEqual(meta.get("contact_reason"), "known_contact_promoted_from_later_check")
+
 
 if __name__ == "__main__":
     main()
