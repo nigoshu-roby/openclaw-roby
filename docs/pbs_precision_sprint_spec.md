@@ -259,6 +259,40 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 
 ### 5.3 実装タスク
 
+1. Gmail golden set を代表ケースに curated する
+2. Minutes golden set を代表ケースに curated する
+3. false negative（漏れ）をあとから追記できる capture flow を作る
+4. precision / recall / usefulness を算出する
+5. weekly report / dashboard に傾向を出す
+
+### 5.4 C1 実装メモ
+
+- Gmail golden set の代表ケース化は `/Users/shu/OpenClaw/scripts/roby-gmail-golden-curate.py` で行う
+- 入力:
+  - `~/.openclaw/roby/gmail_golden_set.json`
+- 出力:
+  - `~/.openclaw/roby/gmail_golden_curated.json`
+  - `~/.openclaw/roby/gmail_golden_curated_summary.json`
+- 目的:
+  - sender / task_type / source_doc_title が偏りすぎない eval 用の代表セットを作る
+  - 後続の precision 計測で毎回同じケースを見られるようにする
+- 運用:
+  - GitHub へは保存せず local state のみ
+  - `--max-items` で代表件数を調整する（初期値 40）
+
+### 5.5 C3 実装メモ
+
+- Gmail false negative の回収は `/Users/shu/OpenClaw/scripts/roby-gmail-missed-capture.py` を使う
+- 出力:
+  - `~/.openclaw/roby/gmail_missed_manual.jsonl`
+- 想定用途:
+  - 「本来はタスク化すべきだったが、PBS が拾わなかったメール」を手動登録する
+  - 例:
+    - 返信すべきだった
+    - 契約 / 請求 / 見積として review 以上に上げるべきだった
+- `roby-gmail-eval-corpus.py` は manual missed を取り込み、`gmail_missed_set.json` に統合する
+- これにより、Neuronic 側の bad/good だけでは拾えない false negative を後から育てられる
+
 1. Gmail golden set
 2. Minutes golden set
 3. false negative capture flow

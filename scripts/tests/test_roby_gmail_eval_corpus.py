@@ -126,6 +126,30 @@ class GmailEvalCorpusTests(unittest.TestCase):
             self.assertEqual(idx["o1"]["title"], "new")
             self.assertEqual(idx["o1"]["run_id"], "roby:gmail:2")
 
+    def test_manual_missed_entries_are_merged_without_duplicates(self):
+        entries = [
+            {
+                "origin_id": "missed-1",
+                "title": "【高田彰】見積書を送付する",
+                "feedback_state": "missed",
+            }
+        ]
+        manual_entries = [
+            {
+                "origin_id": "missed-1",
+                "title": "【高田彰】見積書を送付する",
+                "feedback_state": "missed",
+            },
+            {
+                "origin_id": "manual-2",
+                "title": "【飯野友明】契約更新を確認する",
+                "feedback_state": "missed",
+            },
+        ]
+        merged = module.merge_missed_entries(entries, manual_entries)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[1]["origin_id"], "manual-2")
+
 
 if __name__ == "__main__":
     unittest.main()

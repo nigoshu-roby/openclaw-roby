@@ -23,6 +23,7 @@ GOLDEN_PATH = STATE_ROOT / "gmail_golden_set.json"
 MISSED_PATH = STATE_ROOT / "gmail_missed_set.json"
 SUMMARY_PATH = STATE_ROOT / "gmail_eval_corpus_summary.json"
 RUN_LOG_PATH = STATE_ROOT / "gmail_eval_corpus_runs.jsonl"
+MANUAL_MISSED_PATH = STATE_ROOT / "gmail_missed_manual.jsonl"
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
     "OPENAI_API_KEY",
@@ -290,6 +291,59 @@ def build_missed_payload(entries: List[Dict[str, Any]], *, base_url: str) -> Dic
     }
 
 
+def read_manual_missed_entries(path: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            row = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "origin_id": str(row.get("origin_id") or "").strip() or f"manual:{len(rows)+1}",
+                "task_id": row.get("task_id"),
+                "title": str(row.get("expected_title") or row.get("title") or "").strip(),
+                "sender_label": str(row.get("sender_label") or "").strip(),
+                "project": str(row.get("project") or "email").strip() or "email",
+                "parent_origin_id": row.get("parent_origin_id"),
+                "source_doc_id": str(row.get("source_doc_id") or "").strip(),
+                "source_doc_title": str(row.get("source_doc_title") or "").strip(),
+                "source_run_id": str(row.get("source_run_id") or "manual").strip(),
+                "feedback_state": "missed",
+                "feedback_reason_code": str(row.get("feedback_reason_code") or row.get("reason_code") or "manual_missed_capture").strip(),
+                "updated_at": row.get("updated_at"),
+                "created_at": row.get("created_at"),
+                "status": str(row.get("status") or "manual").strip(),
+                "task_type": str(row.get("expected_task_type") or row.get("task_type") or "").strip(),
+                "work_bucket": str(row.get("expected_bucket") or row.get("work_bucket") or "task").strip(),
+                "capture_source": "manual",
+                "reason": str(row.get("reason") or "").strip(),
+            }
+        )
+    return rows
+
+
+def merge_missed_entries(entries: List[Dict[str, Any]], manual_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in [*entries, *manual_entries]:
+        key = str(row.get("origin_id") or "").strip()
+        if not key:
+            key = f"{row.get('source_doc_id','')}|{row.get('title','')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
+
+
 def build_summary(entries: List[Dict[str, Any]], *, base_url: str) -> Dict[str, Any]:
     counts = Counter(str(row.get("feedback_state") or "pending") for row in entries)
     reason_counts = Counter(str(row.get("feedback_reason_code") or "") for row in entries if row.get("feedback_reason_code"))
@@ -351,9 +405,12 @@ def main() -> int:
     tasks, base_url = fetch_all_roby_tasks(env, limit=max(1, args.limit), max_pages=max(1, args.max_pages))
     candidate_index = read_feedback_candidate_index(CANDIDATES_PATH)
     entries = build_gmail_review_entries(tasks, candidate_index)
+    manual_missed_entries = read_manual_missed_entries(MANUAL_MISSED_PATH)
     golden = build_golden_payload(entries, base_url=base_url)
-    missed = build_missed_payload(entries, base_url=base_url)
+    missed = build_missed_payload(merge_missed_entries(entries, manual_missed_entries), base_url=base_url)
     summary = build_summary(entries, base_url=base_url)
+    summary["manual_missed_entries"] = len(manual_missed_entries)
+    summary["paths"]["manual_missed"] = str(MANUAL_MISSED_PATH)
 
     GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     GOLDEN_PATH.write_text(json.dumps(golden, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -380,6 +437,7 @@ def main() -> int:
         "missed_items": missed.get("summary", {}).get("items", 0),
         "top_feedback_reasons": summary.get("top_feedback_reasons", [])[:5],
         "top_senders": summary.get("top_senders", [])[:5],
+        "manual_missed_entries": summary.get("manual_missed_entries", 0),
         "summary_path": str(SUMMARY_PATH),
         "golden_path": str(GOLDEN_PATH),
         "missed_path": str(MISSED_PATH),
