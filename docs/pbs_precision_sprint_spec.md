@@ -114,6 +114,8 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 5. project segmentation first 実装
 6. task rewrite / decomposition 実装
 7. minutes golden set / missed set 作成
+   - `/Users/shu/OpenClaw/scripts/roby-minutes-eval-corpus.py` で local corpus を生成する
+   - 生成物は機密保護のため `~/.openclaw/roby/minutes_golden_set.json` / `minutes_missed_set.json` に保存する
 
 ### 4.4 主な成果物
 
