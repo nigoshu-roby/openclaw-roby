@@ -242,6 +242,17 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - registry hints を local preprocess / Gemini review / Gemini extraction prompt に注入
   - task rewrite / decomposition（generic なメモ題名の書き換え、note 内複数アクションの分解）
 
+### 4.6 B7 実装メモ
+
+- `/Users/shu/OpenClaw/scripts/roby-minutes-eval-corpus.py` で生成した `minutes_golden_set.json` を元に、`/Users/shu/OpenClaw/scripts/roby-minutes-golden-curate.py` で代表ケースを curated set 化する
+- 生成物はローカル state に保存する
+  - `~/.openclaw/roby/minutes_golden_curated.json`
+  - `~/.openclaw/roby/minutes_golden_curated_summary.json`
+- 選定方針:
+  - project の偏りを抑える
+  - source_doc_title の偏りを抑える
+  - eval 用の固定代表ケースとして使う
+
 ---
 
 ## 5. Sprint C: Eval Sprint
