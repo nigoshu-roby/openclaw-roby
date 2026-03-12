@@ -20,6 +20,8 @@ JST = timezone(timedelta(hours=9))
 STATE_ROOT = Path.home() / ".openclaw" / "roby"
 STATE_PATH = STATE_ROOT / "tokiwagi_master_registry_state.json"
 RUN_LOG_PATH = STATE_ROOT / "tokiwagi_master_registry_runs.jsonl"
+PROGRESS_PATH = STATE_ROOT / "tokiwagi_master_registry_progress.json"
+LATEST_REGISTRY_PATH = STATE_ROOT / "tokiwagi_master_registry_latest.json"
 
 DEFAULT_PROJECT = "TOKIWAGI_MASTER"
 DEFAULT_INCLUDE_DB_TITLES = {"TOKIWAGIインナー議事録", "基礎情報"}
@@ -71,6 +73,10 @@ def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def write_progress(payload: Dict[str, Any]) -> None:
+    write_json(PROGRESS_PATH, payload)
 
 
 def normalize_owner_name(raw: str) -> str:
@@ -290,17 +296,37 @@ def build_registry(
     docs: List[Dict[str, Any]] = []
     changed_count = 0
     llm_used_projects = 0
+    db_pages: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
+    total_pages = 0
 
     for db in selected_databases:
         db_id = db.get("id") or ""
-        db_title = db.get("title") or DEFAULT_PROJECT
         pages = mod.list_database_pages(db_id, token, version, None, max_pages_per_db)
+        db_pages.append((db, pages))
+        total_pages += len(pages)
+
+    processed_pages = 0
+    write_progress(
+        {
+            "updated_at": datetime.now(JST).isoformat(),
+            "stage": "reading_pages",
+            "database_titles": [db.get("title") for db in selected_databases],
+            "total_pages": total_pages,
+            "processed_pages": processed_pages,
+            "changed_documents": changed_count,
+            "llm_used_projects": llm_used_projects,
+        }
+    )
+
+    for db, pages in db_pages:
+        db_title = db.get("title") or DEFAULT_PROJECT
         for page in pages:
             page_id = page.get("id") or ""
             last_edited = page.get("last_edited_time") or ""
             cached = page_cache.get(page_id) if not refresh else None
             if cached and cached.get("last_edited") == last_edited:
                 docs.append(cached)
+                processed_pages += 1
                 continue
 
             text = mod.fetch_page_text(page_id, token, version)
@@ -344,6 +370,19 @@ def build_registry(
             page_cache[page_id] = entry
             docs.append(entry)
             changed_count += 1
+            processed_pages += 1
+            if processed_pages == total_pages or processed_pages % 10 == 0:
+                write_progress(
+                    {
+                        "updated_at": datetime.now(JST).isoformat(),
+                        "stage": "reading_pages",
+                        "database_titles": [db.get("title") for db in selected_databases],
+                        "total_pages": total_pages,
+                        "processed_pages": processed_pages,
+                        "changed_documents": changed_count,
+                        "llm_used_projects": llm_used_projects,
+                    }
+                )
 
     project_registry_map: Dict[str, Dict[str, Any]] = {}
     owner_registry = Counter()
@@ -393,6 +432,19 @@ def build_registry(
             "top_action_patterns": _top_counter(dict(entry["action_pattern_counts"]), limit=5),
         }
         if use_local_llm:
+            write_progress(
+                {
+                    "updated_at": datetime.now(JST).isoformat(),
+                    "stage": "ollama_enrichment",
+                    "database_titles": [db.get("title") for db in selected_databases],
+                    "total_pages": total_pages,
+                    "processed_pages": processed_pages,
+                    "changed_documents": changed_count,
+                    "llm_used_projects": llm_used_projects,
+                    "current_project": project_name,
+                    "projects_total": len(project_registry_map),
+                }
+            )
             enriched = _summarize_project_with_ollama(mod, env, row)
             row["local_llm"] = enriched
             if enriched.get("ok"):
@@ -425,6 +477,19 @@ def build_registry(
         "latest_registry_counts": registry["counts"],
     }
     write_json(STATE_PATH, state_payload)
+    write_json(LATEST_REGISTRY_PATH, registry)
+    write_progress(
+        {
+            "updated_at": registry["generated_at"],
+            "stage": "completed",
+            "database_titles": [db.get("title") for db in selected_databases],
+            "total_pages": total_pages,
+            "processed_pages": processed_pages,
+            "changed_documents": changed_count,
+            "llm_used_projects": llm_used_projects,
+            "projects_total": len(project_registry),
+        }
+    )
     return registry
 
 

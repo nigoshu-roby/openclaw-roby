@@ -32,15 +32,15 @@
 
 ## Sprint B: Minutes Precision Sprint
 
-| ID  | タスク                               | 状態   | GitHub Issue | 備考                                           |
-| --- | ------------------------------------ | ------ | ------------ | ---------------------------------------------- |
-| B1  | TOKIWAGI corpus 読込設計             | 進行中 | #14          | `roby-tokiwagi-master-registry.py` 初期版実装  |
-| B2  | project registry 生成                | 進行中 | #14          | TOKIWAGI_MASTER 全議事録から初期 registry 構築 |
-| B3  | owner registry 生成                  | 進行中 | #14          | owner mention 抽出の初期版を実装               |
-| B4  | action pattern registry 生成         | 進行中 | #14          | action pattern 集計の初期版を実装              |
-| B5  | project segmentation first 実装      | 未着手 | #14          | task抽出前に案件分割                           |
-| B6  | task rewrite / decomposition 実装    | 未着手 | #14          | 実行可能な粒度へ正規化                         |
-| B7  | minutes golden set / missed set 作成 | 未着手 | #14          | Eval Sprint と接続                             |
+| ID  | タスク                               | 状態   | GitHub Issue | 備考                                                                                  |
+| --- | ------------------------------------ | ------ | ------------ | ------------------------------------------------------------------------------------- |
+| B1  | TOKIWAGI corpus 読込設計             | 完了   | #14          | `TOKIWAGIインナー議事録` + `基礎情報` の237ページを corpus 化                         |
+| B2  | project registry 生成                | 完了   | #14          | `/Users/shu/.openclaw/roby/tokiwagi_master_registry_latest.json` に初期 registry 出力 |
+| B3  | owner registry 生成                  | 完了   | #14          | owner mention 抽出の初期版を実装・出力                                                |
+| B4  | action pattern registry 生成         | 完了   | #14          | action pattern 集計の初期版を実装・出力                                               |
+| B5  | project segmentation first 実装      | 未着手 | #14          | task抽出前に案件分割                                                                  |
+| B6  | task rewrite / decomposition 実装    | 未着手 | #14          | 実行可能な粒度へ正規化                                                                |
+| B7  | minutes golden set / missed set 作成 | 未着手 | #14          | Eval Sprint と接続                                                                    |
 
 ## Sprint C: Eval Sprint
 
