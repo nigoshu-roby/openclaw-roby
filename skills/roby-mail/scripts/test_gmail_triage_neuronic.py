@@ -175,6 +175,52 @@ class TestGmailTriageNeuronic(TestCase):
         self.assertIn("task_type:reply", tasks[1]["tags"])
         self.assertIn("task_type:action", tasks[2]["tags"])
 
+    def test_task_gate_downgrades_generic_low_confidence_task(self):
+        final_bucket, reason, meta = self.mod.decide_task_gate(
+            "needs_review",
+            "task",
+            [{"title": "メール内容を確認して対応する", "task_kind": "action", "project": "email", "due_date": "", "note": ""}],
+            {
+                "signals": {
+                    "meeting_coordination": False,
+                    "business_review": False,
+                    "actionable_notice": False,
+                    "alert": False,
+                    "promo_sender_domain": False,
+                    "is_noreply": False,
+                },
+                "bucket_scores": {"newsletter": 0},
+                "contact_importance": {"tier": "none", "thread_replied": False},
+            },
+            [],
+        )
+        self.assertEqual(final_bucket, "review")
+        self.assertEqual(reason, "low_confidence_downgraded_to_review")
+        self.assertFalse(meta["task_gate"]["applied"])
+
+    def test_task_gate_keeps_high_confidence_reply_task(self):
+        final_bucket, reason, meta = self.mod.decide_task_gate(
+            "needs_reply",
+            "task",
+            [{"title": "返信内容を確認して返信する", "task_kind": "reply", "project": "email", "due_date": "", "note": ""}],
+            {
+                "signals": {
+                    "meeting_coordination": False,
+                    "business_review": True,
+                    "actionable_notice": True,
+                    "alert": False,
+                    "promo_sender_domain": False,
+                    "is_noreply": False,
+                },
+                "bucket_scores": {"newsletter": 0},
+                "contact_importance": {"tier": "medium", "thread_replied": True},
+            },
+            ["contact:known"],
+        )
+        self.assertEqual(final_bucket, "task")
+        self.assertEqual(reason, "high_confidence_task")
+        self.assertTrue(meta["task_gate"]["applied"])
+
 
 if __name__ == "__main__":
     main()

@@ -763,6 +763,118 @@ def normalize_extracted_actions(
     return normalized
 
 
+GENERIC_EMAIL_TASK_TITLES = {
+    "返信内容を確認して返信する",
+    "メール内容を確認して対応する",
+}
+
+
+def _is_specific_email_task(item: Dict[str, Any]) -> bool:
+    title = str(item.get("title") or "").strip()
+    if not title:
+        return False
+    if title in GENERIC_EMAIL_TASK_TITLES:
+        return False
+    return len(title) >= 8
+
+
+def decide_task_gate(
+    raw_category: str,
+    work_bucket: str,
+    extracted: List[Dict[str, Any]],
+    meta: Dict[str, Any],
+    tags: List[str] | None = None,
+) -> Tuple[str, str, Dict[str, Any]]:
+    if work_bucket != "task":
+        gate = {"applied": False, "confidence": None, "reason": "not_task_bucket"}
+        if isinstance(meta, dict):
+            meta["task_gate"] = gate
+        return work_bucket, "task_gate_not_applicable", meta
+
+    signals = meta.get("signals") if isinstance(meta, dict) else {}
+    if not isinstance(signals, dict):
+        signals = {}
+    bucket_scores = meta.get("bucket_scores") if isinstance(meta, dict) else {}
+    if not isinstance(bucket_scores, dict):
+        bucket_scores = {}
+    contact_meta = meta.get("contact_importance") if isinstance(meta, dict) else {}
+    if not isinstance(contact_meta, dict):
+        contact_meta = {}
+
+    confidence = 0.0
+    reasons: List[str] = []
+    tag_list = tags or []
+    has_reply_task = any(str(item.get("task_kind") or "") == "reply" for item in extracted)
+    has_specific_task = any(_is_specific_email_task(item) for item in extracted)
+    has_due_date = any(str(item.get("due_date") or "").strip() for item in extracted)
+
+    if raw_category == "needs_reply":
+        confidence += 4.0
+        reasons.append("raw_needs_reply")
+    if has_reply_task:
+        confidence += 2.0
+        reasons.append("reply_task_present")
+    if signals.get("meeting_coordination"):
+        confidence += 4.0
+        reasons.append("meeting_coordination")
+    if signals.get("business_review"):
+        confidence += 2.0
+        reasons.append("business_review")
+    if signals.get("actionable_notice"):
+        confidence += 2.0
+        reasons.append("actionable_notice")
+    if signals.get("alert"):
+        confidence += 2.0
+        reasons.append("alert")
+    if has_specific_task:
+        confidence += 2.0
+        reasons.append("specific_task")
+    if has_due_date:
+        confidence += 1.0
+        reasons.append("due_date")
+    if any(str(tag).startswith("contact:known") for tag in tag_list):
+        confidence += 1.0
+        reasons.append("known_contact")
+
+    tier = str(contact_meta.get("tier") or "none")
+    if contact_meta.get("thread_replied"):
+        confidence += 2.0
+        reasons.append("replied_thread")
+    elif tier == "high":
+        confidence += 1.5
+        reasons.append("high_contact_tier")
+    elif tier == "medium":
+        confidence += 1.0
+        reasons.append("medium_contact_tier")
+
+    if float(bucket_scores.get("newsletter", 0) or 0) >= 4 and not signals.get("business_review"):
+        confidence -= 3.0
+        reasons.append("newsletter_risk")
+    if signals.get("promo_sender_domain") and not signals.get("business_review") and not signals.get("actionable_notice") and not signals.get("alert"):
+        confidence -= 3.0
+        reasons.append("promo_sender_domain")
+    if signals.get("is_noreply") and not signals.get("business_review") and not signals.get("actionable_notice") and not signals.get("alert"):
+        confidence -= 1.0
+        reasons.append("noreply_penalty")
+    if extracted and not has_specific_task and raw_category != "needs_reply":
+        confidence -= 2.0
+        reasons.append("generic_only")
+
+    applied = confidence >= 4.0
+    reason = "high_confidence_task" if applied else "low_confidence_downgraded_to_review"
+    gate = {
+        "applied": applied,
+        "confidence": round(confidence, 2),
+        "reason": reason,
+        "signals": reasons,
+        "has_specific_task": has_specific_task,
+        "task_count": len(extracted),
+    }
+    if isinstance(meta, dict):
+        meta["task_gate"] = gate
+    return ("task" if applied else "review"), reason, meta
+
+
 def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
     if not tasks:
         return {"created": 0, "updated": 0, "skipped": 0}
@@ -1555,12 +1667,14 @@ def main() -> int:
         "llm_overrides": 0,
         "local_preclassified": 0,
         "local_overrides": 0,
+        "task_gate_downgraded": 0,
     }
     run_id = build_run_id("gmail")
     summary["run_id"] = run_id
     last_neuronic_error: str | None = None
     category_counts: Dict[str, int] = {}
     raw_category_counts: Dict[str, int] = {}
+    task_gate_reason_counts: Dict[str, int] = {}
 
     skip_tasks = args.skip_tasks or args.dry_run
     llm_enabled = (env.get("GMAIL_TRIAGE_LLM_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -1611,18 +1725,7 @@ def main() -> int:
         classify_meta["work_bucket"] = work_bucket
         classify_meta["work_bucket_reason"] = bucket_reason
         raw_category_counts[category] = raw_category_counts.get(category, 0) + 1
-        category_counts[work_bucket] = category_counts.get(work_bucket, 0) + 1
         summary["new"] += 1
-
-        # Slack notify
-        slack_url = env.get("SLACK_WEBHOOK_URL")
-        if slack_url and not args.dry_run and work_bucket in ("task", "review", "digest"):
-            text = format_gmail_slack_message(msg, work_bucket)
-            if notify_max_per_run <= 0 or summary["notified"] < notify_max_per_run:
-                send_slack(slack_url, text)
-                summary["notified"] += 1
-            else:
-                summary["notify_suppressed"] += 1
 
         # Task extraction
         tasks = []
@@ -1648,30 +1751,51 @@ def main() -> int:
             extracted = cap_extracted_actions(extracted, task_actions_max_per_mail)
             if len(extracted) < before_cap:
                 summary["task_actions_capped"] += (before_cap - len(extracted))
-            tasks = build_tasks(extracted, msg, work_bucket, tags, run_id=run_id, raw_category=category)
-            if task_items_max_per_run > 0:
-                remaining = task_items_max_per_run - int(summary.get("tasks", 0))
-                if remaining <= 0:
-                    summary["task_run_cap_reached"] = True
-                    tasks = []
-                elif len(tasks) > remaining:
-                    tasks = tasks[:remaining]
-                    summary["task_run_cap_reached"] = True
-            if tasks and not args.dry_run:
-                write_feedback_manifest(tasks, run_id)
-                resp = send_neuronic(tasks, env)
-                if isinstance(resp, dict) and (resp.get("error") or resp.get("ok") is False or int(resp.get("error_count", 0) or 0) > 0):
-                    summary["neuronic_errors"] += 1
-                    last_neuronic_error = resp.get("detail") or resp.get("error")
-                else:
-                    summary["tasks"] += len(tasks)
-                    summary["neuronic_created"] = int(summary.get("neuronic_created", 0)) + int(resp.get("created", 0) or 0)
-                    summary["neuronic_updated"] = int(summary.get("neuronic_updated", 0)) + int(resp.get("updated", 0) or 0)
-                    summary["neuronic_skipped"] = int(summary.get("neuronic_skipped", 0)) + int(resp.get("skipped", 0) or 0)
-                    if "hierarchy_applied" in resp:
-                        summary["hierarchy_applied"] = resp.get("hierarchy_applied")
-                    if "order_applied" in resp:
-                        summary["order_applied"] = resp.get("order_applied")
+            final_bucket, gate_reason, classify_meta = decide_task_gate(category, work_bucket, extracted, classify_meta, tags)
+            classify_meta["final_bucket"] = final_bucket
+            classify_meta["task_gate_reason"] = gate_reason
+            task_gate_reason_counts[gate_reason] = task_gate_reason_counts.get(gate_reason, 0) + 1
+            if final_bucket != work_bucket:
+                summary["task_gate_downgraded"] += 1
+            work_bucket = final_bucket
+
+            if work_bucket == "task":
+                tasks = build_tasks(extracted, msg, work_bucket, tags, run_id=run_id, raw_category=category)
+                if task_items_max_per_run > 0:
+                    remaining = task_items_max_per_run - int(summary.get("tasks", 0))
+                    if remaining <= 0:
+                        summary["task_run_cap_reached"] = True
+                        tasks = []
+                    elif len(tasks) > remaining:
+                        tasks = tasks[:remaining]
+                        summary["task_run_cap_reached"] = True
+                if tasks and not args.dry_run:
+                    write_feedback_manifest(tasks, run_id)
+                    resp = send_neuronic(tasks, env)
+                    if isinstance(resp, dict) and (resp.get("error") or resp.get("ok") is False or int(resp.get("error_count", 0) or 0) > 0):
+                        summary["neuronic_errors"] += 1
+                        last_neuronic_error = resp.get("detail") or resp.get("error")
+                    else:
+                        summary["tasks"] += len(tasks)
+                        summary["neuronic_created"] = int(summary.get("neuronic_created", 0)) + int(resp.get("created", 0) or 0)
+                        summary["neuronic_updated"] = int(summary.get("neuronic_updated", 0)) + int(resp.get("updated", 0) or 0)
+                        summary["neuronic_skipped"] = int(summary.get("neuronic_skipped", 0)) + int(resp.get("skipped", 0) or 0)
+                        if "hierarchy_applied" in resp:
+                            summary["hierarchy_applied"] = resp.get("hierarchy_applied")
+                        if "order_applied" in resp:
+                            summary["order_applied"] = resp.get("order_applied")
+
+        category_counts[work_bucket] = category_counts.get(work_bucket, 0) + 1
+
+        # Slack notify
+        slack_url = env.get("SLACK_WEBHOOK_URL")
+        if slack_url and not args.dry_run and work_bucket in ("task", "review", "digest"):
+            text = format_gmail_slack_message(msg, work_bucket)
+            if notify_max_per_run <= 0 or summary["notified"] < notify_max_per_run:
+                send_slack(slack_url, text)
+                summary["notified"] += 1
+            else:
+                summary["notify_suppressed"] += 1
 
         # Archive ads
         if work_bucket == "archive" and args.archive_ads and not args.dry_run:
@@ -1700,6 +1824,9 @@ def main() -> int:
             if isinstance(classify_meta, dict) and classify_meta.get("local_reason"):
                 row["local_reason"] = classify_meta.get("local_reason")
             row["bucket_reason"] = bucket_reason
+            if isinstance(classify_meta, dict):
+                row["task_gate_reason"] = classify_meta.get("task_gate_reason")
+                row["task_gate"] = classify_meta.get("task_gate")
             print(json.dumps(row, ensure_ascii=False))
 
         if not args.dry_run:
@@ -1717,6 +1844,7 @@ def main() -> int:
 
     summary["categories"] = category_counts
     summary["raw_categories"] = raw_category_counts
+    summary["task_gate_reasons"] = task_gate_reason_counts
     summary["rules_path"] = str(rules_path)
     if args.verbose and last_neuronic_error:
         summary["last_neuronic_error"] = last_neuronic_error
