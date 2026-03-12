@@ -13,6 +13,12 @@
 
 ---
 
+## 事前ゲート
+
+| ID  | タスク                  | 状態 | GitHub Issue | 備考                                                                       |
+| --- | ----------------------- | ---- | ------------ | -------------------------------------------------------------------------- |
+| G1  | Gemini Bulk Budget Gate | 完了 | -            | 大規模 corpus 処理前に token 見積りを出し、confirm_required 以上は確認必須 |
+
 ## Sprint A: Email Precision Sprint
 
 | ID  | タスク                                    | 状態   | GitHub Issue | 備考                             |

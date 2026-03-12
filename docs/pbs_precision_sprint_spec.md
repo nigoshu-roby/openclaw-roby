@@ -34,6 +34,22 @@
 - 議事録は `project segmentation -> owner判定 -> task rewrite/decomposition` の順で処理する
 - フィードバックは good/bad だけでなく、golden set / false negative / precision-recall で評価する
 
+### 2.4 Gemini Bulk Budget Gate
+
+- 初期段階の大規模 corpus 処理（過去メール / Notion 全読込 / golden set 生成など）では、Gemini 本処理の前に必ず token 見積りを出す。
+- 見積りは `scripts/roby-gemini-budget.py` を使う。
+- `confirm_required` 以上の見積りが出た場合、ユーザー確認なしで本処理を開始しない。
+- 目的:
+  - トークン消費量の見える化
+  - 財布と心の準備
+  - 無駄な大量実行の防止
+- 運用:
+  - `decision=ok` ならそのまま実行
+  - `decision=confirm_required` なら見積りをユーザーへ提示して確認待ち
+  - `decision=blocked` なら処理を分割するか対象を絞る
+- 代表コマンド:
+  - `python3 /Users/shu/OpenClaw/scripts/roby-gemini-budget.py --label "minutes-corpus" --input-file <file> --input-file <file> --json`
+
 ### 2.3 追跡方法
 
 - 正本仕様: このファイル
