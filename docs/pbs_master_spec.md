@@ -172,6 +172,14 @@
 - AB Router
 - コスト/レイテンシ最適化
 
+### 現在の優先領域（2026-03-12時点）
+
+- Phase 0〜5 はコア完了扱い
+- 現在は追加機能ではなく `Precision Sprint` を優先する
+- 詳細仕様: `docs/pbs_precision_sprint_spec.md`
+- 進行管理: `docs/pbs_precision_status.md`
+- 追加開発バックログは Core と分けて管理する
+
 ---
 
 ## 5. Progress Tracking（進捗確認方法）

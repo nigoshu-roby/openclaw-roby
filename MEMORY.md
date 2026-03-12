@@ -20,7 +20,22 @@
 - PBS を自律型 AI ワーカー基盤として完成させる。
 - Quality Gate, Feedback Loop, Local First, Neuronic 連携を中核に据える。
 
-## PBS追加開発タスクリスト
+## Precision Sprint Program
+
+- 追加機能開発は一旦ステイし、メール・議事録・評価基盤の精度向上を優先する。
+- Sprint A: Email Precision Sprint
+  - 返信履歴ベース importance
+  - archive/digest/review/task の4分類
+  - high-confidence task のみ Neuronic 投入
+- Sprint B: Minutes Precision Sprint
+  - TOKIWAGI corpus 読込
+  - project / owner / action pattern registry
+  - project segmentation first と task rewrite / decomposition
+- Sprint C: Eval Sprint
+  - golden set / false negative / precision-recall 指標化
+- 進行確認は `docs/pbs_precision_status.md` を正本とする。
+
+## Post-PBS追加開発バックログ
 
 - 外部アクセス対応（PBS / Neuronic）
   - ローカル構築済みの PBS を外部アクセス可能にする。
