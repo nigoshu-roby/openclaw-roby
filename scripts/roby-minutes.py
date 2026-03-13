@@ -584,6 +584,48 @@ TASK_REWRITE_PREFIXES = [
     r"^\d+[.)]\s*",
 ]
 
+MINUTES_POSITIVE_TITLE_PATTERNS = [
+    r"議事録",
+    r"社内定例",
+    r"定例",
+    r"\bMTG\b",
+    r"ミーティング",
+    r"会議",
+    r"打ち合わせ",
+    r"Gemini によるメモ",
+]
+
+MINUTES_NEGATIVE_TITLE_PATTERNS = [
+    r"^(?:承諾|辞退|招待)(?:[:：]|$)",
+    r"(?:^|[\s/])更新[:：]",
+    r"事務所情報",
+    r"ログイン情報",
+    r"請求確認項目",
+    r"アカウント発行のお知らせ",
+]
+
+MINUTES_POSITIVE_TEXT_PATTERNS = [
+    r"ネクストアクション",
+    r"次(?:の)?アクション",
+    r"本日の重点タスク",
+    r"決定事項",
+    r"社内定例報告",
+    r"議事録",
+    r"TODO",
+    r"タスク",
+    r"打ち合わせ",
+    r"会議",
+    r"ミーティング",
+]
+
+MINUTES_NEGATIVE_TEXT_PATTERNS = [
+    r"営業時間",
+    r"住所",
+    r"アクセス",
+    r"ログイン",
+    r"パスワード",
+]
+
 
 def _clean_line(line: str) -> str:
     s = re.sub(r"^\s*[-*・●◯□■]+\s*", "", line.strip())
@@ -731,6 +773,61 @@ def _line_looks_actionable(line: str) -> bool:
     if re.search(r"(今週|来週|今月|来月|まで|予定|必要|すべき|したい)", s):
         return True
     return False
+
+
+def _matches_any_pattern(text: str, patterns: Iterable[str]) -> bool:
+    blob = str(text or "")
+    return any(re.search(pattern, blob, re.IGNORECASE) for pattern in patterns)
+
+
+def assess_minutes_candidate_quality(
+    title: str,
+    text: str,
+    source: str,
+    project: str = "",
+) -> Dict[str, Any]:
+    title_blob = str(title or "").strip()
+    text_blob = str(text or "")
+    project_blob = str(project or "").strip()
+    positive_title = _matches_any_pattern(title_blob, MINUTES_POSITIVE_TITLE_PATTERNS)
+    negative_title = _matches_any_pattern(title_blob, MINUTES_NEGATIVE_TITLE_PATTERNS)
+    positive_text = _matches_any_pattern(text_blob[:4000], MINUTES_POSITIVE_TEXT_PATTERNS)
+    negative_text = _matches_any_pattern(text_blob[:2000], MINUTES_NEGATIVE_TEXT_PATTERNS)
+
+    action_lines = 0
+    for raw_line in text_blob.splitlines():
+        line = _clean_line(raw_line)
+        if not line:
+            continue
+        if _line_looks_actionable(line) or _has_action_signal(line):
+            action_lines += 1
+            if action_lines >= 6:
+                break
+
+    project_hint = bool(project_blob and project_blob not in {"", "TOKIWAGI", "TOKIWAGI_MASTER", "基礎情報"})
+
+    signals = {
+        "positive_title": positive_title,
+        "negative_title": negative_title,
+        "positive_text": positive_text,
+        "negative_text": negative_text,
+        "action_lines": action_lines,
+        "project_hint": project_hint,
+        "source": source,
+    }
+
+    reasons: List[str] = []
+    if negative_title and not positive_title and action_lines <= 1 and not positive_text:
+        reasons.append("title_negative_without_minutes_signals")
+    if "事務所情報" in title_blob and action_lines <= 1:
+        reasons.append("office_info_like_document")
+    if negative_text and not positive_text and action_lines <= 1 and source == "notion":
+        reasons.append("static_info_like_text")
+    if not (positive_title or positive_text or project_hint) and action_lines == 0:
+        reasons.append("no_meeting_or_action_signals")
+
+    ok = not reasons
+    return {"ok": ok, "reasons": reasons, "signals": signals}
 
 
 def _has_action_signal(text: str) -> bool:
@@ -3322,6 +3419,7 @@ def format_minutes_slack(summary: Dict[str, Any]) -> str:
     gdocs = int(summary.get("gdocs", 0) or 0)
     candidates_total = int(summary.get("candidates_total", 0) or 0)
     candidates_selected = int(summary.get("candidates_selected", 0) or 0)
+    skipped_non_minutes_docs = int(summary.get("skipped_non_minutes_docs", 0) or 0)
     created = int(summary.get("neuronic_created", 0) or 0)
     updated = int(summary.get("neuronic_updated", 0) or 0)
     skipped = int(summary.get("neuronic_skipped", 0) or 0)
@@ -3342,6 +3440,7 @@ def format_minutes_slack(summary: Dict[str, Any]) -> str:
         f"・Notion対象ページ: {notion_pages}",
         f"・Google Docs対象: {gdocs}",
         f"・候補数: {candidates_total}（採用: {candidates_selected}）",
+        f"・非議事録スキップ: {skipped_non_minutes_docs}",
         "",
         "■Neuronic連携",
         f"・生成タスク数: {tasks}",
@@ -3433,6 +3532,7 @@ def main() -> int:
         "task_run_capped": 0,
         "task_run_cap_reached": False,
         "timed_out_docs": 0,
+        "skipped_non_minutes_docs": 0,
     }
 
     candidates: List[Dict[str, Any]] = []
@@ -3566,6 +3666,25 @@ def main() -> int:
             if not text:
                 processed_notion[page_id] = item.get("updated", "")
                 continue
+            quality = assess_minutes_candidate_quality(
+                title=item.get("title", ""),
+                text=text,
+                source="notion",
+                project=item.get("project") or "",
+            )
+            if not quality.get("ok"):
+                summary["skipped_non_minutes_docs"] += 1
+                processed_notion[page_id] = item.get("updated", "")
+                if args.debug:
+                    debug_records.append({
+                        "source": "notion",
+                        "title": item.get("title", ""),
+                        "url": item.get("url", ""),
+                        "skipped": "non_minutes",
+                        "reasons": quality.get("reasons", []),
+                        "signals": quality.get("signals", {}),
+                    })
+                continue
             default_project = infer_primary_project(
                 text=text,
                 known_projects=known_projects,
@@ -3661,6 +3780,25 @@ def main() -> int:
             text = export_doc_text(doc_id, env, account)
             if not text:
                 processed_gdocs[doc_id] = item.get("updated", "")
+                continue
+            quality = assess_minutes_candidate_quality(
+                title=item.get("title", ""),
+                text=text,
+                source="gdocs",
+                project=item.get("project") or "",
+            )
+            if not quality.get("ok"):
+                summary["skipped_non_minutes_docs"] += 1
+                processed_gdocs[doc_id] = item.get("updated", "")
+                if args.debug:
+                    debug_records.append({
+                        "source": "gdocs",
+                        "title": item.get("title", ""),
+                        "url": item.get("url", ""),
+                        "skipped": "non_minutes",
+                        "reasons": quality.get("reasons", []),
+                        "signals": quality.get("signals", {}),
+                    })
                 continue
             default_project = infer_primary_project(
                 text=text,
@@ -3824,6 +3962,7 @@ def main() -> int:
                     "tasks": int(summary.get("tasks", 0)),
                     "task_run_cap_reached": bool(summary.get("task_run_cap_reached", False)),
                     "heuristic_used_docs": int(summary.get("heuristic_used_docs", 0)),
+                    "skipped_non_minutes_docs": int(summary.get("skipped_non_minutes_docs", 0)),
                     "neuronic_errors": int(summary.get("neuronic_errors", 0)),
                     "dry_run": bool(summary.get("dry_run", False)),
                     "policy": summary.get("policy", ""),
