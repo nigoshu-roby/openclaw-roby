@@ -352,6 +352,17 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
     - 契約 / 請求 / 見積として review 以上に上げるべきだった
 - `roby-gmail-eval-corpus.py` は manual missed を取り込み、`gmail_missed_set.json` に統合する
 - これにより、Neuronic 側の bad/good だけでは拾えない false negative を後から育てられる
+- Minutes false negative の回収は `/Users/shu/OpenClaw/scripts/roby-minutes-missed-capture.py` を使う
+- 出力:
+  - `~/.openclaw/roby/minutes_missed_manual.jsonl`
+- 想定用途:
+  - 「本来は議事録から拾うべきだった task / subtask」を後から手動登録する
+  - 例:
+    - project は合っていたが抽出されなかった
+    - 親タスクだけで終わって子タスクが漏れた
+    - owner / rewrite / decomposition で落ちた
+- `roby-minutes-eval-corpus.py` は manual missed を取り込み、`minutes_missed_set.json` に統合する
+- これにより、minutes 側でも false negative を継続的に育てられる
 
 ### 5.6 C4 実装メモ
 

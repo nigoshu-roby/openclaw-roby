@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -100,6 +101,34 @@ class MinutesEvalCorpusTests(unittest.TestCase):
         self.assertEqual(len(missed["items"]), 1)
         self.assertEqual(missed["items"][0]["origin_id"], "missed-1")
         self.assertIn("manual_entry_template", missed)
+
+    def test_build_manual_missed_items_and_merge_into_payload(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "minutes_missed_manual.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "id": "manual-1",
+                        "ts": "2026-03-13T00:00:00+00:00",
+                        "origin_id": "manual:minutes:missed:abc",
+                        "source_doc_id": "doc-3",
+                        "source_doc_title": "2026/03/12 社内定例MTG",
+                        "project": "ミッド・ガーデン・ジャパン",
+                        "expected_title": "見積を送付する",
+                        "expected_subtasks": ["金額を確認する"],
+                        "reason": "本来タスク化すべきだった",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manual_items = module.build_manual_missed_items(path)
+            self.assertEqual(len(manual_items), 1)
+            self.assertEqual(manual_items[0]["feedback_state"], "missed")
+            self.assertTrue(manual_items[0]["manual"])
+            missed = module.build_missed_payload([], base_url="http://127.0.0.1:5174/api/v1", manual_missed_items=manual_items)
+            self.assertEqual(len(missed["items"]), 1)
+            self.assertEqual(missed["items"][0]["title"], "見積を送付する")
 
     def test_read_feedback_candidate_index_keeps_latest(self):
         with tempfile.TemporaryDirectory() as td:

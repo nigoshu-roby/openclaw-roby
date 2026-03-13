@@ -21,6 +21,7 @@ STATE_ROOT = Path.home() / ".openclaw" / "roby"
 CANDIDATES_PATH = STATE_ROOT / "feedback_candidates.jsonl"
 GOLDEN_PATH = STATE_ROOT / "minutes_golden_set.json"
 MISSED_PATH = STATE_ROOT / "minutes_missed_set.json"
+MANUAL_MISSED_PATH = STATE_ROOT / "minutes_missed_manual.jsonl"
 SUMMARY_PATH = STATE_ROOT / "minutes_eval_corpus_summary.json"
 RUN_LOG_PATH = STATE_ROOT / "minutes_eval_corpus_runs.jsonl"
 KEYCHAIN_SECRET_KEYS = {
@@ -183,6 +184,23 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def read_rows(path: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            row = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
 def build_minutes_review_entries(tasks: List[Dict[str, Any]], candidate_index: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     for task in tasks:
@@ -234,8 +252,39 @@ def build_golden_payload(entries: List[Dict[str, Any]], *, base_url: str) -> Dic
     }
 
 
-def build_missed_payload(entries: List[Dict[str, Any]], *, base_url: str) -> Dict[str, Any]:
+def build_manual_missed_items(path: Path) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for row in read_rows(path):
+        expected_title = str(row.get("expected_title") or "").strip()
+        if not expected_title:
+            continue
+        items.append(
+            {
+                "origin_id": str(row.get("origin_id") or row.get("id") or "").strip(),
+                "task_id": None,
+                "title": expected_title,
+                "project": str(row.get("project") or "").strip(),
+                "parent_origin_id": None,
+                "source_doc_id": str(row.get("source_doc_id") or "").strip(),
+                "source_doc_title": str(row.get("source_doc_title") or "").strip(),
+                "source_run_id": "manual:minutes:missed",
+                "feedback_state": "missed",
+                "feedback_reason_code": str(row.get("reason_code") or "manual_missed_capture").strip(),
+                "updated_at": row.get("ts"),
+                "created_at": row.get("ts"),
+                "status": "manual_missed",
+                "expected_subtasks": row.get("expected_subtasks") or [],
+                "reason": str(row.get("reason") or "").strip(),
+                "manual": True,
+            }
+        )
+    return items
+
+
+def build_missed_payload(entries: List[Dict[str, Any]], *, base_url: str, manual_missed_items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     missed_items = [row for row in entries if row.get("feedback_state") == "missed"]
+    if manual_missed_items:
+        missed_items = missed_items + manual_missed_items
     return {
         "schema_version": 1,
         "generated_at": iso_now(),
@@ -247,6 +296,7 @@ def build_missed_payload(entries: List[Dict[str, Any]], *, base_url: str) -> Dic
         "source": {
             "neuronic_base_url": base_url,
             "feedback_candidates": str(CANDIDATES_PATH),
+            "manual_missed": str(MANUAL_MISSED_PATH),
         },
         "manual_entry_template": {
             "source_doc_id": "",
@@ -260,7 +310,7 @@ def build_missed_payload(entries: List[Dict[str, Any]], *, base_url: str) -> Dic
     }
 
 
-def build_summary(entries: List[Dict[str, Any]], *, base_url: str) -> Dict[str, Any]:
+def build_summary(entries: List[Dict[str, Any]], *, base_url: str, manual_missed_count: int) -> Dict[str, Any]:
     counts = Counter(str(row.get("feedback_state") or "pending") for row in entries)
     by_project = Counter(str(row.get("project") or "") for row in entries if row.get("project"))
     by_reason = Counter(str(row.get("feedback_reason_code") or "") for row in entries if row.get("feedback_reason_code"))
@@ -273,6 +323,7 @@ def build_summary(entries: List[Dict[str, Any]], *, base_url: str) -> Dict[str, 
         "top_projects": [{"project": key, "count": value} for key, value in by_project.most_common(10)],
         "top_feedback_reasons": [{"reason_code": key, "count": value} for key, value in by_reason.most_common(10)],
         "top_source_docs": [{"title": key, "count": value} for key, value in source_docs.most_common(10)],
+        "manual_missed_count": manual_missed_count,
         "paths": {
             "golden": str(GOLDEN_PATH),
             "missed": str(MISSED_PATH),
@@ -292,7 +343,7 @@ def write_json(path: Path, payload: Dict[str, Any], *, dry_run: bool) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def build_run_entry(*, base_url: str, entries: List[Dict[str, Any]], golden: Dict[str, Any], missed: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
+def build_run_entry(*, base_url: str, entries: List[Dict[str, Any]], golden: Dict[str, Any], missed: Dict[str, Any], dry_run: bool, manual_missed_count: int) -> Dict[str, Any]:
     counts = Counter(str(row.get("feedback_state") or "pending") for row in entries)
     return {
         "event": "minutes_eval_corpus",
@@ -303,6 +354,7 @@ def build_run_entry(*, base_url: str, entries: List[Dict[str, Any]], golden: Dic
         "counts": dict(counts),
         "golden_items": len(golden.get("items") or []),
         "missed_items": len(missed.get("items") or []),
+        "manual_missed_items": manual_missed_count,
         "outputs": {
             "golden": str(GOLDEN_PATH),
             "missed": str(MISSED_PATH),
@@ -334,13 +386,21 @@ def main() -> int:
     tasks, base_url = fetch_all_roby_tasks(env, limit=args.limit, max_pages=args.max_pages)
     candidate_index = read_feedback_candidate_index(CANDIDATES_PATH)
     entries = build_minutes_review_entries(tasks, candidate_index)
+    manual_missed_items = build_manual_missed_items(MANUAL_MISSED_PATH)
     golden = build_golden_payload(entries, base_url=base_url)
-    missed = build_missed_payload(entries, base_url=base_url)
-    summary = build_summary(entries, base_url=base_url)
+    missed = build_missed_payload(entries, base_url=base_url, manual_missed_items=manual_missed_items)
+    summary = build_summary(entries, base_url=base_url, manual_missed_count=len(manual_missed_items))
     write_json(GOLDEN_PATH, golden, dry_run=args.dry_run)
     write_json(MISSED_PATH, missed, dry_run=args.dry_run)
     write_json(SUMMARY_PATH, summary, dry_run=args.dry_run)
-    run_entry = build_run_entry(base_url=base_url, entries=entries, golden=golden, missed=missed, dry_run=args.dry_run)
+    run_entry = build_run_entry(
+        base_url=base_url,
+        entries=entries,
+        golden=golden,
+        missed=missed,
+        dry_run=args.dry_run,
+        manual_missed_count=len(manual_missed_items),
+    )
     append_run_log(run_entry, dry_run=args.dry_run)
     append_audit_event(
         "minutes_eval_corpus.build",
@@ -348,6 +408,7 @@ def main() -> int:
             "reviewed_minutes_tasks": len(entries),
             "golden_items": len(golden.get("items") or []),
             "missed_items": len(missed.get("items") or []),
+            "manual_missed_items": len(manual_missed_items),
             "dry_run": args.dry_run,
         },
         source="roby-minutes-eval-corpus",
