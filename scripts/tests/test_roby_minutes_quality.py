@@ -258,6 +258,80 @@ class TestRobyMinutesQuality(TestCase):
             "ミッド・ガーデン・ジャパン",
         )
 
+    def test_normalize_google_doc_id_accepts_url_and_raw_id(self):
+        raw_id = "1FkTpYX7WaywzSzJHe4odswOUL2MCDb7j7jFz8Oirx5c"
+        url = f"https://docs.google.com/document/d/{raw_id}/edit?usp=sharing"
+        self.assertEqual(self.mod.normalize_google_doc_id(url), raw_id)
+        self.assertEqual(self.mod.normalize_google_doc_id(raw_id), raw_id)
+
+    def test_detect_minutes_target_source_detects_notion_and_gdocs(self):
+        notion_url = "https://www.notion.so/shusbrain/2026-03-10-MTG-31c35365114380aa99f845f3f1b80efc"
+        gdocs_url = "https://docs.google.com/document/d/1FkTpYX7WaywzSzJHe4odswOUL2MCDb7j7jFz8Oirx5c/edit"
+        self.assertEqual(self.mod.detect_minutes_target_source(notion_url, "auto"), "notion")
+        self.assertEqual(self.mod.detect_minutes_target_source(gdocs_url, "auto"), "gdocs")
+        self.assertEqual(self.mod.detect_minutes_target_source(gdocs_url, "gdocs"), "gdocs")
+
+    def test_build_target_candidate_for_notion_uses_page_metadata_and_structure(self):
+        page_id = "31c35365114380aa99f845f3f1b80efc"
+        metadata = {
+            "id": page_id,
+            "last_edited_time": "2026-03-12T01:02:03.000Z",
+            "url": f"https://www.notion.so/{page_id}",
+            "parent": {"database_id": "7064abbbcd4640a38367b87a5b14d520"},
+            "properties": {
+                "Name": {
+                    "type": "title",
+                    "title": [{"plain_text": "2026/03/10 社内定例MTG"}],
+                }
+            },
+        }
+        structure = {
+            "databases": [
+                {
+                    "id": "7064abbbcd4640a38367b87a5b14d520",
+                    "project": "TOKIWAGI_MASTER",
+                    "title": "TOKIWAGIインナー議事録",
+                }
+            ]
+        }
+        with patch.object(self.mod, "fetch_notion_page_metadata", return_value=metadata):
+            candidate = self.mod.build_target_candidate(
+                f"https://www.notion.so/shusbrain/2026-03-10-MTG-{page_id}",
+                "auto",
+                {},
+                "",
+                "notion-token",
+                "2025-09-03",
+                structure=structure,
+            )
+        self.assertEqual(candidate["source"], "notion")
+        self.assertEqual(candidate["page_id"], page_id)
+        self.assertEqual(candidate["project"], "TOKIWAGI_MASTER")
+        self.assertEqual(candidate["db_title"], "TOKIWAGIインナー議事録")
+        self.assertEqual(candidate["title"], "2026/03/10 社内定例MTG")
+
+    def test_build_target_candidate_for_gdocs_uses_drive_metadata(self):
+        doc_id = "1FkTpYX7WaywzSzJHe4odswOUL2MCDb7j7jFz8Oirx5c"
+        metadata = {
+            "id": doc_id,
+            "name": "2026/03/09 15:44 JST に開始した会議 - Gemini によるメモ",
+            "modifiedTime": "2026-03-09T07:50:20.264Z",
+        }
+        with patch.object(self.mod, "fetch_drive_file_metadata", return_value=metadata):
+            candidate = self.mod.build_target_candidate(
+                f"https://docs.google.com/document/d/{doc_id}/edit",
+                "auto",
+                {},
+                "s.nigo@tokiwa-gi.com",
+                "",
+                "2025-09-03",
+                structure={},
+            )
+        self.assertEqual(candidate["source"], "gdocs")
+        self.assertEqual(candidate["doc_id"], doc_id)
+        self.assertEqual(candidate["title"], metadata["name"])
+        self.assertEqual(candidate["updated"], metadata["modifiedTime"])
+
     def test_owner_mentions_override_default_self_assignee(self):
         extracted = [
             {

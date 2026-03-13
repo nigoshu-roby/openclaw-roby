@@ -227,6 +227,37 @@ def normalize_notion_id(raw: str) -> str:
     return raw
 
 
+def normalize_google_doc_id(raw: str) -> str:
+    if not raw:
+        return ""
+    text = str(raw).strip()
+    patterns = [
+        r"docs\.google\.com/document/d/([A-Za-z0-9_-]{20,})",
+        r"drive\.google\.com/file/d/([A-Za-z0-9_-]{20,})",
+        r"/d/([A-Za-z0-9_-]{20,})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    if re.fullmatch(r"[A-Za-z0-9_-]{20,}", text):
+        return text
+    return ""
+
+
+def detect_minutes_target_source(target: str, target_source: str = "auto") -> str:
+    source = (target_source or "auto").strip().lower()
+    if source in {"notion", "gdocs"}:
+        return source
+    if not target:
+        return ""
+    if normalize_notion_id(target) and re.fullmatch(r"[0-9a-fA-F]{32}", normalize_notion_id(target)):
+        return "notion"
+    if normalize_google_doc_id(target):
+        return "gdocs"
+    return ""
+
+
 def iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -305,6 +336,16 @@ def notion_list_child_databases(page_id: str, token: str, version: str) -> List[
     return dbs
 
 
+def fetch_notion_page_metadata(page_id: str, token: str, version: str) -> Dict[str, Any]:
+    page_id = normalize_notion_id(page_id)
+    if not page_id:
+        return {}
+    resp = notion_request("GET", f"https://api.notion.com/v1/pages/{page_id}", token, version)
+    if not resp.get("ok"):
+        return {}
+    return resp.get("data", {})
+
+
 def extract_page_title(page: Dict[str, Any]) -> str:
     props = page.get("properties", {})
     for prop in props.values():
@@ -372,6 +413,16 @@ def build_notion_structure(root_id: str, token: str, version: str, max_projects:
             })
         structure["projects"].append(project_entry)
     return structure
+
+
+def lookup_notion_database_context(structure: Dict[str, Any], db_id: str) -> Dict[str, Any]:
+    db_norm = normalize_notion_id(db_id)
+    if not db_norm:
+        return {}
+    for entry in structure.get("databases", []):
+        if normalize_notion_id(str(entry.get("id") or "")) == db_norm:
+            return entry
+    return {}
 
 
 def load_cached_structure(root_id: str) -> Optional[Dict[str, Any]]:
@@ -1454,6 +1505,18 @@ def drive_search_docs(folder_id: str, env: Dict[str, str], account: str, since_i
     return json.loads(out)
 
 
+def fetch_drive_file_metadata(doc_id: str, env: Dict[str, str], account: str) -> Dict[str, Any]:
+    doc_id = normalize_google_doc_id(doc_id)
+    if not doc_id:
+        return {}
+    cmd = ["gog", "drive", "get", doc_id, "--json", "--results-only", "--no-input"]
+    if account:
+        cmd += ["--account", account]
+    out = subprocess.check_output(cmd, env=env, timeout=60)
+    data = json.loads(out)
+    return data if isinstance(data, dict) else {}
+
+
 def export_doc_text(doc_id: str, env: Dict[str, str], account: str) -> str:
     out_path = Path("/tmp") / f"roby_doc_{doc_id}.txt"
     cmd = ["gog", "docs", "export", doc_id, "--format", "txt", "--out", str(out_path), "--no-input"]
@@ -1466,6 +1529,51 @@ def export_doc_text(doc_id: str, env: Dict[str, str], account: str) -> str:
     except Exception:
         pass
     return text.strip()
+
+
+def build_target_candidate(
+    target: str,
+    source: str,
+    env: Dict[str, str],
+    account: str,
+    token: str,
+    version: str,
+    structure: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    kind = detect_minutes_target_source(target, source)
+    if kind == "notion":
+        page_id = normalize_notion_id(target)
+        meta = fetch_notion_page_metadata(page_id, token, version)
+        if not meta:
+            raise ValueError(f"Notion page not found: {target}")
+        parent = meta.get("parent") or {}
+        db_id = parent.get("database_id") or parent.get("data_source_id") or ""
+        db_context = lookup_notion_database_context(structure or {}, str(db_id))
+        project = str(db_context.get("project") or "").strip()
+        db_title = str(db_context.get("title") or "").strip()
+        return {
+            "source": "notion",
+            "project": project,
+            "db_title": db_title,
+            "page_id": page_id,
+            "title": extract_page_title(meta),
+            "updated": meta.get("last_edited_time", ""),
+            "url": meta.get("url", f"https://www.notion.so/{page_id}"),
+        }
+    if kind == "gdocs":
+        doc_id = normalize_google_doc_id(target)
+        meta = fetch_drive_file_metadata(doc_id, env, account)
+        title = str(meta.get("name") or "").strip() or f"Google Doc {doc_id}"
+        updated = str(meta.get("modifiedTime") or meta.get("modified_time") or "").strip()
+        return {
+            "source": "gdocs",
+            "project": "",
+            "doc_id": doc_id,
+            "title": title,
+            "updated": updated,
+            "url": f"https://docs.google.com/document/d/{doc_id}",
+        }
+    raise ValueError(f"Unsupported target source: {target}")
 
 
 def _extract_json_value(data: Dict[str, Any]) -> str:
@@ -3288,6 +3396,8 @@ def main() -> int:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--policy", default="")
+    parser.add_argument("--target", default="")
+    parser.add_argument("--target-source", choices=["auto", "notion", "gdocs"], default="auto")
     args = parser.parse_args()
 
     env = load_env()
@@ -3296,9 +3406,11 @@ def main() -> int:
     notion_root = args.notion_root or env.get("TOKIWAGI_ROOT_ID") or env.get("NOTION_TOKIWAGI_ID", "")
     drive_folder = args.drive_folder or env.get("GDRIVE_MINUTES_FOLDER_ID", "")
     account = args.account or env.get("GOG_ACCOUNT", "")
+    target_kind = detect_minutes_target_source(args.target, args.target_source)
 
     token = load_notion_key(env)
-    if not token and not args.skip_notion:
+    notion_required = (not args.skip_notion) and (bool(notion_root) or target_kind == "notion")
+    if not token and notion_required:
         print("ERROR: Notion API key missing. Set NOTION_API_KEY or ~/.config/notion/api_key.")
         return 1
 
@@ -3327,6 +3439,11 @@ def main() -> int:
     known_projects: List[str] = []
     heuristic_used_docs = 0
     registry = load_tokiwagi_master_registry()
+    structure: Dict[str, Any] = {}
+
+    if args.target and not target_kind:
+        print(f"ERROR: Unsupported target. Specify a Notion page URL/ID or Google Docs URL/ID: {args.target}")
+        return 1
 
     # Notion structure
     if not args.skip_notion and notion_root:
@@ -3339,32 +3456,33 @@ def main() -> int:
             registry,
         )
 
-        for db in structure.get("databases", []):
-            db_id = db.get("id")
-            project_name = db.get("project") or db.get("title") or "TOKIWAGI"
-            db_title = db.get("title") or project_name
-            pages = list_database_pages(db_id, token, env.get("NOTION_VERSION", "2025-09-03"), since_iso, args.max)
-            for page in pages:
-                page_id = page.get("id", "")
-                last_edit = page.get("last_edited_time", "")
-                if (not args.force) and page_id in processed_notion and processed_notion.get(page_id) == last_edit:
-                    continue
-                title = extract_page_title(page)
-                candidates.append({
-                    "source": "notion",
-                    "project": project_name,
-                    "db_title": db_title,
-                    "page_id": page_id,
-                    "title": title,
-                    "updated": last_edit,
-                    "url": page.get("url", ""),
-                })
+        if not args.target:
+            for db in structure.get("databases", []):
+                db_id = db.get("id")
+                project_name = db.get("project") or db.get("title") or "TOKIWAGI"
+                db_title = db.get("title") or project_name
+                pages = list_database_pages(db_id, token, env.get("NOTION_VERSION", "2025-09-03"), since_iso, args.max)
+                for page in pages:
+                    page_id = page.get("id", "")
+                    last_edit = page.get("last_edited_time", "")
+                    if (not args.force) and page_id in processed_notion and processed_notion.get(page_id) == last_edit:
+                        continue
+                    title = extract_page_title(page)
+                    candidates.append({
+                        "source": "notion",
+                        "project": project_name,
+                        "db_title": db_title,
+                        "page_id": page_id,
+                        "title": title,
+                        "updated": last_edit,
+                        "url": page.get("url", ""),
+                    })
 
     if not known_projects:
         known_projects = extend_known_projects_with_registry([], registry)
 
     # Google Docs
-    if not args.skip_gdocs and drive_folder:
+    if not args.target and not args.skip_gdocs and drive_folder:
         docs = drive_search_docs(drive_folder, env, account, since_iso, args.max)
         for doc in docs:
             doc_id = doc.get("id", "")
@@ -3379,6 +3497,23 @@ def main() -> int:
                 "updated": modified,
                 "url": f"https://docs.google.com/document/d/{doc_id}",
             })
+
+    if args.target:
+        try:
+            candidates = [
+                build_target_candidate(
+                    args.target,
+                    args.target_source,
+                    env,
+                    account,
+                    token or "",
+                    env.get("NOTION_VERSION", "2025-09-03"),
+                    structure=structure,
+                )
+            ]
+        except Exception as exc:
+            print(f"ERROR: Failed to resolve target '{args.target}': {exc}")
+            return 1
 
     # sort by updated desc
     candidates.sort(key=lambda x: x.get("updated", ""), reverse=True)
