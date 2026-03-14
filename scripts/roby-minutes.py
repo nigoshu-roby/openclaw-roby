@@ -2712,6 +2712,7 @@ def _has_confident_minutes_project(
     source_title: str,
     default_project: str,
     known_projects: List[str],
+    doc_project_hints: Optional[List[str]] = None,
     registry: Optional[Dict[str, Any]] = None,
 ) -> bool:
     target = _canonical_project_display_name(project or "")
@@ -2723,6 +2724,11 @@ def _has_confident_minutes_project(
     explicit_project = _match_known_project_name(project, known_projects)
     inferred_project = _infer_project_from_text(blob, known_projects)
     registry_hints = infer_registry_project_hints(blob, source_title, registry or {})
+    doc_hints = [
+        _canonical_project_display_name(str(name or ""))
+        for name in (doc_project_hints or [])
+        if _canonical_project_display_name(str(name or ""))
+    ]
     alias_hits = _project_alias_hit_count(target, blob)
     source_alias_hits = _project_alias_hit_count(target, source_title or "")
 
@@ -2737,6 +2743,8 @@ def _has_confident_minutes_project(
         score += 3
     if target in registry_hints:
         score += 2
+    if target in doc_hints:
+        score += 2
     if note and "review.project_sections.action_candidates" in note:
         score += 1
 
@@ -2749,6 +2757,8 @@ def _has_confident_minutes_project(
         score -= 3
     if note and "review.cross_project_actions" in note:
         score -= 2
+    if doc_hints and target not in doc_hints and target not in GENERIC_PROJECT_NAMES:
+        score -= 2
 
     inherited_only = not explicit_project or (
         default_project
@@ -2758,6 +2768,9 @@ def _has_confident_minutes_project(
 
     if target_is_generic:
         return score >= 4
+    if doc_hints and inherited_only and target not in doc_hints:
+        if alias_hits <= 0 and source_alias_hits <= 0 and target not in registry_hints:
+            return False
     if explicit_project and _canonical_project_display_name(explicit_project) == target and not has_conflict:
         if not (note and "review.cross_project_actions" in note):
             return score >= 2
@@ -2777,6 +2790,7 @@ def build_neuronic_tasks(
     source_id: str,
     run_id: str,
     known_projects: Optional[List[str]] = None,
+    doc_project_hints: Optional[List[str]] = None,
     registry: Optional[Dict[str, Any]] = None,
     include_legacy_group_tag: bool = False,
 ) -> List[Dict[str, Any]]:
@@ -2820,6 +2834,7 @@ def build_neuronic_tasks(
                     source_title,
                     normalized.get("project") or default_project,
                     effective_known_projects,
+                    doc_project_hints=doc_project_hints,
                     registry=registry,
                 ):
                     continue
@@ -2852,6 +2867,7 @@ def build_neuronic_tasks(
                 source_title,
                 default_project,
                 effective_known_projects,
+                doc_project_hints=doc_project_hints,
                 registry=registry,
             ):
                 continue
@@ -3760,6 +3776,12 @@ def main() -> int:
                 page_id,
                 run_id,
                 known_projects=known_projects,
+                doc_project_hints=segment_minutes_text(
+                    text,
+                    default_project=default_project,
+                    known_projects=known_projects,
+                    source_title=item.get("title", ""),
+                )[1].get("project_hints", []),
                 registry=registry,
                 include_legacy_group_tag=include_legacy_group_tag,
             )
@@ -3875,6 +3897,12 @@ def main() -> int:
                 doc_id,
                 run_id,
                 known_projects=known_projects,
+                doc_project_hints=segment_minutes_text(
+                    text,
+                    default_project=default_project,
+                    known_projects=known_projects,
+                    source_title=item.get("title", ""),
+                )[1].get("project_hints", []),
                 registry=registry,
                 include_legacy_group_tag=include_legacy_group_tag,
             )

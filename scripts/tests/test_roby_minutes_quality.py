@@ -450,6 +450,51 @@ class TestRobyMinutesQuality(TestCase):
         )
         self.assertEqual(tasks, [])
 
+    def test_build_neuronic_tasks_drops_task_outside_document_project_hints(self):
+        extracted = [
+            {
+                "title": "進行表を更新する",
+                "project": "BRODO",
+                "assignee": "私",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="gdocs",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "BRODO"],
+            doc_project_hints=["ボーネルンド"],
+            registry={},
+        )
+        self.assertEqual(tasks, [])
+
+    def test_build_neuronic_tasks_keeps_task_when_document_project_hints_include_target(self):
+        extracted = [
+            {
+                "title": "BRODOの在庫整理を進める",
+                "project": "BRODO",
+                "assignee": "私",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="gdocs",
+            source_title="2026/03/10 社内定例MTG",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "BRODO"],
+            doc_project_hints=["ボーネルンド", "BRODO"],
+            registry={},
+        )
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[0]["project"], "BRODO")
+
     def test_build_neuronic_tasks_keeps_only_confident_children(self):
         extracted = [
             {

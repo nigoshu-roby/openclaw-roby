@@ -73,6 +73,7 @@
 | B7  | minutes golden set / missed set 作成 | 完了 | #14          | `/Users/shu/OpenClaw/scripts/roby-minutes-eval-corpus.py` と local corpus 生成で接続       |
 | B8  | owner filter / assignee gating 実装  | 完了 | #14          | 自分担当外の明示 assignee を Neuronic へ送らないよう minutes 側でフィルタを追加            |
 | B9  | project confidence gate 実装         | 完了 | #14          | project 根拠が弱い task や conflict project を minutes 側で除外して `wrong_project` を抑制 |
+| B10 | document project hint gate 実装      | 完了 | #14          | source 文書から抽出した project hints に乗らない弱い task を minutes 側で除外              |
 
 ## Sprint C: Eval Sprint
 

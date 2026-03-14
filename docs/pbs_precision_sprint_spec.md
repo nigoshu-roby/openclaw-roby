@@ -252,6 +252,11 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
    - project の根拠が弱い task は Neuronic へ送らない
    - `review.cross_project_actions` のような generic 候補は、明示的な project 根拠がある場合のみ送る
    - conflict project が見つかった task は minutes precision を優先して除外する
+10. document project hint gate 実装
+
+- source 文書全体から抽出した `project_hints` を minutes 送信ゲートにも使う
+- 文書の project hints に乗らない inherited task は、強い根拠がない限り Neuronic へ送らない
+- 目的は `wrong_project` の主因である「文書全体の主案件と噛み合わない task」の混入を減らすこと
 
 ### 4.4 主な成果物
 
@@ -301,6 +306,13 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 - `build_neuronic_tasks(...)` では title / note / source_title / registry hints を使って project 根拠を採点する
 - 根拠が弱い generic task や conflict project を含む task は Neuronic へ送らない
 - 目的は `wrong_project` を優先して減らし、minutes precision を先に引き上げること
+
+### 4.9 B10 実装メモ
+
+- `/Users/shu/OpenClaw/scripts/roby-minutes.py` で source 文書から `project_hints` を抽出し、`build_neuronic_tasks(...)` に渡す
+- `build_neuronic_tasks(...)` / `_has_confident_minutes_project(...)` では、文書の `project_hints` に乗らない inherited task を弱い候補として扱う
+- doc hint と一致しない task でも、title / note / registry hints に強い根拠があれば残す
+- 目的は「文書の主案件とズレた inherited task」が minutes precision を下げるのを防ぐこと
 
 ---
 
