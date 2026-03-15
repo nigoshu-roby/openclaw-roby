@@ -127,6 +127,25 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(bucket, "task")
         self.assertEqual(reason, "coordination_requires_followup")
 
+    def test_contract_prep_request_passes_task_gate(self):
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
+            subject="Re: R8年度契約について",
+            sender="田中麻紀子 <makiko-tanaka@boatrace-hamanako.or.jp>",
+            body="契約更新が決定しました。契約書のご準備をお願い致します。",
+            rules={},
+        )
+        bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        final_bucket, gate_reason, gated_meta = self.mod.decide_task_gate(
+            category,
+            bucket,
+            [{"title": "メール内容を確認して対応する", "task_kind": "action", "note": "", "due_date": "", "project": "email"}],
+            meta,
+            tags,
+        )
+        self.assertEqual(final_bucket, "task")
+        self.assertEqual(gate_reason, "high_confidence_task")
+        self.assertGreaterEqual(gated_meta["task_gate"]["confidence"], 4.0)
+
     def test_marketing_like_subject_with_estimate_signal_stays_reviewable(self):
         category, _, _, _, _meta = self.mod.classify_message(
             subject="【無料で試せる】見積書をご確認ください",
@@ -205,6 +224,42 @@ class TestGmailTriageClassify(TestCase):
         )
         self.assertNotEqual(category, "archive")
         self.assertFalse(needs_reply)
+
+    def test_autoro_error_notice_becomes_task_and_passes_gate(self):
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
+            subject="スケジュールエラー通知 [AUTORO]",
+            sender="AUTORO <noreply@autoro.io>",
+            body="ワークフローでエラーが発生しました。",
+            rules={},
+        )
+        bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        final_bucket, gate_reason, gated_meta = self.mod.decide_task_gate(
+            category,
+            bucket,
+            [{"title": "メール内容を確認して対応する", "task_kind": "action", "note": "", "due_date": "", "project": "email"}],
+            meta,
+            tags,
+        )
+        self.assertEqual(bucket, "task")
+        self.assertEqual(final_bucket, "task")
+        self.assertEqual(gate_reason, "high_confidence_task")
+        self.assertGreaterEqual(gated_meta["task_gate"]["confidence"], 4.0)
+
+    def test_autoro_force_review_override_does_not_block_task_path(self):
+        rules = {
+            "force_archive": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+            "force_review": {"sender_domains": ["autoro.io"], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+            "force_reply": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
+        }
+        category, tags, needs_reply, rule, meta = self.mod.classify_message(
+            subject="スケジュールエラー通知 [AUTORO]",
+            sender="AUTORO <noreply@autoro.io>",
+            body="ワークフローでエラーが発生しました。",
+            rules=rules,
+        )
+        bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(rule, None)
+        self.assertEqual(bucket, "task")
 
     def test_line_approval_noreply_is_archived(self):
         category, _, _, _, _meta = self.mod.classify_message(

@@ -893,6 +893,7 @@ def decide_task_gate(
     has_reply_task = any(str(item.get("task_kind") or "") == "reply" for item in extracted)
     has_specific_task = any(_is_specific_email_task(item) for item in extracted)
     has_due_date = any(str(item.get("due_date") or "").strip() for item in extracted)
+    has_autoro_tag = any(str(tag) == "tool:autoro" for tag in tag_list)
 
     if raw_category == "needs_reply":
         confidence += 4.0
@@ -909,9 +910,18 @@ def decide_task_gate(
     if signals.get("actionable_notice"):
         confidence += 2.0
         reasons.append("actionable_notice")
+    if signals.get("explicit_action_request"):
+        confidence += 4.0
+        reasons.append("explicit_action_request")
+    if signals.get("contract_followup_subject"):
+        confidence += 4.0
+        reasons.append("contract_followup_subject")
     if signals.get("alert"):
         confidence += 2.0
         reasons.append("alert")
+    if has_autoro_tag and (signals.get("alert") or signals.get("actionable_notice")):
+        confidence += 3.0
+        reasons.append("autoro_operational_notice")
     if has_specific_task:
         confidence += 2.0
         reasons.append("specific_task")
@@ -1163,6 +1173,8 @@ def decide_work_bucket(
         review_score += 4
     if signals.get("actionable_notice"):
         review_score += 3
+    if signals.get("contract_followup_subject"):
+        review_score += 2
     if signals.get("alert"):
         review_score += 3
     if signals.get("urgent"):
@@ -1188,6 +1200,10 @@ def decide_work_bucket(
         task_score += 1
     if signals.get("explicit_action_request"):
         task_score += 4
+    if signals.get("contract_followup_subject"):
+        task_score += 4
+    if has_tool_tag and signals.get("actionable_notice") and signals.get("alert"):
+        task_score += 3
 
     meta["bucket_scores"] = {
         "newsletter": newsletter_score,
@@ -1495,7 +1511,11 @@ def classify_message(
     if is_chatwork_mail and not is_chatwork_mention:
         return "archive", _dedupe_tags(tags + ["rule:chatwork_non_mention_archive"]), False, "chatwork_non_mention_archive", meta
 
+    is_autoro_error_notice = "autoro" in header_text and "スケジュールエラー通知" in subject_lower
     override_category, override_rule = match_user_override(subject, sender, rules or {}, cc=cc)
+    if override_category == "needs_review" and is_autoro_error_notice:
+        override_category = None
+        override_rule = None
     if override_category:
         return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule, meta
 
@@ -1509,6 +1529,11 @@ def classify_message(
     is_promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
     is_actionable_notice = any(h.lower() in text for h in ACTIONABLE_NOTICE_HINTS)
     has_business_review_signal = any(k in text for k in BUSINESS_REVIEW_KEYWORDS)
+    is_contract_followup_subject = (
+        subject_lower.startswith("re:")
+        and "契約" in subject_lower
+        and contact_meta.get("known")
+    )
     meeting_coordination = any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"])
 
     is_marketing_sender = any(x in sender_lower for x in [
@@ -1528,6 +1553,7 @@ def classify_message(
         "ad_hint": is_ad_hint,
         "actionable_notice": is_actionable_notice,
         "business_review": has_business_review_signal,
+        "contract_followup_subject": is_contract_followup_subject,
         "marketing_sender": is_marketing_sender,
         "promo_sender_domain": is_promo_sender_domain,
         "meeting_coordination": meeting_coordination,
