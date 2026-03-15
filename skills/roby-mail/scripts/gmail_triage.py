@@ -226,6 +226,7 @@ PROMO_SENDER_DOMAINS = [
     "mapbox.com",
     "necfru.com",
     "facebookmail.com",
+    "mail.instagram.com",
     "stream.co.jp",
     "shein.com",
 ]

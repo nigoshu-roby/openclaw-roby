@@ -70,6 +70,16 @@ class TestGmailTriageClassify(TestCase):
         )
         self.assertEqual(category, "needs_review")
 
+    def test_instagram_recap_sender_is_archived(self):
+        category, _, needs_reply, _, _meta = self.mod.classify_message(
+            subject="brodo_japan、見逃したコンテンツをチェックしよう",
+            sender="Instagram <posts-recaps@mail.instagram.com>",
+            body="最新のコンテンツをチェックしましょう。",
+            rules={},
+        )
+        self.assertEqual(category, "archive")
+        self.assertFalse(needs_reply)
+
     def test_promo_sender_with_invoice_signal_is_not_archived(self):
         category, _, _, _, _meta = self.mod.classify_message(
             subject="【重要】請求書のご案内",
