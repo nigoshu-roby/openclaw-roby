@@ -26,6 +26,7 @@
 - Ollama を大量読込・前処理・候補生成の主軸にする
 - Gemini は最終判断・最終整形・難件のフォールバックに使う
 - 毎回全文を読むのではなく、一度読んで構造化知識にする
+- Gemini の大量投入前に、人手で渡す前提知識を `/Users/shu/OpenClaw/docs/pbs_context_seed.md` にまとめる
 
 ### 2.2 精度改善の考え方
 
@@ -281,6 +282,7 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - project segmentation first
   - registry hints を local preprocess / Gemini review / Gemini extraction prompt に注入
   - task rewrite / decomposition（generic なメモ題名の書き換え、note 内複数アクションの分解）
+- 人手で渡す project / owner / client 情報は `/Users/shu/OpenClaw/docs/pbs_context_seed.md` に集約する
 
 ### 4.6 B7 実装メモ
 
