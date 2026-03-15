@@ -146,6 +146,17 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(gate_reason, "high_confidence_task")
         self.assertGreaterEqual(gated_meta["task_gate"]["confidence"], 4.0)
 
+    def test_extract_explicit_email_actions_for_contract_prep(self):
+        actions = self.mod.extract_explicit_email_actions(
+            "Re: R8年度契約について",
+            "契約更新が決定しました。契約書のご準備をお願い致します。",
+            raw_category="needs_review",
+            meta={"signals": {"contract_followup_subject": True}},
+            tags=[],
+        )
+        titles = [item["title"] for item in actions]
+        self.assertIn("契約書を準備する", titles)
+
     def test_marketing_like_subject_with_estimate_signal_stays_reviewable(self):
         category, _, _, _, _meta = self.mod.classify_message(
             subject="【無料で試せる】見積書をご確認ください",
@@ -244,6 +255,17 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(final_bucket, "task")
         self.assertEqual(gate_reason, "high_confidence_task")
         self.assertGreaterEqual(gated_meta["task_gate"]["confidence"], 4.0)
+
+    def test_extract_explicit_email_actions_for_autoro_error(self):
+        actions = self.mod.extract_explicit_email_actions(
+            "スケジュールエラー通知 [AUTORO]",
+            "ワークフローでエラーが発生しました。",
+            raw_category="needs_review",
+            meta={"signals": {"alert": True}},
+            tags=["tool:autoro"],
+        )
+        titles = [item["title"] for item in actions]
+        self.assertIn("AUTOROのエラー内容を確認する", titles)
 
     def test_autoro_force_review_override_does_not_block_task_path(self):
         rules = {

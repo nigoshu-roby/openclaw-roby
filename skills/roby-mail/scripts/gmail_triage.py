@@ -720,7 +720,12 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
         "Extract actionable tasks from the message. "
         "Return ONLY a JSON array of objects with keys: title, due_date, project, note, task_kind. "
         "task_kind must be one of reply or action. "
-        "due_date must be YYYY-MM-DD or empty string. If no tasks, return []."
+        "due_date must be YYYY-MM-DD or empty string. "
+        "Use concise, executable Japanese titles. "
+        "Do not output generic titles like '対応' or '確認'. "
+        "If the mail asks for a concrete deliverable, include that deliverable in title. "
+        "Split sequential actions into multiple tasks when useful. "
+        "If no tasks, return []."
     )
     cmd = [
         "summarize",
@@ -739,6 +744,65 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     summary = data.get("summary", "")
     if not summary:
         return []
+
+
+def extract_explicit_email_actions(
+    subject: str,
+    body: str,
+    *,
+    raw_category: str,
+    meta: Dict[str, Any] | None = None,
+    tags: List[str] | None = None,
+) -> List[Dict[str, Any]]:
+    text = f"{subject}\n{body}"
+    actions: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_action(title: str, *, task_kind: str = "action", note: str = "") -> None:
+        normalized = title.strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        actions.append(
+            {
+                "title": normalized,
+                "due_date": "",
+                "project": "email",
+                "note": note,
+                "task_kind": task_kind,
+            }
+        )
+
+    if raw_category == "needs_reply":
+        add_action(f"【返信】{subject}" if subject else "返信内容を確認して返信する", task_kind="reply")
+
+    doc_patterns = [
+        ("契約書", "準備", "契約書を準備する"),
+        ("契約書", "送付", "契約書を送付する"),
+        ("契約書", "提出", "契約書を提出する"),
+        ("見積書", "送付", "見積書を送付する"),
+        ("見積書", "再送", "見積書を再送する"),
+        ("申込書", "提出", "申込書を提出する"),
+        ("申込書", "記入", "申込書を記入する"),
+    ]
+    lowered = text.lower()
+    for noun, verb, title in doc_patterns:
+        if noun in text and verb in text:
+            add_action(title)
+
+    if (meta or {}).get("signals", {}).get("contract_followup_subject"):
+        if not actions:
+            add_action("契約内容を確認して対応する")
+
+    tag_list = tags or []
+    if "tool:autoro" in tag_list and (meta or {}).get("signals", {}).get("alert"):
+        add_action("AUTOROのエラー内容を確認する")
+
+    if not actions:
+        if "確認" in text and ("お願い" in text or "ください" in text):
+            add_action("依頼内容を確認して対応する")
+
+    return actions
     # summary should be JSON array
     try:
         return json.loads(summary)
@@ -1911,6 +1975,18 @@ def main() -> int:
                 )
             except Exception:
                 extracted = []
+            deterministic_actions = extract_explicit_email_actions(
+                subject,
+                body,
+                raw_category=category,
+                meta=classify_meta,
+                tags=tags,
+            )
+            if deterministic_actions:
+                extracted_titles = {str(item.get("title") or "").strip() for item in extracted}
+                for item in deterministic_actions:
+                    if item["title"] not in extracted_titles:
+                        extracted.append(item)
             if not extracted:
                 if category == "needs_reply":
                     fallback_title = f"【返信】{subject}" if subject else "返信内容を確認して返信する"
