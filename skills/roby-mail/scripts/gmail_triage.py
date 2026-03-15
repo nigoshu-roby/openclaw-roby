@@ -213,6 +213,14 @@ PROMO_REPLY_SUPPRESS_HINTS = (
     "イベント",
 )
 
+CHATWORK_MENTION_HINTS = (
+    "メンション",
+    "mention",
+    "[to:",
+    "to you",
+    "あなた宛",
+)
+
 RELATED_DOMAINS = {
     "line.me": "line",
     "linecorp.com": "line",
@@ -222,6 +230,7 @@ RELATED_DOMAINS = {
 }
 
 PROMO_SENDER_DOMAINS = [
+    "ma.accordiagolf.com",
     "toridori.co.jp",
     "diggle.team",
     "innovation.co.jp",
@@ -1472,6 +1481,8 @@ def classify_message(
         and "info@tokiwa-gi.com" in sender_lower
         and any(hint in subject_lower for hint in ("チェックしよう", "見逃したコンテンツ", "フィードで"))
     )
+    is_chatwork_mail = "chatwork" in sender_lower or "ns.chatwork.com" in sender_lower
+    is_chatwork_mention = is_chatwork_mail and any(hint in text for hint in CHATWORK_MENTION_HINTS)
 
     if is_calendar_response:
         return "archive", _dedupe_tags(tags + ["rule:calendar_response"]), False, "calendar_response", meta
@@ -1481,6 +1492,8 @@ def classify_message(
         return "archive", _dedupe_tags(tags + ["rule:tokiwagi_base_info_archive"]), False, "tokiwagi_base_info_archive", meta
     if is_internal_instagram_recap:
         return "archive", _dedupe_tags(tags + ["rule:internal_instagram_recap_archive"]), False, "internal_instagram_recap_archive", meta
+    if is_chatwork_mail and not is_chatwork_mention:
+        return "archive", _dedupe_tags(tags + ["rule:chatwork_non_mention_archive"]), False, "chatwork_non_mention_archive", meta
 
     override_category, override_rule = match_user_override(subject, sender, rules or {}, cc=cc)
     if override_category:

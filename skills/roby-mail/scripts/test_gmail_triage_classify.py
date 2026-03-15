@@ -144,6 +144,7 @@ class TestGmailTriageClassify(TestCase):
             rules={},
         )
         bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "archive")
         self.assertFalse(needs_reply)
         self.assertNotEqual(bucket, "task")
 
@@ -191,8 +192,19 @@ class TestGmailTriageClassify(TestCase):
             rules={},
         )
         bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "archive")
         self.assertFalse(needs_reply)
         self.assertNotEqual(bucket, "task")
+
+    def test_chatwork_mention_is_not_archived(self):
+        category, _tags, needs_reply, _rule, _meta = self.mod.classify_message(
+            subject="Chatwork メンション通知",
+            sender="Chatwork <notify@chatwork.com>",
+            body="あなた宛のメンションがあります。",
+            rules={},
+        )
+        self.assertNotEqual(category, "archive")
+        self.assertFalse(needs_reply)
 
     def test_line_approval_noreply_is_archived(self):
         category, _, _, _, _meta = self.mod.classify_message(
