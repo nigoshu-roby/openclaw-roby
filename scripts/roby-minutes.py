@@ -36,6 +36,7 @@ PROJECT_OWNER_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_ACTION_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_TASK_POSITIVE_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_TASK_NEGATIVE_HINTS_REGISTRY: Dict[str, List[str]] = {}
+PROJECT_LOW_SELF_INVOLVEMENT: Dict[str, bool] = {}
 CONTEXT_SELF_OWNER_ALIASES: List[str] = []
 
 
@@ -168,6 +169,7 @@ def apply_tokiwagi_master_registry(registry: Dict[str, Any]) -> None:
     PROJECT_ACTION_HINTS_REGISTRY.clear()
     PROJECT_TASK_POSITIVE_HINTS_REGISTRY.clear()
     PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.clear()
+    PROJECT_LOW_SELF_INVOLVEMENT.clear()
     for project_entry in registry.get("project_registry", []) or []:
         if not isinstance(project_entry, dict):
             continue
@@ -282,6 +284,15 @@ def apply_context_seed_data(seed: Dict[str, Any]) -> None:
                 negative_hints.append(label)
         if negative_hints:
             PROJECT_TASK_NEGATIVE_HINTS_REGISTRY[canonical] = list(dict.fromkeys(negative_hints))[:12]
+
+        scope_blob = "\n".join(
+            [
+                str(project_entry.get("self_scope") or ""),
+                str(project_entry.get("non_self_scope") or ""),
+            ]
+        )
+        if re.search(r"(ほとんど携わっておらず|ほとんど関わっておらず|主担当ではない|担当しない範囲|.+が主導)", scope_blob):
+            PROJECT_LOW_SELF_INVOLVEMENT[canonical] = True
 
 
 def log_run(entry: Dict[str, Any]) -> None:
@@ -936,6 +947,10 @@ def _looks_noise_task_title(title: str) -> bool:
     if any(k in s for k in MEMO_NOISE_HINTS) and not _has_action_signal(s):
         return True
     if re.match(r"^(共有|確認|対応|調整|検討)(事項|内容)?$", s):
+        return True
+    if re.search(r"\bPROJECT\b", s, re.IGNORECASE):
+        return True
+    if re.match(r"^[^。]{0,20}ミーティングの実施$", s):
         return True
     if re.match(r"^[^。.!?]{1,12}(について|に関して)$", s):
         return True
@@ -2818,6 +2833,19 @@ def _assess_context_seed_task_fit(project: str, title: str, note: str) -> Dict[s
     }
 
 
+def _has_self_scope_evidence(project: str, title: str, note: str, context_fit: Dict[str, Any]) -> bool:
+    target = _canonical_project_display_name(project or "")
+    if not PROJECT_LOW_SELF_INVOLVEMENT.get(target):
+        return True
+    blob = "\n".join([str(title or ""), str(note or "")])
+    self_aliases = _get_self_owner_aliases()
+    if any(alias and alias in blob for alias in self_aliases):
+        return True
+    if int(context_fit.get("positive_hits", 0) or 0) > 0:
+        return True
+    return False
+
+
 def _has_confident_minutes_project(
     project: str,
     title: str,
@@ -2848,6 +2876,8 @@ def _has_confident_minutes_project(
 
     score = 0
     if context_fit.get("drop"):
+        return False
+    if not _has_self_scope_evidence(target, title, note, context_fit):
         return False
     if explicit_project and _canonical_project_display_name(explicit_project) == target:
         score += 2

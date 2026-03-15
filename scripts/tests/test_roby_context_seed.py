@@ -43,6 +43,8 @@ class TestRobyContextSeed(TestCase):
   - 会議調整
 - task にしやすいもの: 資料修正、日程調整
 - task にしなくてよいもの: 雑談、背景共有だけの話
+- この project で自分が担当する範囲: 打ち合わせ参加、確認
+- 自分が担当しない範囲: 最終意思決定
 
 ## 3. Owner / 担当者ルール
 - 自分扱いにしてよい表現:
@@ -68,6 +70,8 @@ class TestRobyContextSeed(TestCase):
         self.assertIn("会議調整", parsed["projects"][0]["action_hints"])
         self.assertIn("資料修正", parsed["projects"][0]["positive_task_hints"])
         self.assertIn("背景共有だけの話", parsed["projects"][0]["negative_task_hints"])
+        self.assertEqual(parsed["projects"][0]["self_scope"], "打ち合わせ参加、確認")
+        self.assertEqual(parsed["projects"][0]["non_self_scope"], "最終意思決定")
         self.assertEqual(parsed["email"]["important_senders"][0]["emails"], ["t-iino@bornelund.co.jp"])
 
 

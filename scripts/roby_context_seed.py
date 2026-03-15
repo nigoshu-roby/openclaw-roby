@@ -127,6 +127,8 @@ def _parse_projects(section: str) -> List[Dict[str, Any]]:
                     action_hints.append(val)
         positive_task_hints = _split_phrase_values(_extract_field(block, 'task にしやすいもの'))
         negative_task_hints = _split_phrase_values(_extract_field(block, 'task にしなくてよいもの'))
+        self_scope = _extract_field(block, 'この project で自分が担当する範囲')
+        non_self_scope = _extract_field(block, '自分が担当しない範囲')
         projects.append(
             {
                 "project": project,
@@ -136,6 +138,8 @@ def _parse_projects(section: str) -> List[Dict[str, Any]]:
                 "action_hints": list(dict.fromkeys(action_hints)),
                 "positive_task_hints": list(dict.fromkeys([x for x in positive_task_hints if x])),
                 "negative_task_hints": list(dict.fromkeys([x for x in negative_task_hints if x])),
+                "self_scope": self_scope,
+                "non_self_scope": non_self_scope,
             }
         )
     return projects

@@ -345,6 +345,21 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - context seed で「task にしやすい」と書いた日程調整・資料更新・確認依頼系は保持しやすくする
 - これにより、project / owner だけでなく「その案件で task にすべき粒度」も人手知識で補強する
 
+### 4.12 B13 実装メモ
+
+- `pbs_context_seed.md` の `この project で自分が担当する範囲 / 自分が担当しない範囲` も parse して、低関与 project を判定できるようにする
+- 低関与 project では、self evidence が弱い曖昧 task を minutes 送信前に落とす
+- 具体的には:
+  - `現在私はほとんど携わっておらず`
+  - `高田さんが主導`
+    のような scope 記述がある project を low-self-involvement とみなす
+- さらに `PROJECTミーティングの実施` のような placeholder / broad title は `_looks_noise_task_title(...)` 側で弾く
+- 目的:
+  - `too_broad`
+  - `not_actionable`
+  - low-self な project の誤 task 化
+    をさらに減らすこと
+
 ---
 
 ## 5. Sprint C: Eval Sprint

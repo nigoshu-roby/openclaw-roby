@@ -36,6 +36,7 @@ class TestRobyMinutesQuality(TestCase):
     def setUp(self):
         self.mod.PROJECT_TASK_POSITIVE_HINTS_REGISTRY.clear()
         self.mod.PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.clear()
+        self.mod.PROJECT_LOW_SELF_INVOLVEMENT.clear()
 
     def test_infer_primary_project_prefers_known_project_in_text(self):
         known_projects = ["TOKIWAGI_MASTER", "ボーネルンド", "瑞鳳社ーデータ分析", "BRODO"]
@@ -604,6 +605,53 @@ class TestRobyMinutesQuality(TestCase):
         )
         self.assertEqual(len(tasks), 2)
         self.assertEqual(tasks[0]["project"], "ボーネルンド")
+
+    def test_build_neuronic_tasks_drops_low_self_involvement_project_without_self_evidence(self):
+        self.mod.PROJECT_LOW_SELF_INVOLVEMENT["BRODO"] = True
+        extracted = [
+            {
+                "title": "レポート確認・提出",
+                "project": "BRODO",
+                "assignee": "私",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="BRODO定例",
+            source_url="https://www.notion.so/example",
+            default_project="BRODO",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+            known_projects=["BRODO"],
+            doc_project_hints=["BRODO"],
+            registry={},
+        )
+        self.assertEqual(tasks, [])
+
+    def test_build_neuronic_tasks_keeps_low_self_involvement_project_with_positive_hint(self):
+        self.mod.PROJECT_LOW_SELF_INVOLVEMENT["BRODO"] = True
+        self.mod.PROJECT_TASK_POSITIVE_HINTS_REGISTRY["BRODO"] = ["資料更新"]
+        extracted = [
+            {
+                "title": "資料更新の差分を整理する",
+                "project": "BRODO",
+                "assignee": "私",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="BRODO定例",
+            source_url="https://www.notion.so/example",
+            default_project="BRODO",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+            known_projects=["BRODO"],
+            doc_project_hints=["BRODO"],
+            registry={},
+        )
+        self.assertEqual(len(tasks), 2)
 
     def test_segment_minutes_text_marks_multiple_projects(self):
         registry = {
