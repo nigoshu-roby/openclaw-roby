@@ -78,6 +78,7 @@
 | B11 | context seed の project / owner 接続 | 完了 | #14          | `/Users/shu/OpenClaw/docs/pbs_context_seed.md` の alias / owner / task ヒントを minutes 判定へ接続 |
 | B12 | context seed の task 基準接続        | 完了 | #14          | project ごとの `task にしやすいもの / しなくてよいもの` を minutes 送信ゲートへ接続                |
 | B13 | low-self / broad title gate 実装     | 完了 | #14          | 低関与 project の曖昧 task と `PROJECTミーティング` のような broad title を minutes 側で抑制       |
+| B14 | Gemini 曖昧候補 adjudication 実装    | 完了 | #14          | 明確なノイズだけ local で落とし、境界候補は Gemini が `task / drop / rewrite` を判断               |
 
 ## Sprint C: Eval Sprint
 

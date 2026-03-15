@@ -188,6 +188,78 @@ class TestRobyMinutesQuality(TestCase):
         self.assertEqual(len(cleaned), 1)
         self.assertEqual(cleaned[0]["title"], "見積項目を整理して共有する")
 
+    def test_resolve_project_prefers_content_alias_over_wrong_explicit_project(self):
+        self.mod.PROJECT_EXTRA_ALIASES["BT振興会-チケットショップ"] = [
+            "チケットショップ",
+            "ボートレースチケットショップ",
+        ]
+        resolved = self.mod._resolve_project_name(
+            project="瑞鳳社ーデータ分析",
+            title="チケットショップのデータ分析DBを構築する",
+            note="",
+            source_title="2026/03/10 社内定例MTG",
+            default_project="TOKIWAGI_MASTER",
+            known_projects=[
+                "TOKIWAGI_MASTER",
+                "瑞鳳社ーデータ分析",
+                "BT振興会-Mooovi",
+                "BT振興会-チケットショップ",
+            ],
+        )
+        self.assertEqual(resolved, "BT振興会-チケットショップ")
+
+    def test_resolve_project_prefers_section_project_hint(self):
+        resolved = self.mod._resolve_project_name(
+            project="瑞鳳社ーデータ分析",
+            title="チケットショップのデータ分析DBを構築する",
+            note="review.project_sections.action_candidates\nsection_project:BT振興会-チケットショップ",
+            source_title="2026/03/10 社内定例MTG",
+            default_project="TOKIWAGI_MASTER",
+            known_projects=[
+                "TOKIWAGI_MASTER",
+                "瑞鳳社ーデータ分析",
+                "BT振興会-Mooovi",
+                "BT振興会-チケットショップ",
+            ],
+        )
+        self.assertEqual(resolved, "BT振興会-チケットショップ")
+
+    def test_report_titles_are_noise_but_schedule_can_reach_gemini(self):
+        self.assertTrue(self.mod._looks_noise_task_title("ダッシュボードの仮構築完了（フィルター機能実装済）"))
+        self.assertFalse(self.mod._looks_noise_task_title("スケジュール調整"))
+        self.assertFalse(self.mod._looks_noise_task_title("3/13(金)のHP公開を確認次第、アカウント認証申請を実施"))
+        self.assertFalse(self.mod._looks_noise_task_title("MIDの件は自動化が本当に必要なのか"))
+
+    def test_tasks_from_review_object_keeps_ambiguous_schedule_for_adjudication(self):
+        review = {
+            "project_sections": [
+                {
+                    "project": "ボーネルンド",
+                    "action_candidates": [
+                        "• 3/13(金)のHP公開を確認次第、アカウント認証申請を実施",
+                        "• ダッシュボードの仮構築完了（フィルター機能実装済）",
+                        "• スケジュール調整",
+                    ],
+                },
+                {
+                    "project": "ミッド・ガーデン・ジャパン",
+                    "action_candidates": [
+                        "MIDの件は自動化が本当に必要なのか",
+                    ],
+                },
+            ]
+        }
+        tasks = self.mod.tasks_from_review_object(
+            review=review,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "ミッド・ガーデン・ジャパン"],
+        )
+        titles = [task["title"] for task in tasks]
+        self.assertIn("3/13(金)のHP公開を確認次第、アカウント認証申請を実施", titles)
+        self.assertIn("MIDの件は自動化が本当に必要なのか", titles)
+        self.assertIn("スケジュール調整", titles)
+        self.assertNotIn("ダッシュボードの仮構築完了（フィルター機能実装済）", titles)
+
     def test_sanitize_decomposes_multiple_action_clauses_from_note(self):
         extracted = [
             {

@@ -37,6 +37,7 @@ PROJECT_ACTION_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_TASK_POSITIVE_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_TASK_NEGATIVE_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_LOW_SELF_INVOLVEMENT: Dict[str, bool] = {}
+CONTEXT_PROJECTS: List[str] = []
 CONTEXT_SELF_OWNER_ALIASES: List[str] = []
 
 
@@ -170,6 +171,7 @@ def apply_tokiwagi_master_registry(registry: Dict[str, Any]) -> None:
     PROJECT_TASK_POSITIVE_HINTS_REGISTRY.clear()
     PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.clear()
     PROJECT_LOW_SELF_INVOLVEMENT.clear()
+    CONTEXT_PROJECTS.clear()
     for project_entry in registry.get("project_registry", []) or []:
         if not isinstance(project_entry, dict):
             continue
@@ -241,6 +243,8 @@ def apply_context_seed_data(seed: Dict[str, Any]) -> None:
         canonical = _canonical_project_display_name(str(project_entry.get("project") or ""))
         if not canonical:
             continue
+        if canonical not in CONTEXT_PROJECTS:
+            CONTEXT_PROJECTS.append(canonical)
 
         for raw in (project_entry.get("aliases") or []):
             alias = str(raw or "").strip()
@@ -666,7 +670,7 @@ PROJECT_DISPLAY_NORMALIZATION = {
 
 TASK_REWRITE_PREFIXES = [
     r"^(?:現状|進捗|報告|背景|備考|所感|課題|論点|検討事項|要確認|対応|予定|ネクストアクション|次(?:の)?アクション|本日の重点タスク|重点タスク|TODO|ToDo|タスク)[:：]\s*",
-    r"^(?:-|\*|・|●|◯|□|■|→|⇒|↳)\s*",
+    r"^(?:-|\*|・|●|◯|□|■|•|→|⇒|↳)\s*",
     r"^\d+[.)]\s*",
 ]
 
@@ -932,11 +936,24 @@ def _has_action_signal(text: str) -> bool:
     return False
 
 
+def _looks_report_only_title(title: str) -> bool:
+    s = _clean_line(title)
+    if not s:
+        return False
+    if re.search(r"(完了|実装済|停止している|段階にある|済み)$", s):
+        return True
+    if re.search(r"(仮構築完了|実装済)", s):
+        return True
+    return False
+
+
 def _looks_noise_task_title(title: str) -> bool:
     s = _clean_line(title)
     if not s:
         return True
     if len(s) < 4:
+        return True
+    if _looks_report_only_title(s):
         return True
     if re.fullmatch(r"[0-9０-９.,:：\- ]+", s):
         return True
@@ -1160,10 +1177,31 @@ def _resolve_project_name(
     default_project: str,
     known_projects: List[str],
 ) -> str:
+    section_project = ""
+    note_text = str(note or "")
+    section_match = re.search(r"section_project:([^\n]+)", note_text)
+    if section_match:
+        section_project = _clean_line(section_match.group(1))
+    if section_project:
+        matched_section = _match_known_project_name(section_project, known_projects)
+        if matched_section:
+            return _canonical_project_display_name(matched_section)
+
     p = (project or "").strip()
     matched = _match_known_project_name(p, known_projects)
+    content_blob = " ".join([title or "", note_text]).strip()
+    inferred_from_content = _infer_project_from_text(content_blob, known_projects) if content_blob else None
     if matched:
-        return _canonical_project_display_name(matched)
+        matched_canonical = _canonical_project_display_name(matched)
+        inferred_canonical = _canonical_project_display_name(inferred_from_content or "")
+        if (
+            inferred_canonical
+            and inferred_canonical != matched_canonical
+            and _project_alias_hit_count(inferred_canonical, content_blob) > 0
+            and _project_alias_hit_count(matched_canonical, content_blob) == 0
+        ):
+            return inferred_canonical
+        return matched_canonical
     inferred = _infer_project_from_text(" ".join([p or "", title or "", note or "", source_title or ""]), known_projects)
     if inferred:
         return _canonical_project_display_name(inferred)
@@ -1298,6 +1336,10 @@ def extract_project_sections(
 def extend_known_projects_with_registry(known_projects: List[str], registry: Dict[str, Any]) -> List[str]:
     merged: List[str] = []
     for project in known_projects:
+        canonical = _canonical_project_display_name(project)
+        if canonical and canonical not in merged:
+            merged.append(canonical)
+    for project in CONTEXT_PROJECTS:
         canonical = _canonical_project_display_name(project)
         if canonical and canonical not in merged:
             merged.append(canonical)
@@ -2289,7 +2331,7 @@ def tasks_from_review_object(
             for cand in candidates:
                 if count >= max_per_project:
                     break
-                title = _clean_line(str(cand or ""))
+                title = _normalize_action_clause(str(cand or ""), known_projects)
                 if not title or _looks_noise_task_title(title):
                     continue
                 out.append({
@@ -2297,7 +2339,7 @@ def tasks_from_review_object(
                     "due_date": "",
                     "project": project,
                     "assignee": "私",
-                    "note": "review.project_sections.action_candidates",
+                    "note": f"review.project_sections.action_candidates\nsection_project:{project}",
                 })
                 count += 1
 
@@ -2319,6 +2361,89 @@ def tasks_from_review_object(
             })
             count += 1
     return out
+
+
+def adjudicate_review_candidates_with_gemini(
+    review: Dict[str, Any],
+    current_candidates: List[Dict[str, Any]],
+    env: Dict[str, str],
+    default_project: str,
+    known_projects: List[str],
+    today: str,
+    existing_tasks: Optional[List[Dict[str, Any]]] = None,
+    registry_context: str = "",
+) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+    if not current_candidates:
+        return [], ""
+    known = ", ".join(sorted(set([p for p in known_projects if p]))[:30])
+    existing_titles = ", ".join(
+        [str(t.get("title") or "") for t in (existing_tasks or [])[:40] if str(t.get("title") or "").strip()]
+    )
+    payload = {
+        "review": review,
+        "candidates": current_candidates,
+        "existing_titles": existing_titles,
+    }
+    prompt = (
+        "You are adjudicating borderline task candidates from Japanese internal meeting minutes. "
+        "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note. "
+        "Only include candidates that should become actionable tasks for the user. "
+        "Drop report-only/status-only/progress-only items. "
+        "Rewrite vague titles into concrete action titles when the surrounding review context makes them clear enough. "
+        "Do NOT emit standalone timing-only fragments like '3月13日のHP公開後に実施'; fold timing into the actionable task title or note instead. "
+        "Questions can remain tasks only when they clearly imply a follow-up investigation, decision, or work item for the user. "
+        "Prefer the section project context over generic keyword matches. "
+        "Avoid duplicates against existing titles. "
+        "Project must be one of Known projects when applicable. "
+        "due_date must be YYYY-MM-DD or empty string. "
+        f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
+        f"Existing titles: {existing_titles}. "
+        + (f"Project registry hints:\n{registry_context}" if registry_context else "")
+    )
+    parsed, raw = _run_gemini_json_prompt_with_retry(
+        json.dumps(payload, ensure_ascii=False),
+        prompt,
+        env,
+        model_list_key="MINUTES_REVIEW_ADJUDICATE_MODELS",
+        fallback_models=[
+            env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview"),
+            "google/gemini-2.5-pro",
+        ],
+        max_output_tokens=env.get("MINUTES_REVIEW_ADJUDICATE_MAX_TOKENS", "1800"),
+        retry_max_output_tokens=env.get("MINUTES_REVIEW_ADJUDICATE_RETRY_MAX_TOKENS", "2600"),
+        length=env.get("MINUTES_REVIEW_ADJUDICATE_LENGTH", "l"),
+        timeout_sec=int(env.get("MINUTES_REVIEW_ADJUDICATE_TIMEOUT_SEC", "120")),
+        retry_timeout_sec=int(env.get("MINUTES_REVIEW_ADJUDICATE_RETRY_TIMEOUT_SEC", "180")),
+    )
+    tasks = _coerce_task_array(parsed)
+    if tasks or isinstance(parsed, (list, dict)):
+        cleaned: List[Dict[str, Any]] = []
+        for item in tasks:
+            title = _clean_line(str(item.get("title") or ""))
+            if not title or _looks_report_only_title(title):
+                continue
+            project = _resolve_project_name(
+                str(item.get("project") or ""),
+                title,
+                str(item.get("note") or ""),
+                "",
+                default_project,
+                known_projects,
+            )
+            note = _clean_line(str(item.get("note") or ""))
+            if "review.adjudicated_candidates" not in note:
+                note = (note + "\n" if note else "") + "review.adjudicated_candidates"
+            cleaned.append(
+                {
+                    "title": title[:120],
+                    "due_date": str(item.get("due_date") or "").strip(),
+                    "project": project,
+                    "assignee": str(item.get("assignee") or "私").strip() or "私",
+                    "note": note,
+                }
+            )
+        return cleaned, raw
+    return None, raw
 
 
 def local_recall_boost_tasks(
@@ -2452,10 +2577,29 @@ def summarize_tasks(
             max_per_project=int(env.get("MINUTES_REVIEW_MAX_PER_PROJECT", "8")),
             max_cross_project=int(env.get("MINUTES_REVIEW_MAX_CROSS_PROJECT", "8")),
         )
+        adjudication_raw = ""
+        adjudicated_review_tasks = review_tasks
+        if env_flag(env, "MINUTES_REVIEW_ADJUDICATE_ENABLE", True) and review_tasks:
+            adjudicated, adjudication_raw = adjudicate_review_candidates_with_gemini(
+                review,
+                review_tasks,
+                env,
+                working_default_project,
+                working_known_projects,
+                today,
+                existing_tasks=_merge_tasks(
+                    local_hint_tasks,
+                    llm_tasks,
+                    limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                ),
+                registry_context=registry_context,
+            )
+            if adjudicated is not None:
+                adjudicated_review_tasks = adjudicated
         merged_review_tasks = _merge_tasks(
             local_hint_tasks,
             llm_tasks,
-            review_tasks,
+            adjudicated_review_tasks,
             limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
         )
         coverage_raw = ""
@@ -2481,6 +2625,7 @@ def summarize_tasks(
                     "pipeline": "gemini_two_stage",
                     "review_raw": review_raw[:1200],
                     "task_raw": task_raw[:1200],
+                    "review_adjudication_raw": adjudication_raw[:1200],
                     "coverage_raw": coverage_raw[:1200],
                     "local_preprocess": local_meta,
                 },

@@ -360,6 +360,38 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
   - low-self な project の誤 task 化
     をさらに減らすこと
 
+### 4.13 B14 実装メモ
+
+- minutes の local gate は、ここからは **明確なノイズ除去に限定**する
+  - 例:
+    - 完了報告
+    - status-only
+    - 明示的な他担当
+    - project 根拠の弱い明確ノイズ
+- 一方で、
+  - generic 調整
+  - 問いかけ型
+  - section 文脈がないと判定しづらい候補
+    は local で落とし切らず、Gemini へ渡す
+- `/Users/shu/OpenClaw/scripts/roby-minutes.py` では `review.project_sections.action_candidates` から作った候補を
+  `/Users/shu/OpenClaw/scripts/roby-minutes.py:adjudicate_review_candidates_with_gemini(...)`
+  で再判定する
+- Gemini に渡す材料:
+  - `review.project_sections`
+  - section project
+  - candidate title
+  - existing titles
+  - registry / context seed hints
+- Gemini に期待する判断:
+  - `task` に残す
+  - `drop` する
+  - title を具体化する
+  - timing-only の断片は親 task に吸収する
+- これにより
+  - local-first の recall を落としすぎず
+  - 最終 precision は Gemini で上げる
+    形に寄せる
+
 ---
 
 ## 5. Sprint C: Eval Sprint
