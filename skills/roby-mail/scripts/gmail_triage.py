@@ -175,6 +175,11 @@ ACTIONABLE_NOTICE_HINTS = [
     "ミーティングの件",
 ]
 
+EXPLICIT_ACTION_REQUEST_PATTERNS = (
+    r"(契約書|申込書|見積書)\s*(?:の)?\s*(準備|送付|再送|返送|提出|確認)\s*(?:を)?\s*(?:お願いします|お願い致します|お願いいたします|ください)",
+    r"(準備|送付|再送|返送|提出|署名|押印|記入|共有)\s*(?:を)?\s*(?:お願いします|お願い致します|お願いいたします|ください)",
+)
+
 ALERT_HINTS = [
     "エラー",
     "障害",
@@ -1172,6 +1177,8 @@ def decide_work_bucket(
         task_score += 1
     if signals.get("actionable_notice"):
         task_score += 1
+    if signals.get("explicit_action_request"):
+        task_score += 4
 
     meta["bucket_scores"] = {
         "newsletter": newsletter_score,
@@ -1447,6 +1454,34 @@ def classify_message(
     if related:
         tags.extend([f"tool:{t}" for t in related])
 
+    is_calendar_response = subject_lower.startswith(("承諾:", "辞退:", "accepted:", "declined:"))
+    is_pipeline_success = ("[aws pipeline]" in subject_lower and "成功" in subject_lower and "etl結果" in subject_lower)
+    is_tokiwagi_base_info = (
+        "tokiwagi-base" in subject_lower
+        and any(
+            hint in subject_lower
+            for hint in (
+                "最新版ではありません",
+                "新しいログイン動作を検知しました",
+                "synology nas への新しいログイン",
+            )
+        )
+    )
+    is_internal_instagram_recap = (
+        "instagram" in sender_lower
+        and "info@tokiwa-gi.com" in sender_lower
+        and any(hint in subject_lower for hint in ("チェックしよう", "見逃したコンテンツ", "フィードで"))
+    )
+
+    if is_calendar_response:
+        return "archive", _dedupe_tags(tags + ["rule:calendar_response"]), False, "calendar_response", meta
+    if is_pipeline_success:
+        return "archive", _dedupe_tags(tags + ["rule:pipeline_success_archive"]), False, "pipeline_success_archive", meta
+    if is_tokiwagi_base_info:
+        return "archive", _dedupe_tags(tags + ["rule:tokiwagi_base_info_archive"]), False, "tokiwagi_base_info_archive", meta
+    if is_internal_instagram_recap:
+        return "archive", _dedupe_tags(tags + ["rule:internal_instagram_recap_archive"]), False, "internal_instagram_recap_archive", meta
+
     override_category, override_rule = match_user_override(subject, sender, rules or {}, cc=cc)
     if override_category:
         return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule, meta
@@ -1552,6 +1587,7 @@ def classify_message(
 
     reply_text = re.sub(r"reply-to", " ", text)
     has_reply_phrase = any(re.search(pattern, reply_text) for pattern in EXPLICIT_REPLY_PATTERNS)
+    has_explicit_action_request = any(re.search(pattern, reply_text) for pattern in EXPLICIT_ACTION_REQUEST_PATTERNS)
     promo_reply_risk = any(h.lower() in reply_text for h in PROMO_REPLY_SUPPRESS_HINTS)
     if (
         (not is_noreply)
@@ -1566,6 +1602,8 @@ def classify_message(
         )
     ):
         needs_reply = True
+    if has_explicit_action_request:
+        meta["signals"]["explicit_action_request"] = True
 
     if related:
         if is_noreply:

@@ -80,6 +80,18 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(category, "archive")
         self.assertFalse(needs_reply)
 
+    def test_calendar_acceptance_is_archived(self):
+        category, tags, needs_reply, rule, _meta = self.mod.classify_message(
+            subject="承諾: ボーネルンド様：スマレジ画面打ち合わせ＠本社",
+            sender='"田子一之" <tago@tokiwa-gi.com>',
+            body="承諾されました。",
+            rules={},
+        )
+        self.assertEqual(category, "archive")
+        self.assertEqual(rule, "calendar_response")
+        self.assertFalse(needs_reply)
+        self.assertIn("rule:calendar_response", tags)
+
     def test_promo_sender_with_invoice_signal_is_not_archived(self):
         category, _, _, _, _meta = self.mod.classify_message(
             subject="【重要】請求書のご案内",
@@ -102,6 +114,19 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(bucket, "task")
         self.assertEqual(reason, "explicit_reply_or_action")
 
+    def test_contract_prep_request_becomes_task(self):
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
+            subject="Re: R8年度契約について",
+            sender="田中麻紀子 <makiko-tanaka@boatrace-hamanako.or.jp>",
+            body="契約更新が決定しました。契約書のご準備をお願い致します。",
+            rules={},
+        )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "needs_review")
+        self.assertFalse(needs_reply)
+        self.assertEqual(bucket, "task")
+        self.assertEqual(reason, "coordination_requires_followup")
+
     def test_marketing_like_subject_with_estimate_signal_stays_reviewable(self):
         category, _, _, _, _meta = self.mod.classify_message(
             subject="【無料で試せる】見積書をご確認ください",
@@ -121,6 +146,42 @@ class TestGmailTriageClassify(TestCase):
         bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
         self.assertFalse(needs_reply)
         self.assertNotEqual(bucket, "task")
+
+    def test_pipeline_success_is_archived(self):
+        category, tags, needs_reply, rule, _meta = self.mod.classify_message(
+            subject="[AWS PIPELINE] 成功 - ETL結果 (2026-03-15)",
+            sender='"s.nigo@tokiwa-gi.com" <s.nigo@tokiwa-gi.com>',
+            body="正常終了しました。",
+            rules={},
+        )
+        self.assertEqual(category, "archive")
+        self.assertEqual(rule, "pipeline_success_archive")
+        self.assertFalse(needs_reply)
+        self.assertIn("rule:pipeline_success_archive", tags)
+
+    def test_tokiwagi_base_info_is_archived(self):
+        category, tags, needs_reply, rule, _meta = self.mod.classify_message(
+            subject="[tokiwagi-base.tw5.quickconnect.to] TOKIWAGI-BASE 上の DSM とパッケージが最新版ではありません",
+            sender="TOKIWAGI-BASE - Synology NAS <s.nigo@tokiwa-gi.com>",
+            body="最新版ではありません。",
+            rules={},
+        )
+        self.assertEqual(category, "archive")
+        self.assertEqual(rule, "tokiwagi_base_info_archive")
+        self.assertFalse(needs_reply)
+        self.assertIn("rule:tokiwagi_base_info_archive", tags)
+
+    def test_internal_instagram_recap_is_archived(self):
+        category, tags, needs_reply, rule, _meta = self.mod.classify_message(
+            subject="tokiwagi_business ― フィードでpokiiir、ryoko698などをチェックしよう",
+            sender='"Instagram" via info <info@tokiwa-gi.com>',
+            body="Instagram の更新です。",
+            rules={},
+        )
+        self.assertEqual(category, "archive")
+        self.assertEqual(rule, "internal_instagram_recap_archive")
+        self.assertFalse(needs_reply)
+        self.assertIn("rule:internal_instagram_recap_archive", tags)
 
     def test_funding_marketing_mail_does_not_become_reply_task(self):
         category, tags, needs_reply, _, meta = self.mod.classify_message(
