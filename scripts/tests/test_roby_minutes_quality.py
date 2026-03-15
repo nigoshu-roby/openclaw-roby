@@ -33,6 +33,10 @@ class TestRobyMinutesQuality(TestCase):
     def setUpClass(cls):
         cls.mod = _load_minutes_module()
 
+    def setUp(self):
+        self.mod.PROJECT_TASK_POSITIVE_HINTS_REGISTRY.clear()
+        self.mod.PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.clear()
+
     def test_infer_primary_project_prefers_known_project_in_text(self):
         known_projects = ["TOKIWAGI_MASTER", "ボーネルンド", "瑞鳳社ーデータ分析", "BRODO"]
         text = (
@@ -552,6 +556,54 @@ class TestRobyMinutesQuality(TestCase):
         matched = self.mod._match_known_project_name("BONELAND案件", ["ボーネルンド"])
         self.assertEqual(matched, "ボーネルンド")
         self.assertIn("飯野", self.mod.PROJECT_OWNER_HINTS_REGISTRY["ボーネルンド"])
+
+    def test_build_neuronic_tasks_drops_context_seed_negative_hint_task(self):
+        self.mod.PROJECT_TASK_NEGATIVE_HINTS_REGISTRY["ボーネルンド"] = ["背景共有だけの話"]
+        extracted = [
+            {
+                "title": "背景共有だけの話",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "note": "背景共有だけの話",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="ボーネルンド定例",
+            source_url="https://www.notion.so/example",
+            default_project="ボーネルンド",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+            known_projects=["ボーネルンド"],
+            doc_project_hints=["ボーネルンド"],
+            registry={},
+        )
+        self.assertEqual(tasks, [])
+
+    def test_build_neuronic_tasks_keeps_context_seed_positive_hint_task(self):
+        self.mod.PROJECT_TASK_POSITIVE_HINTS_REGISTRY["ボーネルンド"] = ["日程調整"]
+        extracted = [
+            {
+                "title": "日程調整の案を整理する",
+                "project": "ボーネルンド",
+                "assignee": "私",
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="ボーネルンド定例",
+            source_url="https://www.notion.so/example",
+            default_project="ボーネルンド",
+            source_id="page-example",
+            run_id="roby:minutes:test",
+            known_projects=["ボーネルンド"],
+            doc_project_hints=["ボーネルンド"],
+            registry={},
+        )
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[0]["project"], "ボーネルンド")
 
     def test_segment_minutes_text_marks_multiple_projects(self):
         registry = {

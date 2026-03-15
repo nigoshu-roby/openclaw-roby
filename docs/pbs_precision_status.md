@@ -76,6 +76,7 @@
 | B9  | project confidence gate 実装         | 完了 | #14          | project 根拠が弱い task や conflict project を minutes 側で除外して `wrong_project` を抑制         |
 | B10 | document project hint gate 実装      | 完了 | #14          | source 文書から抽出した project hints に乗らない弱い task を minutes 側で除外                      |
 | B11 | context seed の project / owner 接続 | 完了 | #14          | `/Users/shu/OpenClaw/docs/pbs_context_seed.md` の alias / owner / task ヒントを minutes 判定へ接続 |
+| B12 | context seed の task 基準接続        | 完了 | #14          | project ごとの `task にしやすいもの / しなくてよいもの` を minutes 送信ゲートへ接続                |
 
 ## Sprint C: Eval Sprint
 

@@ -34,6 +34,8 @@ PROJECT_ALIAS_REGISTRY: Dict[str, str] = {}
 PROJECT_EXTRA_ALIASES: Dict[str, List[str]] = {}
 PROJECT_OWNER_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_ACTION_HINTS_REGISTRY: Dict[str, List[str]] = {}
+PROJECT_TASK_POSITIVE_HINTS_REGISTRY: Dict[str, List[str]] = {}
+PROJECT_TASK_NEGATIVE_HINTS_REGISTRY: Dict[str, List[str]] = {}
 CONTEXT_SELF_OWNER_ALIASES: List[str] = []
 
 
@@ -164,6 +166,8 @@ def apply_tokiwagi_master_registry(registry: Dict[str, Any]) -> None:
     PROJECT_EXTRA_ALIASES.clear()
     PROJECT_OWNER_HINTS_REGISTRY.clear()
     PROJECT_ACTION_HINTS_REGISTRY.clear()
+    PROJECT_TASK_POSITIVE_HINTS_REGISTRY.clear()
+    PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.clear()
     for project_entry in registry.get("project_registry", []) or []:
         if not isinstance(project_entry, dict):
             continue
@@ -262,6 +266,22 @@ def apply_context_seed_data(seed: Dict[str, Any]) -> None:
                 actions.append(label)
         if actions:
             PROJECT_ACTION_HINTS_REGISTRY[canonical] = list(dict.fromkeys(actions))[:8]
+
+        positive_hints = PROJECT_TASK_POSITIVE_HINTS_REGISTRY.get(canonical, [])
+        for raw in (project_entry.get("positive_task_hints") or []):
+            label = str(raw or "").strip()
+            if label:
+                positive_hints.append(label)
+        if positive_hints:
+            PROJECT_TASK_POSITIVE_HINTS_REGISTRY[canonical] = list(dict.fromkeys(positive_hints))[:12]
+
+        negative_hints = PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.get(canonical, [])
+        for raw in (project_entry.get("negative_task_hints") or []):
+            label = str(raw or "").strip()
+            if label:
+                negative_hints.append(label)
+        if negative_hints:
+            PROJECT_TASK_NEGATIVE_HINTS_REGISTRY[canonical] = list(dict.fromkeys(negative_hints))[:12]
 
 
 def log_run(entry: Dict[str, Any]) -> None:
@@ -2762,6 +2782,42 @@ def _project_alias_hit_count(project: str, text: str) -> int:
     return hits
 
 
+def _assess_context_seed_task_fit(project: str, title: str, note: str) -> Dict[str, Any]:
+    target = _canonical_project_display_name(project or "")
+    positive_hints = PROJECT_TASK_POSITIVE_HINTS_REGISTRY.get(target, [])
+    negative_hints = PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.get(target, [])
+    title_text = str(title or "")
+    note_text = str(note or "")
+    blob = "\n".join([title_text, note_text]).strip()
+    if not target or not blob:
+        return {"positive_hits": 0, "negative_hits": 0, "drop": False, "score_delta": 0}
+
+    positive_hits = sum(1 for hint in positive_hints if hint and hint in blob)
+    negative_hits = sum(1 for hint in negative_hints if hint and hint in blob)
+    has_action = _has_action_signal(title_text) or _has_action_signal(note_text)
+    looks_noise = _looks_noise_task_title(title_text)
+    clean_title = _clean_line(title_text)
+    exact_negative_hit = any(_clean_line(hint) == clean_title for hint in negative_hints if hint)
+
+    drop = False
+    if negative_hits and not positive_hits and exact_negative_hit:
+        drop = True
+    elif negative_hits and not positive_hits and not has_action:
+        drop = True
+    elif negative_hits and not positive_hits and looks_noise:
+        drop = True
+
+    score_delta = min(positive_hits, 2)
+    if negative_hits and not positive_hits:
+        score_delta -= 1
+    return {
+        "positive_hits": positive_hits,
+        "negative_hits": negative_hits,
+        "drop": drop,
+        "score_delta": score_delta,
+    }
+
+
 def _has_confident_minutes_project(
     project: str,
     title: str,
@@ -2788,8 +2844,11 @@ def _has_confident_minutes_project(
     ]
     alias_hits = _project_alias_hit_count(target, blob)
     source_alias_hits = _project_alias_hit_count(target, source_title or "")
+    context_fit = _assess_context_seed_task_fit(target, title, note)
 
     score = 0
+    if context_fit.get("drop"):
+        return False
     if explicit_project and _canonical_project_display_name(explicit_project) == target:
         score += 2
     if alias_hits > 0:
@@ -2804,6 +2863,7 @@ def _has_confident_minutes_project(
         score += 2
     if note and "review.project_sections.action_candidates" in note:
         score += 1
+    score += int(context_fit.get("score_delta", 0) or 0)
 
     has_conflict = bool(
         inferred_project

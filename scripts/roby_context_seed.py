@@ -41,6 +41,18 @@ def _split_inline_values(raw: str) -> List[str]:
     return values
 
 
+def _split_phrase_values(raw: str) -> List[str]:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    values: List[str] = []
+    for part in re.split(r"[\n、,]+", text):
+        item = part.strip().strip("・")
+        if item:
+            values.append(item)
+    return values
+
+
 def _extract_person_names(text: str) -> List[str]:
     names: List[str] = []
     patterns = [
@@ -113,6 +125,8 @@ def _parse_projects(section: str) -> List[Dict[str, Any]]:
                 val = m.group(1).strip()
                 if val:
                     action_hints.append(val)
+        positive_task_hints = _split_phrase_values(_extract_field(block, 'task にしやすいもの'))
+        negative_task_hints = _split_phrase_values(_extract_field(block, 'task にしなくてよいもの'))
         projects.append(
             {
                 "project": project,
@@ -120,6 +134,8 @@ def _parse_projects(section: str) -> List[Dict[str, Any]]:
                 "keywords": list(dict.fromkeys([k for k in keywords if k])),
                 "owner_hints": list(dict.fromkeys([n for n in owner_hints if n])),
                 "action_hints": list(dict.fromkeys(action_hints)),
+                "positive_task_hints": list(dict.fromkeys([x for x in positive_task_hints if x])),
+                "negative_task_hints": list(dict.fromkeys([x for x in negative_task_hints if x])),
             }
         )
     return projects

@@ -333,6 +333,18 @@ Notion / GDocs 議事録から、project / owner / task 粒度が正しいタス
 - `自分扱いにしてよい表現` は self assignee alias として minutes 側へ渡す
 - 実装は `/Users/shu/OpenClaw/scripts/roby_context_seed.py` と `/Users/shu/OpenClaw/scripts/roby-minutes.py` を使う
 
+### 4.11 B12 実装メモ
+
+- `/Users/shu/OpenClaw/docs/pbs_context_seed.md` の project ごとの
+  - `task にしやすいもの`
+  - `task にしなくてよいもの`
+    を parse して minutes 側へ取り込む
+- `roby-minutes.py` では project ごとの positive / negative task hints を送信ゲートで使う
+- 想定挙動:
+  - context seed で「task にしなくてよい」と書いた背景共有・雑談・共有メモ系は落としやすくする
+  - context seed で「task にしやすい」と書いた日程調整・資料更新・確認依頼系は保持しやすくする
+- これにより、project / owner だけでなく「その案件で task にすべき粒度」も人手知識で補強する
+
 ---
 
 ## 5. Sprint C: Eval Sprint
