@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import urllib.request
 import urllib.error
 from roby_audit import append_audit_event
+from roby_context_seed import load_context_seed
 from roby_local_first import env_flag, int_from_env, run_ollama_json
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "minutes_state.json"
@@ -33,6 +34,7 @@ PROJECT_ALIAS_REGISTRY: Dict[str, str] = {}
 PROJECT_EXTRA_ALIASES: Dict[str, List[str]] = {}
 PROJECT_OWNER_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_ACTION_HINTS_REGISTRY: Dict[str, List[str]] = {}
+CONTEXT_SELF_OWNER_ALIASES: List[str] = []
 
 
 class MinutesDocTimeout(RuntimeError):
@@ -151,9 +153,9 @@ def _normalize_owner_hint_candidate(raw: str) -> str:
 
 def load_tokiwagi_master_registry(path: Optional[Path] = None) -> Dict[str, Any]:
     payload = _read_json_file(path or TOKIWAGI_MASTER_REGISTRY_PATH)
-    if not payload:
-        return {}
-    apply_tokiwagi_master_registry(payload)
+    if payload:
+        apply_tokiwagi_master_registry(payload)
+    apply_context_seed_data(load_context_seed())
     return payload
 
 
@@ -207,6 +209,59 @@ def apply_tokiwagi_master_registry(registry: Dict[str, Any]) -> None:
             if label:
                 actions.append(label)
         PROJECT_ACTION_HINTS_REGISTRY[canonical] = list(dict.fromkeys(actions))[:8]
+
+
+def apply_context_seed_data(seed: Dict[str, Any]) -> None:
+    global CONTEXT_SELF_OWNER_ALIASES
+    if not isinstance(seed, dict):
+        return
+
+    self_aliases: List[str] = []
+    role = seed.get("role") or {}
+    owner_rules = seed.get("owner_rules") or {}
+    for raw in (role.get("self_aliases") or []):
+        alias = _normalize_owner_hint_candidate(str(raw or ""))
+        if alias:
+            self_aliases.append(alias)
+    for raw in (owner_rules.get("self_aliases") or []):
+        alias = _normalize_owner_hint_candidate(str(raw or ""))
+        if alias:
+            self_aliases.append(alias)
+    CONTEXT_SELF_OWNER_ALIASES = list(dict.fromkeys(self_aliases))
+
+    for project_entry in (seed.get("projects") or []):
+        if not isinstance(project_entry, dict):
+            continue
+        canonical = _canonical_project_display_name(str(project_entry.get("project") or ""))
+        if not canonical:
+            continue
+
+        for raw in (project_entry.get("aliases") or []):
+            alias = str(raw or "").strip()
+            if not alias:
+                continue
+            PROJECT_EXTRA_ALIASES.setdefault(canonical, [])
+            if alias not in PROJECT_EXTRA_ALIASES[canonical]:
+                PROJECT_EXTRA_ALIASES[canonical].append(alias)
+            alias_norm = _normalize_project_token(alias)
+            if alias_norm:
+                PROJECT_ALIAS_REGISTRY[alias_norm] = canonical
+
+        owners = PROJECT_OWNER_HINTS_REGISTRY.get(canonical, [])
+        for raw in (project_entry.get("owner_hints") or []):
+            owner = _normalize_owner_hint_candidate(str(raw or ""))
+            if owner:
+                owners.append(owner)
+        if owners:
+            PROJECT_OWNER_HINTS_REGISTRY[canonical] = list(dict.fromkeys(owners))[:8]
+
+        actions = PROJECT_ACTION_HINTS_REGISTRY.get(canonical, [])
+        for raw in (project_entry.get("action_hints") or []):
+            label = str(raw or "").strip()
+            if label:
+                actions.append(label)
+        if actions:
+            PROJECT_ACTION_HINTS_REGISTRY[canonical] = list(dict.fromkeys(actions))[:8]
 
 
 def log_run(entry: Dict[str, Any]) -> None:
@@ -650,6 +705,7 @@ def extract_owner_mentions(text: str) -> List[str]:
 
 def _get_self_owner_aliases(env: Optional[Dict[str, str]] = None) -> set[str]:
     aliases = list(DEFAULT_SELF_OWNER_ALIASES)
+    aliases.extend(CONTEXT_SELF_OWNER_ALIASES)
     raw = str((env or os.environ).get("ROBY_MINUTES_SELF_ALIASES", "") or "").strip()
     if raw:
         aliases.extend(re.split(r"[\n,]+", raw))
@@ -1238,6 +1294,7 @@ def infer_registry_project_hints(
         score = 0
         aliases = []
         aliases.extend(entry.get("aliases") or [])
+        aliases.extend(PROJECT_EXTRA_ALIASES.get(canonical) or [])
         local_llm = entry.get("local_llm") or {}
         aliases.extend(local_llm.get("aliases") or [])
         aliases.extend(entry.get("sample_doc_titles") or [])

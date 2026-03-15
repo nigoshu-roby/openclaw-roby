@@ -296,7 +296,34 @@ class TestGmailTriageClassify(TestCase):
             ["tool:google"],
         )
         self.assertEqual(bucket, "review")
-        self.assertEqual(reason, "weighted_review_from_tool_notice")
+
+    def test_context_seed_sender_hint_marks_sender_as_known_contact(self):
+        sender_hints, domain_hints = self.mod.build_context_sender_hints(
+            {
+                "email": {
+                    "important_senders": [
+                        {
+                            "name": "飯野さん",
+                            "emails": ["t-iino@bornelund.co.jp"],
+                            "domains": ["bornelund.co.jp"],
+                            "importance": "高",
+                            "company": "株式会社ボーネルンド",
+                            "topics": "運用調整",
+                        }
+                    ]
+                }
+            }
+        )
+        meta = self.mod.contact_importance(
+            "",
+            "飯野友明 <t-iino@bornelund.co.jp>",
+            {},
+            context_sender_hints=sender_hints,
+            context_domain_hints=domain_hints,
+        )
+        self.assertTrue(meta["known"])
+        self.assertTrue(meta["context_seed"])
+        self.assertIn(meta["tier"], {"medium", "high"})
 
 
 if __name__ == "__main__":

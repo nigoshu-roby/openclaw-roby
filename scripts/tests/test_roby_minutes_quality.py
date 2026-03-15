@@ -584,6 +584,33 @@ class TestRobyMinutesQuality(TestCase):
         self.assertEqual(self.mod._normalize_owner_hint_candidate("AI"), "")
         self.assertEqual(self.mod._normalize_owner_hint_candidate("一広"), "")
 
+    def test_apply_context_seed_data_merges_project_alias_owner_and_self_aliases(self):
+        self.mod.PROJECT_ALIAS_REGISTRY.clear()
+        self.mod.PROJECT_EXTRA_ALIASES.clear()
+        self.mod.PROJECT_OWNER_HINTS_REGISTRY.clear()
+        self.mod.PROJECT_ACTION_HINTS_REGISTRY.clear()
+        self.mod.CONTEXT_SELF_OWNER_ALIASES = []
+        self.mod.apply_context_seed_data(
+            {
+                "role": {"self_aliases": ["にーご"]},
+                "owner_rules": {"self_aliases": ["新後"]},
+                "projects": [
+                    {
+                        "project": "ボーネルンド",
+                        "aliases": ["Bornelund"],
+                        "owner_hints": ["飯野さん", "早川さん"],
+                        "action_hints": ["資料作成"],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(self.mod.PROJECT_ALIAS_REGISTRY.get(self.mod._normalize_project_token("Bornelund")), "ボーネルンド")
+        self.assertIn("飯野", self.mod.PROJECT_OWNER_HINTS_REGISTRY.get("ボーネルンド", []))
+        self.assertIn("資料作成", self.mod.PROJECT_ACTION_HINTS_REGISTRY.get("ボーネルンド", []))
+        aliases = self.mod._get_self_owner_aliases({"ROBY_MINUTES_SELF_ALIASES": ""})
+        self.assertIn("にーご", aliases)
+        self.assertIn("新後", aliases)
+
     def test_run_with_doc_timeout_returns_function_result_when_alarm_is_stubbed(self):
         with patch.object(self.mod.signal, "signal"), patch.object(self.mod.signal, "setitimer"):
             result = self.mod.run_with_doc_timeout(1, lambda x: x + 1, 2)

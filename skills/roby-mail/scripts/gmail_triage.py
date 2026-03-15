@@ -17,6 +17,7 @@ OPENCLAW_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
 if str(OPENCLAW_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(OPENCLAW_SCRIPTS_DIR))
 
+from roby_context_seed import load_context_seed
 from roby_local_first import env_flag as shared_env_flag, int_from_env as shared_int_from_env, run_ollama_json
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
@@ -506,7 +507,41 @@ def load_contact_index(path: Path | None = None) -> Dict[str, Any]:
     return {}
 
 
-def contact_importance(thread_id: str, sender: str, index: Dict[str, Any] | None) -> Dict[str, Any]:
+def build_context_sender_hints(seed: Dict[str, Any] | None) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    sender_hints: Dict[str, Dict[str, Any]] = {}
+    domain_hints: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(seed, dict):
+        return sender_hints, domain_hints
+    for row in ((seed.get("email") or {}).get("important_senders") or []):
+        if not isinstance(row, dict):
+            continue
+        importance = str(row.get("importance") or "").strip().lower()
+        name = str(row.get("name") or "").strip()
+        company = str(row.get("company") or "").strip()
+        topics = str(row.get("topics") or "").strip()
+        emails = [str(x).strip().lower() for x in (row.get("emails") or []) if str(x).strip()]
+        domains = [str(x).strip().lower() for x in (row.get("domains") or []) if str(x).strip()]
+        payload = {
+            "name": name,
+            "company": company,
+            "importance": importance,
+            "topics": topics,
+        }
+        for email in emails:
+            sender_hints[email] = payload
+        for domain in domains:
+            domain_hints.setdefault(domain, payload)
+    return sender_hints, domain_hints
+
+
+def contact_importance(
+    thread_id: str,
+    sender: str,
+    index: Dict[str, Any] | None,
+    *,
+    context_sender_hints: Dict[str, Dict[str, Any]] | None = None,
+    context_domain_hints: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     info = {
         "known": False,
         "thread_replied": False,
@@ -516,15 +551,14 @@ def contact_importance(thread_id: str, sender: str, index: Dict[str, Any] | None
         "domain_thread_count": 0,
         "tier": "none",
         "score": 0,
+        "context_seed": False,
     }
-    if not index:
-        return info
     _sender_name, sender_email = parseaddr(sender or "")
     sender_email = (sender_email or "").strip().lower()
     sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else ""
-    thread_index = index.get("thread_index") or {}
-    sender_index = index.get("sender_index") or {}
-    domain_index = index.get("domain_index") or {}
+    thread_index = (index or {}).get("thread_index") or {}
+    sender_index = (index or {}).get("sender_index") or {}
+    domain_index = (index or {}).get("domain_index") or {}
     thread_info = thread_index.get((thread_id or "").strip())
     sender_info = sender_index.get(sender_email, {})
     domain_info = domain_index.get(sender_domain, {})
@@ -551,6 +585,21 @@ def contact_importance(thread_id: str, sender: str, index: Dict[str, Any] | None
         score += 2
     elif info["domain_thread_count"] >= 2:
         score += 1
+
+    context_sender = (context_sender_hints or {}).get(sender_email, {})
+    context_domain = (context_domain_hints or {}).get(sender_domain, {})
+    context_match = context_sender or context_domain
+    if context_match:
+        info["known"] = True
+        info["context_seed"] = True
+        importance = str(context_match.get("importance") or "").lower()
+        if importance == "高":
+            score = max(score, 6)
+        elif importance == "中":
+            score = max(score, 4)
+        elif importance == "低":
+            score = max(score, 2)
+
     info["score"] = score
     if score >= 8:
         info["tier"] = "high"
@@ -1331,6 +1380,8 @@ def classify_message(
     env: Dict[str, str] | None = None,
     thread_id: str = "",
     contact_index: Dict[str, Any] | None = None,
+    context_sender_hints: Dict[str, Dict[str, Any]] | None = None,
+    context_domain_hints: Dict[str, Dict[str, Any]] | None = None,
 ) -> Tuple[str, List[str], bool, str | None, Dict[str, Any]]:
     text = f"{subject} {sender} {cc} {body}".lower()
     header_text = f"{subject} {sender} {cc}".lower()
@@ -1341,7 +1392,13 @@ def classify_message(
     cc_lower = (cc or "").lower()
     subject_lower = (subject or "").lower()
     is_noreply = "no-reply" in sender_lower or "noreply" in sender_lower
-    contact_meta = contact_importance(thread_id, sender, contact_index)
+    contact_meta = contact_importance(
+        thread_id,
+        sender,
+        contact_index,
+        context_sender_hints=context_sender_hints,
+        context_domain_hints=context_domain_hints,
+    )
     meta["contact_importance"] = contact_meta.copy()
     if contact_meta.get("known"):
         tags.append("contact:known")
@@ -1649,6 +1706,7 @@ def main() -> int:
     rules_path = Path(args.rules_path).expanduser() if args.rules_path else Path(env.get("ROBY_GMAIL_TRIAGE_RULES_PATH", str(RULES_PATH))).expanduser()
     rules = load_rules(rules_path)
     contact_index = load_contact_index(Path(env.get("ROBY_GMAIL_CONTACT_INDEX_PATH", str(CONTACT_INDEX_PATH))))
+    context_sender_hints, context_domain_hints = build_context_sender_hints(load_context_seed())
     state = ensure_state()
     processed = state.get("processed", {})
 
@@ -1705,6 +1763,8 @@ def main() -> int:
             env=env,
             thread_id=str(msg.get("threadId", "") or ""),
             contact_index=contact_index,
+            context_sender_hints=context_sender_hints,
+            context_domain_hints=context_domain_hints,
         )
         local_meta = classify_meta.get("local_preclassify") if isinstance(classify_meta, dict) else None
         if isinstance(local_meta, dict) and local_meta.get("enabled") is not False:
