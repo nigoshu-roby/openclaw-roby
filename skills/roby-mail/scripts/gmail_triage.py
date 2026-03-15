@@ -186,6 +186,28 @@ ALERT_HINTS = [
     "incident",
 ]
 
+EXPLICIT_REPLY_PATTERNS = (
+    r"(ご返信|返信|ご返答|返答|ご回答|回答)\s*(?:を)?\s*(?:お願いします|ください|願います|お願いいたします|いただけますか|頂けますか)",
+    r"(返信|返答|回答)\s*(?:期日|期限|締切|締め切り|by)\b",
+    r"(please|kindly)\s+reply\b",
+    r"reply\s+(?:requested|required|needed)\b",
+    r"respond\s+(?:by|required|needed)\b",
+)
+
+PROMO_REPLY_SUPPRESS_HINTS = (
+    "クーポン",
+    "coupon",
+    "プレゼント",
+    "gift card",
+    "ギフトカード",
+    "資金調達",
+    "セミナー",
+    "webinar",
+    "キャンペーン",
+    "event",
+    "イベント",
+)
+
 RELATED_DOMAINS = {
     "line.me": "line",
     "linecorp.com": "line",
@@ -1528,9 +1550,20 @@ def classify_message(
         return category, tags, needs_reply, None, meta
 
     reply_text = re.sub(r"reply-to", " ", text)
-    has_reply_phrase = any(k in reply_text for k in ["返信", "ご返信", "ご回答", "ご対応"])
-    has_reply_en = any(k in reply_text for k in ["please reply", "reply requested", "reply by"])
-    if (not is_noreply) and (has_reply_phrase or has_reply_en):
+    has_reply_phrase = any(re.search(pattern, reply_text) for pattern in EXPLICIT_REPLY_PATTERNS)
+    promo_reply_risk = any(h.lower() in reply_text for h in PROMO_REPLY_SUPPRESS_HINTS)
+    if (
+        (not is_noreply)
+        and has_reply_phrase
+        and not (
+            promo_reply_risk
+            and not urgent
+            and not is_actionable_notice
+            and not has_business_review_signal
+            and not is_alert
+            and not contact_meta.get("known")
+        )
+    ):
         needs_reply = True
 
     if related:

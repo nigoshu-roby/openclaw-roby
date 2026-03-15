@@ -79,6 +79,19 @@ class TestGmailTriageClassify(TestCase):
         )
         self.assertEqual(category, "needs_review")
 
+    def test_explicit_reply_request_sets_needs_reply(self):
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
+            subject="ご確認のお願い",
+            sender="client@example.com",
+            body="内容をご確認のうえ、ご返信をお願いします。",
+            rules={},
+        )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "needs_reply")
+        self.assertTrue(needs_reply)
+        self.assertEqual(bucket, "task")
+        self.assertEqual(reason, "explicit_reply_or_action")
+
     def test_marketing_like_subject_with_estimate_signal_stays_reviewable(self):
         category, _, _, _, _meta = self.mod.classify_message(
             subject="【無料で試せる】見積書をご確認ください",
@@ -87,6 +100,28 @@ class TestGmailTriageClassify(TestCase):
             rules={},
         )
         self.assertEqual(category, "needs_review")
+
+    def test_coupon_promo_does_not_become_reply_task(self):
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
+            subject="＼3/31迄／⛳【甘楽カントリークラブ（群馬県）】1,000円割引クーポンプレゼント🎉 | アコーディアWeb",
+            sender="アコーディアWeb <info@ma.accordiagolf.com>",
+            body="クーポンのご案内です。詳しくは本文をご確認ください。",
+            rules={},
+        )
+        bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertFalse(needs_reply)
+        self.assertNotEqual(bucket, "task")
+
+    def test_funding_marketing_mail_does_not_become_reply_task(self):
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
+            subject="忙しい3月こそ要注意！年度末の支払いピンチを救う資金調達",
+            sender="Chatwork DX相談窓口 <news@ns.chatwork.com>",
+            body="資金調達のヒントをお届けします。詳細は本文をご確認ください。",
+            rules={},
+        )
+        bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertFalse(needs_reply)
+        self.assertNotEqual(bucket, "task")
 
     def test_line_approval_noreply_is_archived(self):
         category, _, _, _, _meta = self.mod.classify_message(
