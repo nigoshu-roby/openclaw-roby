@@ -229,6 +229,7 @@ class TestRobyMinutesQuality(TestCase):
         self.assertFalse(self.mod._looks_noise_task_title("スケジュール調整"))
         self.assertFalse(self.mod._looks_noise_task_title("3/13(金)のHP公開を確認次第、アカウント認証申請を実施"))
         self.assertFalse(self.mod._looks_noise_task_title("MIDの件は自動化が本当に必要なのか"))
+        self.assertTrue(self.mod._looks_noise_task_title("确认Liny工具的实际问题并提出解决方案"))
 
     def test_tasks_from_review_object_keeps_ambiguous_schedule_for_adjudication(self):
         review = {
@@ -259,6 +260,131 @@ class TestRobyMinutesQuality(TestCase):
         self.assertIn("MIDの件は自動化が本当に必要なのか", titles)
         self.assertIn("スケジュール調整", titles)
         self.assertNotIn("ダッシュボードの仮構築完了（フィルター機能実装済）", titles)
+
+    def test_fallback_review_candidates_keeps_high_confidence_items(self):
+        review_tasks = [
+            {
+                "title": "3/13(金)のHP公開を確認次第、アカウント認証申請を実施",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "note": "review.project_sections.action_candidates\nsection_project:ボーネルンド",
+            },
+            {
+                "title": "MIDの件は自動化が本当に必要なのか",
+                "project": "ミッド・ガーデン・ジャパン",
+                "assignee": "私",
+                "note": "review.project_sections.action_candidates\nsection_project:ミッド・ガーデン・ジャパン",
+            },
+            {
+                "title": "ダッシュボードの仮構築完了（フィルター機能実装済）",
+                "project": "ボーネルンド",
+                "assignee": "私",
+                "note": "review.project_sections.action_candidates\nsection_project:ボーネルンド",
+            },
+        ]
+        rescued = self.mod.fallback_review_candidates_for_empty_adjudication(review_tasks, limit=2)
+        titles = [task["title"] for task in rescued]
+        self.assertIn("3/13(金)のHP公開を確認次第、アカウント認証申請を実施", titles)
+        self.assertIn("MIDの件は自動化が本当に必要なのか", titles)
+        self.assertNotIn("ダッシュボードの仮構築完了（フィルター機能実装済）", titles)
+
+    def test_fallback_review_section_rescue_tasks_recovers_actionable_lines(self):
+        review = {
+            "project_sections": [
+                {
+                    "project": "ボーネルンド",
+                    "key_points": [
+                        "HP公開後にアカウント認証申請を実施する予定。",
+                        "ダッシュボードの仮構築は完了済み。",
+                    ],
+                    "action_candidates": [],
+                },
+                {
+                    "project": "ミッド・ガーデン・ジャパン",
+                    "key_points": [
+                        "MIDの件は自動化が本当に必要なのかを整理して判断する。",
+                    ],
+                    "action_candidates": [],
+                },
+            ]
+        }
+        rescued = self.mod.fallback_review_section_rescue_tasks(
+            review,
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "ミッド・ガーデン・ジャパン"],
+            max_items=3,
+        )
+        titles = [task["title"] for task in rescued]
+        self.assertTrue(any("アカウント認証申請" in title for title in titles))
+        self.assertTrue(any("自動化" in title for title in titles))
+        self.assertFalse(any("仮構築完了" in title for title in titles))
+
+    def test_adjudication_prompt_includes_initial_seed_review_principles(self):
+        captured = {}
+
+        def fake_runner(input_text, prompt, env, **kwargs):
+            captured["prompt"] = prompt
+            return [], "[]"
+
+        with patch.object(self.mod, "_run_gemini_json_prompt_with_retry", side_effect=fake_runner):
+            tasks, _ = self.mod.adjudicate_review_candidates_with_gemini(
+                review={"project_sections": []},
+                current_candidates=[
+                    {
+                        "title": "MIDの件は自動化が本当に必要なのか",
+                        "project": "ミッド・ガーデン・ジャパン",
+                        "assignee": "私",
+                        "note": "review.project_sections.action_candidates\nsection_project:ミッド・ガーデン・ジャパン",
+                    }
+                ],
+                env={},
+                default_project="TOKIWAGI_MASTER",
+                known_projects=[
+                    "TOKIWAGI_MASTER",
+                    "ボーネルンド",
+                    "ミッド・ガーデン・ジャパン",
+                    "BT振興会-Mooovi",
+                    "BT振興会-チケットショップ",
+                ],
+                today="2026-03-16",
+                existing_tasks=[],
+                registry_context="",
+            )
+        self.assertEqual(tasks, [])
+        prompt = captured["prompt"]
+        self.assertIn("translator / coordinator / PM-style operator", prompt)
+        self.assertIn("prefer rewrite over drop", prompt)
+        self.assertIn("Prefer the section project context over generic keyword matches", prompt)
+        self.assertIn("チケットショップは Mooovi に自動で寄せないこと", prompt)
+
+    def test_rewrite_leaf_task_candidates_drops_timing_only_note_fragment(self):
+        rewritten = self.mod._rewrite_leaf_task_candidates(
+            "HP公開後のアカウント認証を申請する",
+            "3月13日のHP公開後に実施",
+            ["ボーネルンド"],
+        )
+        self.assertEqual(rewritten, ["HP公開後のアカウント認証を申請する"])
+
+    def test_sanitize_extracted_tasks_drops_timing_only_leaf_titles(self):
+        extracted = [
+            {
+                "title": "ボーネルンド / 2026/03/10 社内定例MTG",
+                "project": "ボーネルンド",
+                "subtasks": [
+                    {"title": "アカウント認証を申請する", "note": ""},
+                    {"title": "3/13のHP公開を受けて実施する", "note": ""},
+                ],
+            }
+        ]
+        cleaned = self.mod.sanitize_extracted_tasks(
+            extracted,
+            default_project="ボーネルンド",
+            known_projects=["ボーネルンド"],
+            source_title="2026/03/10 社内定例MTG",
+        )
+        self.assertEqual(len(cleaned), 1)
+        subtasks = cleaned[0].get("subtasks") or []
+        self.assertEqual([sub.get("title") for sub in subtasks], ["アカウント認証を申請する"])
 
     def test_sanitize_decomposes_multiple_action_clauses_from_note(self):
         extracted = [

@@ -1,6 +1,6 @@
 # PBS Precision Sprint Status
 
-更新日: 2026-03-12  
+更新日: 2026-03-16  
 参照先: `docs/pbs_precision_sprint_spec.md`
 
 ---
@@ -45,9 +45,27 @@
 
 ## 事前ゲート
 
-| ID  | タスク                  | 状態 | GitHub Issue | 備考                                                                       |
-| --- | ----------------------- | ---- | ------------ | -------------------------------------------------------------------------- |
-| G1  | Gemini Bulk Budget Gate | 完了 | -            | 大規模 corpus 処理前に token 見積りを出し、confirm_required 以上は確認必須 |
+| ID  | タスク                                    | 状態 | GitHub Issue | 備考                                                                            |
+| --- | ----------------------------------------- | ---- | ------------ | ------------------------------------------------------------------------------- |
+| G1  | Gemini Bulk Budget Gate                   | 完了 | -            | 大規模 corpus 処理前に token 見積りを出し、confirm_required 以上は確認必須      |
+| G2  | Gemini 初回投入フェーズ設計               | 完了 | -            | 初回投入の対象・目的・手順・定常運用への切替方針を仕様化                        |
+| G3  | Gemini 初回投入（expanded / 3.1 Pro）実行 | 完了 | -            | expanded bundle を `google/gemini-3.1-pro-preview` で実行し、レビュー結果を整理 |
+
+## Gemini 初回投入フェーズ
+
+- 現在地:
+  - local-first の前処理基盤は揃っている
+  - `pbs_context_seed.md` は minutes / gmail 処理へ接続済み
+  - expanded bundle による初回投入は完了
+  - 返答は `docs/pbs_gemini_initial_seed_review.md` で採用 / 保留 / 不採用へ仕分け済み
+- 次にやること:
+  - 採用した判断軸だけを minutes / gmail adjudication へ反映
+  - representative case と precision eval で効きを確認
+  - 定常運用向けの少量 Gemini adjudication へ切り替える
+- 目的:
+  - project / owner / task 判定の仕事理解を Gemini に持たせる
+  - 曖昧ケースの adjudication を local から Gemini へ一部移す
+  - 大量投入後は少量・限定投入へ移行する
 
 ## Sprint A: Email Precision Sprint
 

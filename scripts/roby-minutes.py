@@ -602,6 +602,7 @@ ACTION_HINTS = [
     "検討",
     "設定",
     "修正",
+    "推奨",
 ]
 
 STATUS_ONLY_HINTS = [
@@ -927,9 +928,9 @@ def _has_action_signal(text: str) -> bool:
         return False
     if any(a in s for a in ACTION_HINTS):
         return True
-    if re.search(r"(まで|期限|予定|必要|依頼|確認|対応|実施|作成|調整|共有|連携|設定|修正|実装|準備|追跡|ヒアリング|検討)", s):
+    if re.search(r"(まで|期限|予定|必要|依頼|確認|対応|実施|作成|調整|共有|連携|設定|修正|実装|準備|追跡|ヒアリング|検討|推奨)", s):
         return True
-    if re.search(r"(する|したい|進める|行う|送る|まとめる|整理する|確認する|共有する|提出する|依頼する)$", s):
+    if re.search(r"(する|したい|進める|行う|送る|まとめる|整理する|確認する|共有する|提出する|依頼する|推奨する)$", s):
         return True
     if re.search(r"\d{4}[/-]\d{1,2}[/-]\d{1,2}", s):
         return True
@@ -947,11 +948,41 @@ def _looks_report_only_title(title: str) -> bool:
     return False
 
 
+def _looks_timing_only_clause(title: str) -> bool:
+    s = _clean_line(title)
+    if not s:
+        return False
+    timing_signal = bool(re.search(r"(後|次第|まで|受けて)", s) or re.search(r"\d{1,2}[/-]\d{1,2}", s))
+    if not timing_signal:
+        return False
+    if any(k in s for k in ("申請", "確認", "調査", "整理", "送信", "共有", "連携", "作成", "判断", "提出", "認証")):
+        return False
+    return bool(re.search(r"(実施|対応|着手|開始)(する)?$", s))
+
+
+def _looks_non_japanese_translation_artifact(text: str) -> bool:
+    s = _clean_line(text)
+    if not s:
+        return False
+    # Local models occasionally drift into simplified-Chinese phrasing; drop those titles before task化.
+    simplified_phrases = [
+        "确认",
+        "实际问题",
+        "解决方案",
+        "进行账户",
+        "账户认证",
+        "构建",
+    ]
+    return any(phrase in s for phrase in simplified_phrases)
+
+
 def _looks_noise_task_title(title: str) -> bool:
     s = _clean_line(title)
     if not s:
         return True
     if len(s) < 4:
+        return True
+    if _looks_non_japanese_translation_artifact(s):
         return True
     if _looks_report_only_title(s):
         return True
@@ -1008,6 +1039,8 @@ def _normalize_action_clause(text: str, known_projects: List[str]) -> str:
     clause = re.sub(r"^\(([^)]*)\)\s*", "", clause).strip()
     clause = clause.strip("。.!? \t")
     if not clause:
+        return ""
+    if _looks_non_japanese_translation_artifact(clause):
         return ""
     if _looks_noise_task_title(clause) and not _has_action_signal(clause):
         return ""
@@ -1079,7 +1112,11 @@ def _rewrite_leaf_task_candidates(
     max_items: int = 4,
 ) -> List[str]:
     title_clause = _normalize_action_clause(title, known_projects)
-    note_clauses = _extract_action_clauses(note, known_projects, max_items=max_items)
+    note_clauses = [
+        clause
+        for clause in _extract_action_clauses(note, known_projects, max_items=max_items)
+        if not _looks_timing_only_clause(clause)
+    ]
 
     if title_clause and not note_clauses:
         return [title_clause]
@@ -1569,6 +1606,8 @@ def sanitize_extracted_tasks(
                 for rewritten_title in rewritten_titles:
                     if max_subtasks_per_parent > 0 and len(subtasks) >= max_subtasks_per_parent:
                         break
+                    if _looks_timing_only_clause(rewritten_title):
+                        continue
                     sub_fp = _fingerprint(rewritten_title, sp, sd, compact_note)
                     if sub_fp in seen:
                         continue
@@ -1646,6 +1685,8 @@ def sanitize_extracted_tasks(
         rewritten_titles = _rewrite_leaf_task_candidates(title, note, known_projects)
         compact_note = _compact_task_note(note, rewritten_titles, known_projects)
         for rewritten_title in rewritten_titles:
+            if _looks_timing_only_clause(rewritten_title):
+                continue
             _append_leaf(rewritten_title, project, due_date, assignee, compact_note)
             if max_tasks_per_doc > 0 and len(cleaned) >= max_tasks_per_doc:
                 return cleaned[:max_tasks_per_doc]
@@ -2046,6 +2087,7 @@ def local_preprocess_minutes(
         "project_hints must be an array of likely project names. "
         "action_candidates must be an array of short concrete action lines only. "
         "noise_notes must be an array of memo/status lines that should not become tasks. "
+        "Output cleaned_text, action_candidates, and noise_notes in Japanese only; never translate into Chinese or English. "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
         + (f"Project registry hints:\n{registry_context}" if registry_context else "")
     )
@@ -2193,6 +2235,7 @@ def review_minutes_with_gemini(
         "Preserve project names explicitly and prefer known project names when text indicates them. "
         "cross_project_actions is an array of short actionable statements. "
         "noise_notes is an array of non-action memo lines that should not become tasks. "
+        "Output summary, key_points, action_candidates, and noise_notes in Japanese only. "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
         + (f"Project registry hints:\n{registry_context}" if registry_context else "")
     )
@@ -2234,6 +2277,7 @@ def extract_tasks_with_gemini_from_review(
         "Project must be one of Known projects when applicable; for internal MTG items, infer the specific project from project_sections instead of using a generic label. "
         "due_date must be YYYY-MM-DD or empty string. "
         "If due date is relative, infer date using Today(JST). "
+        "Output titles, notes, and subtasks in Japanese only. "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
         + (f"Project registry hints:\n{registry_context}" if registry_context else "")
     )
@@ -2278,6 +2322,7 @@ def extract_coverage_tasks_from_review(
         "Prefer one concrete task per actionable section when missing. "
         "Project must be specific (avoid generic TOKIWAGI for internal MTG if section suggests project). "
         "due_date must be YYYY-MM-DD or empty string. "
+        "Output titles and notes in Japanese only. "
         f"Today(JST): {today}. Default project: {default_project}. Known projects: {known}. "
         f"Existing titles: {existing_titles}. "
         + (f"Project registry hints:\n{registry_context}" if registry_context else "")
@@ -2387,12 +2432,20 @@ def adjudicate_review_candidates_with_gemini(
     prompt = (
         "You are adjudicating borderline task candidates from Japanese internal meeting minutes. "
         "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note. "
+        "The user acts like a translator / coordinator / PM-style operator, so keep candidates when the user's next action is needed. "
+        "User-owned next actions include confirming, coordinating, replying, requesting, organizing, investigating, deciding, and preparing. "
+        "Even if another person or team is mentioned, keep the candidate when the user's next action is to coordinate, confirm, or communicate. "
         "Only include candidates that should become actionable tasks for the user. "
-        "Drop report-only/status-only/progress-only items. "
+        "Drop only clearly report-only/status-only/progress-only/background-only/completed items with no next action for the user. "
         "Rewrite vague titles into concrete action titles when the surrounding review context makes them clear enough. "
         "Do NOT emit standalone timing-only fragments like '3月13日のHP公開後に実施'; fold timing into the actionable task title or note instead. "
-        "Questions can remain tasks only when they clearly imply a follow-up investigation, decision, or work item for the user. "
+        "Questions can remain tasks when they imply a needed investigation, decision, confirmation, or follow-up owned by the user; prefer rewrite over drop. "
+        "When a candidate is ambiguous between drop and keep, prefer keeping it if the section context suggests a concrete next step. "
+        "Generic schedule items can remain only if you can rewrite them into a specific schedule/coordination task using the section context. "
+        "If your first instinct would drop every candidate, keep the top 1-2 high-confidence actionable candidates instead of returning an empty array. "
         "Prefer the section project context over generic keyword matches. "
+        "Strong project hints include: ボーネルンド=スマレジ/OBIC/DIPRO/POS, ミッド・ガーデン・ジャパン=MID/堀之内店/Liny/Synergy/AI店長, 瑞鳳社ーデータ分析=Yellowfin/インサイト機能/Mapbox, SNW様-第三者広告配信=DSP/IDFA/くふうジオデータ/一広. "
+        "BT振興会系は Mooovi と単発案件を分けて考え、チケットショップは Mooovi に自動で寄せないこと. "
         "Avoid duplicates against existing titles. "
         "Project must be one of Known projects when applicable. "
         "due_date must be YYYY-MM-DD or empty string. "
@@ -2444,6 +2497,109 @@ def adjudicate_review_candidates_with_gemini(
             )
         return cleaned, raw
     return None, raw
+
+
+def _review_candidate_fallback_priority(item: Dict[str, Any]) -> int:
+    title = _clean_line(str(item.get("title") or ""))
+    note = _clean_line(str(item.get("note") or ""))
+    score = 0
+    if re.search(r"\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2}", title):
+        score += 3
+    if _has_action_signal(title):
+        score += 2
+    if any(k in title for k in ("確認", "申請", "調査", "整理", "送信", "実施", "作成", "判断")):
+        score += 2
+    if "section_project:" in note:
+        score += 1
+    if "review.project_sections.action_candidates" in note:
+        score += 1
+    if _looks_report_only_title(title):
+        score -= 5
+    return score
+
+
+def fallback_review_candidates_for_empty_adjudication(
+    review_tasks: List[Dict[str, Any]],
+    limit: int = 2,
+) -> List[Dict[str, Any]]:
+    scored: List[Tuple[int, Dict[str, Any]]] = []
+    for item in review_tasks:
+        if not isinstance(item, dict):
+            continue
+        title = _clean_line(str(item.get("title") or ""))
+        if not title or _looks_report_only_title(title):
+            continue
+        score = _review_candidate_fallback_priority(item)
+        if score <= 0:
+            continue
+        scored.append((score, item))
+    scored.sort(key=lambda pair: (-pair[0], str(pair[1].get("title") or "")))
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for _, item in scored:
+        key = _task_key_for_merge(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if limit > 0 and len(out) >= limit:
+            break
+    return out
+
+
+def fallback_review_section_rescue_tasks(
+    review: Dict[str, Any],
+    default_project: str,
+    known_projects: List[str],
+    max_items: int = 3,
+) -> List[Dict[str, Any]]:
+    sections = review.get("project_sections") or []
+    if not isinstance(sections, list):
+        return []
+    candidates: List[Dict[str, Any]] = []
+    for sec in sections:
+        if not isinstance(sec, dict):
+            continue
+        project = _resolve_project_name(
+            str(sec.get("project") or ""),
+            "",
+            "",
+            "",
+            default_project,
+            known_projects,
+        )
+        raw_lines: List[str] = []
+        for key in ("action_candidates", "key_points"):
+            values = sec.get(key) or []
+            if isinstance(values, list):
+                raw_lines.extend([str(v or "") for v in values if str(v or "").strip()])
+        for clause in _extract_action_clauses("\n".join(raw_lines), known_projects, max_items=8):
+            if _looks_report_only_title(clause):
+                continue
+            candidates.append(
+                {
+                    "title": clause[:120],
+                    "due_date": "",
+                    "project": project,
+                    "assignee": "私",
+                    "note": f"review.section_rescue\nsection_project:{project}",
+                }
+            )
+    scored = sorted(
+        candidates,
+        key=lambda item: (-_review_candidate_fallback_priority(item), str(item.get("title") or "")),
+    )
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for item in scored:
+        key = _task_key_for_merge(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if max_items > 0 and len(out) >= max_items:
+            break
+    return out
 
 
 def local_recall_boost_tasks(
@@ -2596,6 +2752,11 @@ def summarize_tasks(
             )
             if adjudicated is not None:
                 adjudicated_review_tasks = adjudicated
+                if not adjudicated_review_tasks:
+                    adjudicated_review_tasks = fallback_review_candidates_for_empty_adjudication(
+                        review_tasks,
+                        limit=int(env.get("MINUTES_REVIEW_ADJUDICATE_EMPTY_FALLBACK", "2")),
+                    )
         merged_review_tasks = _merge_tasks(
             local_hint_tasks,
             llm_tasks,
@@ -2619,6 +2780,19 @@ def summarize_tasks(
                     coverage_tasks,
                     limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
                 )
+        if not merged_review_tasks:
+            rescue_tasks = fallback_review_section_rescue_tasks(
+                review,
+                working_default_project,
+                working_known_projects,
+                max_items=int(env.get("MINUTES_REVIEW_EMPTY_RESCUE_MAX_TASKS", "3")),
+            )
+            if rescue_tasks:
+                merged_review_tasks = _merge_tasks(
+                    merged_review_tasks,
+                    rescue_tasks,
+                    limit=int(env.get("MINUTES_MAX_TASKS_PER_DOC", "20")),
+                )
         if merged_review_tasks:
             return merged_review_tasks, json.dumps(
                 {
@@ -2639,6 +2813,7 @@ def summarize_tasks(
         "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note, subtasks (optional). "
         "Each subtask uses the same schema (title, due_date, project, assignee, note). "
         "due_date must be YYYY-MM-DD or empty string. "
+        "Output titles, notes, and subtasks in Japanese only. "
         f"Today is {today} (JST). "
         f"Default project: {working_default_project}. "
         f"Known projects: {known}. "
@@ -2677,6 +2852,7 @@ def summarize_tasks(
         "Do not include subtasks in this compact mode. "
         "Ignore pure status notes and background explanations. "
         "Prefer concise verb-led tasks. "
+        "Output titles and notes in Japanese only. "
         f"Today is {today} (JST). Default project: {working_default_project}. Known projects: {known}."
     )
     parsed_compact, raw_compact = _run_gemini_json_prompt_with_retry(
