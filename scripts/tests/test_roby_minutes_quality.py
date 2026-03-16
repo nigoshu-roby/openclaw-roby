@@ -143,6 +143,56 @@ class TestRobyMinutesQuality(TestCase):
         self.assertEqual(child_projects.count("BT振興会-Mooovi"), 2)
         self.assertEqual(child_projects.count("ボーネルンド"), 1)
 
+    def test_group_leaf_minutes_tasks_skips_auto_parent_when_explicit_parent_covers_same_children(self):
+        extracted = [
+            {
+                "title": "ボーネルンド / スマレジ導入に関する課題の確認と方針決定",
+                "project": "ボーネルンド",
+                "subtasks": [
+                    {"title": "スマレジとの打ち合わせを調整する", "project": "ボーネルンド"},
+                    {"title": "スマレジに確認する", "project": "ボーネルンド"},
+                ],
+            },
+            {"title": "スマレジとの打ち合わせを調整する", "project": "ボーネルンド", "assignee": "私"},
+            {"title": "スマレジに確認する", "project": "ボーネルンド", "assignee": "私"},
+        ]
+        grouped = self.mod._group_leaf_minutes_tasks_by_project(
+            extracted,
+            default_project="TOKIWAGI_MASTER",
+            source_title="2026/03/16 スマレジ画面の共有画面",
+        )
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(grouped[0]["title"], "ボーネルンド / スマレジ導入に関する課題の確認と方針決定")
+
+    def test_build_neuronic_tasks_prefers_descriptive_parent_over_generic_source_parent(self):
+        extracted = [
+            {
+                "title": "ボーネルンド / スマレジ導入に関する課題の確認と方針決定",
+                "project": "ボーネルンド",
+                "subtasks": [
+                    {"title": "スマレジとの打ち合わせを調整する", "project": "ボーネルンド", "assignee": "私"},
+                ],
+            },
+            {
+                "title": "ボーネルンド / 2026/03/16 スマレジ画面の共有画面",
+                "project": "ボーネルンド",
+                "subtasks": [
+                    {"title": "スマレジとの打ち合わせを調整する", "project": "ボーネルンド", "assignee": "私"},
+                ],
+            },
+        ]
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=extracted,
+            source="notion",
+            source_title="2026/03/16 スマレジ画面の共有画面",
+            source_url="https://www.notion.so/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+        )
+        parent_titles = [x.get("title") for x in tasks if x.get("parent_origin_id") is None]
+        self.assertEqual(parent_titles, ["ボーネルンド / スマレジ導入に関する課題の確認と方針決定"])
+
     def test_sanitize_reinfers_parent_project_from_subtasks(self):
         extracted = [
             {

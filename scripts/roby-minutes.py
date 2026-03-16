@@ -3065,10 +3065,21 @@ def _group_leaf_minutes_tasks_by_project(
 ) -> List[Dict[str, Any]]:
     grouped: List[Dict[str, Any]] = []
     flat_by_project: Dict[str, List[Dict[str, Any]]] = {}
+    explicit_parent_subtask_titles: Dict[str, set[str]] = {}
 
     for item in extracted:
         raw_subtasks = item.get("subtasks") or item.get("children") or []
         if isinstance(raw_subtasks, list) and raw_subtasks:
+            normalized_parent = _normalize_task_item(item, default_project)
+            project = normalized_parent.get("project") or default_project
+            titles = explicit_parent_subtask_titles.setdefault(project, set())
+            for sub in raw_subtasks:
+                if not isinstance(sub, dict):
+                    continue
+                sub_norm = _normalize_task_item(sub, project)
+                title = _clean_line(str(sub_norm.get("title") or ""))
+                if title:
+                    titles.add(title)
             grouped.append(item)
             continue
 
@@ -3079,6 +3090,23 @@ def _group_leaf_minutes_tasks_by_project(
         flat_by_project.setdefault(project, []).append(normalized)
 
     for project, subtasks in flat_by_project.items():
+        explicit_titles = explicit_parent_subtask_titles.get(project, set())
+        if explicit_titles:
+            merged_subtasks: List[Dict[str, Any]] = []
+            duplicate_count = 0
+            for sub in subtasks:
+                sub_title = _clean_line(str(sub.get("title") or ""))
+                if sub_title and sub_title in explicit_titles:
+                    duplicate_count += 1
+                    continue
+                merged_subtasks.append(sub)
+            # If every flat leaf is already covered by an explicit parent for the
+            # same project, skip building an auto-grouped duplicate parent.
+            if not merged_subtasks and duplicate_count:
+                continue
+            subtasks = merged_subtasks
+        if not subtasks:
+            continue
         parent_note = "自動グループ化: 同一議事録・同一プロジェクトの抽出タスクを親子化"
         visible_assignees = [
             _canonicalize_assignee(str(sub.get("assignee") or ""))
@@ -3278,11 +3306,30 @@ def build_neuronic_tasks(
                 effective_known_projects.append(child_project)
     effective_known_projects = list(dict.fromkeys([p for p in effective_known_projects if p]))
     grouped_extracted = _group_leaf_minutes_tasks_by_project(extracted, default_project, source_title)
+    preferred_parent_titles_by_project: Dict[str, str] = {}
+    generic_parent_title_by_project: Dict[str, str] = {}
+    for item in grouped_extracted:
+        normalized_item = _normalize_task_item(item, default_project)
+        title = _clean_line(str(normalized_item.get("title") or ""))
+        project = _canonical_project_display_name(str(normalized_item.get("project") or default_project))
+        if not title or not project:
+            continue
+        generic_title = _build_minutes_group_parent_title(project, source_title)
+        generic_parent_title_by_project[project] = generic_title
+        if title != generic_title:
+            preferred_parent_titles_by_project.setdefault(project, title)
     group_index = 0
     for item in grouped_extracted:
         normalized = _normalize_task_item(item, default_project)
         title = normalized.get("title")
         if not title:
+            continue
+        project_name = _canonical_project_display_name(str(normalized.get("project") or default_project))
+        generic_title = generic_parent_title_by_project.get(project_name, "")
+        preferred_title = preferred_parent_titles_by_project.get(project_name, "")
+        if preferred_title and generic_title and title == generic_title:
+            # Prefer the more descriptive parent produced from the same project
+            # over the fallback "project / source_title" grouping.
             continue
         subtasks = item.get("subtasks") or item.get("children") or []
         parent_assignee = normalized.get("assignee") or ""
