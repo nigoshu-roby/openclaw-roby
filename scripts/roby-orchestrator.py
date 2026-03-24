@@ -2168,9 +2168,10 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
     profile, profile_env = apply_minutes_llm_profile(env)
     child_env = dict(env)
     child_env.update(profile_env)
-    if child_env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1" and "MINUTES_LOCAL_PREPROCESS_ENABLE" not in env:
-        # Cron prioritizes freshness. Manual runs can still opt into local preprocessing.
-        child_env["MINUTES_LOCAL_PREPROCESS_ENABLE"] = child_env.get("ROBY_ORCH_MINUTES_CRON_LOCAL_PREPROCESS", "0") or "0"
+    if child_env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1":
+        cron_local_preprocess = env.get("ROBY_ORCH_MINUTES_CRON_LOCAL_PREPROCESS", "").strip()
+        if cron_local_preprocess:
+            child_env["MINUTES_LOCAL_PREPROCESS_ENABLE"] = cron_local_preprocess
     if child_env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1" and "MINUTES_DOC_TIMEOUT_SEC" not in env:
         child_env["MINUTES_DOC_TIMEOUT_SEC"] = child_env.get("ROBY_ORCH_MINUTES_CRON_DOC_TIMEOUT_SEC", "45") or "45"
 
