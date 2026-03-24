@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+import urllib.parse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +35,7 @@ DEFAULT_FORWARD_CMD = "python3 /Users/shu/OpenClaw/scripts/roby-mention-forward-
 DEFAULT_STATE_PATH = str(Path.home() / ".openclaw" / "roby" / "slack_events_state.json")
 DEFAULT_LOG_PATH = str(Path.home() / ".openclaw" / "roby" / "slack_events_runs.jsonl")
 STATE_LOCK = threading.Lock()
+INFLIGHT_EVENTS: set[tuple[str, str]] = set()
 
 
 def load_env_file(path: str = DEFAULT_ENV_FILE) -> None:
@@ -109,6 +111,7 @@ class Config:
     roby_script: str
     default_account: str
     allowed_channels: set[str]
+    backfill_channels: set[str]
     allowed_users: set[str]
     forward_cmd: str
     allow_plain_messages: bool
@@ -126,6 +129,7 @@ class Config:
         roby_script = os.getenv("ROBY_MAIL_SCRIPT", DEFAULT_ROBY_SCRIPT).strip() or DEFAULT_ROBY_SCRIPT
         default_account = os.getenv("ROBY_GMAIL_ACCOUNT", "").strip() or os.getenv("GOG_ACCOUNT", "").strip()
         allowed_channels = _csv_set("ROBY_ALLOWED_SLACK_CHANNELS")
+        backfill_channels = _csv_set("ROBY_SLACK_BACKFILL_CHANNELS")
         allowed_users = _csv_set("ROBY_ALLOWED_SLACK_USERS")
         forward_cmd = os.getenv("ROBY_MENTION_FORWARD_CMD", "").strip() or DEFAULT_FORWARD_CMD
         allow_plain_messages = _truthy("ROBY_ALLOW_PLAIN_MESSAGES", "1")
@@ -151,6 +155,7 @@ class Config:
             roby_script=roby_script,
             default_account=default_account,
             allowed_channels=allowed_channels,
+            backfill_channels=backfill_channels,
             allowed_users=allowed_users,
             forward_cmd=forward_cmd,
             allow_plain_messages=allow_plain_messages,
@@ -209,6 +214,30 @@ def conversations_history(token: str, channel: str, oldest: float, limit: int) -
     if not resp.get("ok"):
         raise RuntimeError(resp.get("error", "history_failed"))
     return list(resp.get("messages") or [])
+
+
+def auth_test(token: str) -> dict:
+    resp = slack_api_post_json(token, "auth.test", {})
+    if not resp.get("ok"):
+        raise RuntimeError(resp.get("error", "auth_test_failed"))
+    return resp
+
+
+def conversations_list(token: str, types: list[str], limit: int = 200) -> list[dict]:
+    items: list[dict] = []
+    cursor = ""
+    while True:
+        payload = {"exclude_archived": True, "limit": limit, "types": ",".join(types)}
+        if cursor:
+            payload["cursor"] = cursor
+        resp = slack_api_post_json(token, "conversations.list", payload)
+        if not resp.get("ok"):
+            raise RuntimeError(resp.get("error", "conversations_list_failed"))
+        items.extend(list(resp.get("channels") or []))
+        cursor = (((resp.get("response_metadata") or {})).get("next_cursor") or "").strip()
+        if not cursor:
+            break
+    return items
 
 
 def post_message(token: str, channel: str, text: str, thread_ts: str = "") -> None:
@@ -378,6 +407,25 @@ def should_skip_event(cfg: Config, channel: str, ts: str) -> bool:
     return _float_ts(ts) <= last_seen
 
 
+def claim_event(cfg: Config, channel: str, ts: str) -> bool:
+    key = (channel, ts)
+    with STATE_LOCK:
+        state = load_state(cfg.state_path)
+        last_seen = _float_ts((state.get("channels") or {}).get(channel, {}).get("last_seen_ts"))
+        if _float_ts(ts) <= last_seen:
+            return False
+        if key in INFLIGHT_EVENTS:
+            return False
+        INFLIGHT_EVENTS.add(key)
+        return True
+
+
+def release_event_claim(channel: str, ts: str) -> None:
+    key = (channel, ts)
+    with STATE_LOCK:
+        INFLIGHT_EVENTS.discard(key)
+
+
 def dispatch_mention(cfg: Config, event: Dict) -> None:
     channel = event.get("channel", "")
     user_id = event.get("user", "")
@@ -456,31 +504,123 @@ def handle_event(cfg: Config, ev: Dict, source: str) -> None:
         return
     if ev.get("bot_id") or ev.get("subtype"):
         return
-    if should_skip_event(cfg, channel, ts):
+    if not claim_event(cfg, channel, ts):
         return
-    if event_type == "app_mention":
-        dispatch_mention(cfg, ev)
-    elif event_type == "message" and cfg.allow_plain_messages:
-        dispatch_message(cfg, ev)
-    else:
+    processed = False
+    try:
+        if event_type == "app_mention":
+            dispatch_mention(cfg, ev)
+            processed = True
+        elif event_type == "message" and cfg.allow_plain_messages:
+            dispatch_message(cfg, ev)
+            processed = True
+        else:
+            return
+        append_log(cfg.log_path, {
+            "ts": int(time.time()),
+            "event_ts": ts,
+            "channel": channel,
+            "source": source,
+            "event_type": event_type,
+            "user": ev.get("user", ""),
+            "text": (ev.get("text", "") or "")[:500],
+        })
+    finally:
+        release_event_claim(channel, ts)
+
+
+def persist_known_channels(cfg: Config, channels: list[str], source: str) -> None:
+    if not channels:
         return
+    with STATE_LOCK:
+        state = load_state(cfg.state_path)
+        known = set(state.get("known_channels") or [])
+        known.update(channels)
+        state["known_channels"] = sorted(known)
+        save_state(cfg.state_path, state)
     append_log(cfg.log_path, {
         "ts": int(time.time()),
-        "event_ts": ts,
-        "channel": channel,
         "source": source,
-        "event_type": event_type,
-        "user": ev.get("user", ""),
-        "text": (ev.get("text", "") or "")[:500],
+        "known_channels": sorted(channels),
     })
+
+
+def _conversation_types_for_discovery() -> list[str]:
+    return ["public_channel", "private_channel", "mpim", "im"]
+
+
+def _conversation_is_direct(conversation: dict) -> bool:
+    return bool(conversation.get("is_im") or conversation.get("is_mpim"))
+
+
+def discover_recent_backfill_channels(cfg: Config) -> list[str]:
+    try:
+        bot_user_id = str(auth_test(cfg.bot_token).get("user_id") or "").strip()
+    except Exception as exc:
+        append_log(cfg.log_path, {
+            "ts": int(time.time()),
+            "source": "channel_discovery",
+            "error": str(exc),
+        })
+        return []
+    if not bot_user_id:
+        return []
+    channels: list[str] = []
+    oldest = max(0.0, time.time() - cfg.backfill_lookback_sec)
+    try:
+        conversations = conversations_list(cfg.bot_token, _conversation_types_for_discovery())
+    except Exception as exc:
+        append_log(cfg.log_path, {
+            "ts": int(time.time()),
+            "source": "channel_discovery",
+            "error": str(exc),
+        })
+        return []
+    for conversation in conversations:
+        channel_id = str(conversation.get("id") or "").strip()
+        if not channel_id:
+            continue
+        if _conversation_is_direct(conversation):
+            channels.append(channel_id)
+            continue
+        try:
+            messages = conversations_history(cfg.bot_token, channel_id, oldest=oldest, limit=min(20, cfg.backfill_max_messages))
+        except Exception:
+            continue
+        mention = f"<@{bot_user_id}>"
+        if any(mention in str((msg.get("text") or "")) for msg in messages):
+            channels.append(channel_id)
+    return sorted(set(channels))
+
+
+def resolve_backfill_channels(cfg: Config) -> tuple[list[str], str]:
+    if cfg.backfill_channels:
+        return sorted(cfg.backfill_channels), "backfill_channels"
+    if cfg.allowed_channels:
+        return sorted(cfg.allowed_channels), "allowed_channels"
+    with STATE_LOCK:
+        state = load_state(cfg.state_path)
+        known_channels = sorted(set(state.get("known_channels") or []))
+    if known_channels:
+        return known_channels, "state_known_channels"
+    discovered = discover_recent_backfill_channels(cfg)
+    if discovered:
+        persist_known_channels(cfg, discovered, "channel_discovery")
+        return discovered, "discovered_recent_activity"
+    return [], "no_channels"
 
 
 def backfill_channels(cfg: Config, reason: str) -> None:
     with STATE_LOCK:
         state = load_state(cfg.state_path)
-        known_channels = list(state.get("known_channels") or [])
         per_channel = dict(state.get("channels") or {})
-    channels = sorted(cfg.allowed_channels or set(known_channels))
+    channels, channel_source = resolve_backfill_channels(cfg)
+    append_log(cfg.log_path, {
+        "ts": int(time.time()),
+        "source": f"backfill:{reason}",
+        "channel_resolution": channel_source,
+        "channel_count": len(channels),
+    })
     if not channels:
         return
     now = time.time()
@@ -591,20 +731,27 @@ def main() -> int:
     parser.add_argument("--host", default=os.getenv("ROBY_SLACK_HOST", DEFAULT_HOST))
     parser.add_argument("--port", type=int, default=int(os.getenv("ROBY_SLACK_PORT", str(DEFAULT_PORT))))
     parser.add_argument("--path", default=os.getenv("ROBY_SLACK_EVENTS_PATH", DEFAULT_EVENTS_PATH))
+    parser.add_argument("--backfill-once", action="store_true", help="Run one backfill pass and exit.")
+    parser.add_argument("--backfill-reason", default="manual", help="Reason label to use with --backfill-once.")
     args = parser.parse_args()
 
     cfg = Config.from_env()
     Handler.cfg = cfg
     Handler.path_events = args.path
 
+    if args.backfill_once:
+        backfill_channels(cfg, reason=args.backfill_reason)
+        print(f"[roby-events] backfill_once reason={args.backfill_reason}", flush=True)
+        return 0
+
     start_backfill_loop(cfg)
 
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"[roby-events] listening on http://{args.host}:{args.port}{args.path}")
-    print(f"[roby-events] roby_script={cfg.roby_script}")
-    print("[roby-events] commands: help / triage / ask / dev")
-    print(f"[roby-events] plain_messages={cfg.allow_plain_messages}")
-    print(f"[roby-events] backfill_on_start={cfg.backfill_on_start} interval={cfg.backfill_interval_sec}s max={cfg.backfill_max_messages}")
+    print(f"[roby-events] listening on http://{args.host}:{args.port}{args.path}", flush=True)
+    print(f"[roby-events] roby_script={cfg.roby_script}", flush=True)
+    print("[roby-events] commands: help / triage / ask / dev", flush=True)
+    print(f"[roby-events] plain_messages={cfg.allow_plain_messages}", flush=True)
+    print(f"[roby-events] backfill_on_start={cfg.backfill_on_start} interval={cfg.backfill_interval_sec}s max={cfg.backfill_max_messages}", flush=True)
     srv.serve_forever()
     return 0
 
