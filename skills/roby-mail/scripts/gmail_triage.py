@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import argparse
 import json
 import os
@@ -744,6 +745,19 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     summary = data.get("summary", "")
     if not summary:
         return []
+    # summary should be JSON array
+    try:
+        parsed = json.loads(summary)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        m = re.search(r"\[.*\]", summary, re.DOTALL)
+        if m:
+            try:
+                parsed = json.loads(m.group(0))
+                return parsed if isinstance(parsed, list) else []
+            except Exception:
+                return []
+        return []
 
 
 def extract_explicit_email_actions(
@@ -803,18 +817,6 @@ def extract_explicit_email_actions(
             add_action("依頼内容を確認して対応する")
 
     return actions
-    # summary should be JSON array
-    try:
-        return json.loads(summary)
-    except Exception:
-        # try to extract JSON array
-        m = re.search(r"\[.*\]", summary, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                return []
-        return []
 
 
 GENERIC_ACTION_PREFIXES = (
