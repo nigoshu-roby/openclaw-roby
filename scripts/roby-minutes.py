@@ -2436,6 +2436,9 @@ def adjudicate_review_candidates_with_gemini(
         "User-owned next actions include confirming, coordinating, replying, requesting, organizing, investigating, deciding, and preparing. "
         "Even if another person or team is mentioned, keep the candidate when the user's next action is to coordinate, confirm, or communicate. "
         "Only include candidates that should become actionable tasks for the user. "
+        "A task is the smallest manageable unit of work that has a clear next action, an owner, a cost if left undone, and a checkable notion of done. "
+        "Use task when the text implies a concrete next action for the user such as confirming, coordinating, replying, requesting, organizing, investigating, deciding, preparing, or proposing. "
+        "Use review_only/drop thinking for pure background sharing, status-only reporting, commentary, retrospective notes, completed work, or work owned only by someone else. "
         "Drop only clearly report-only/status-only/progress-only/background-only/completed items with no next action for the user. "
         "Rewrite vague titles into concrete action titles when the surrounding review context makes them clear enough. "
         "Do NOT emit standalone timing-only fragments like '3月13日のHP公開後に実施'; fold timing into the actionable task title or note instead. "
@@ -2808,7 +2811,9 @@ def summarize_tasks(
 
     prompt = (
         "Extract actionable tasks from the meeting minutes. "
-        "Ignore pure status notes, commentary, criticism, retrospective feedback, and context-only memo lines. "
+        "A task is the smallest manageable unit of work that has a clear next action, an owner, a cost if left undone, and a checkable notion of done. "
+        "Ignore pure status notes, commentary, criticism, retrospective feedback, background sharing, and context-only memo lines. "
+        "Do not create tasks for completed work, vague memo fragments, or work owned only by someone else. "
         "If tasks are related, group them under a parent task with a `subtasks` array. "
         "Return ONLY a JSON array. Each item has keys: title, due_date, project, assignee, note, subtasks (optional). "
         "Each subtask uses the same schema (title, due_date, project, assignee, note). "
