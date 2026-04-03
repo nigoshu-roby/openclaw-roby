@@ -509,6 +509,33 @@ def strip_html(html: str) -> str:
     return text
 
 
+def _run_gog_json_with_retry(cmd: List[str], env: Dict[str, str], *, timeout: int = 60, retries: int = 2, retry_delay_sec: float = 2.0) -> bytes:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            return subprocess.check_output(cmd, env=env, timeout=timeout)
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            stderr = ""
+            if exc.stderr:
+                try:
+                    stderr = exc.stderr.decode("utf-8", "ignore") if isinstance(exc.stderr, bytes) else str(exc.stderr)
+                except Exception:
+                    stderr = ""
+            auth_flake = exc.returncode == 4 or "No auth for gmail" in stderr or "No auth for drive" in stderr
+            if attempt >= retries or not auth_flake:
+                raise
+            time.sleep(retry_delay_sec)
+        except subprocess.TimeoutExpired as exc:
+            last_error = exc
+            if attempt >= retries:
+                raise
+            time.sleep(retry_delay_sec)
+    if last_error:
+        raise last_error
+    raise RuntimeError("unreachable gog retry helper")
+
+
 def gog_search(account: str, query: str, max_results: int, env: Dict[str, str]) -> List[Dict[str, Any]]:
     cmd = [
         "gog",
@@ -526,7 +553,7 @@ def gog_search(account: str, query: str, max_results: int, env: Dict[str, str]) 
     if account:
         cmd += ["--account", account]
     try:
-        out = subprocess.check_output(cmd, env=env, timeout=60)
+        out = _run_gog_json_with_retry(cmd, env, timeout=60, retries=2)
         return json.loads(out)
     except subprocess.TimeoutExpired:
         return []

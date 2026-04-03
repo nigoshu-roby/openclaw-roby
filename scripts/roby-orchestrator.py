@@ -176,6 +176,14 @@ def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def _timeout_output_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "ignore")
+    return str(value)
+
+
 def float_from_env(value: Optional[str], default: float) -> float:
     if value is None:
         return default
@@ -2184,7 +2192,7 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
         "executed": False,
     }
     if execute:
-        timeout_sec = int((env.get("ROBY_ORCH_GMAIL_TIMEOUT_SEC", "240") or "240").strip())
+        timeout_sec = int((env.get("ROBY_ORCH_MINUTES_TIMEOUT_SEC", "1800") or "1800").strip())
         try:
             proc = subprocess.run(
                 cmd,
@@ -2203,8 +2211,8 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
             result["executed"] = True
             result["ok"] = False
             result["timed_out"] = True
-            result["stdout"] = exc.stdout or ""
-            result["stderr"] = (exc.stderr or "") + f"\nGmail pipeline timed out after {timeout_sec}s"
+            result["stdout"] = _timeout_output_text(exc.stdout)
+            result["stderr"] = _timeout_output_text(exc.stderr) + f"\nMinutes pipeline timed out after {timeout_sec}s"
             result["returncode"] = 124
     return result
 
@@ -2283,8 +2291,8 @@ def handle_gmail_pipeline(message: str, env: Dict[str, str], execute: bool, verb
             result["executed"] = True
             result["ok"] = False
             result["timed_out"] = True
-            result["stdout"] = exc.stdout or ""
-            result["stderr"] = (exc.stderr or "") + f"\nGmail pipeline timed out after {timeout_sec}s"
+            result["stdout"] = _timeout_output_text(exc.stdout)
+            result["stderr"] = _timeout_output_text(exc.stderr) + f"\nGmail pipeline timed out after {timeout_sec}s"
             result["returncode"] = 124
     return result
 

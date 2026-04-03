@@ -1753,6 +1753,44 @@ def heuristic_tasks_from_text(
     return tasks
 
 
+def _run_gog_with_retry(
+    cmd: List[str],
+    *,
+    env: Dict[str, str],
+    timeout: int = 60,
+    retries: int = 2,
+    retry_delay_sec: float = 2.0,
+    expect_output: bool = True,
+):
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            if expect_output:
+                return subprocess.check_output(cmd, env=env, timeout=timeout)
+            subprocess.check_call(cmd, env=env, timeout=timeout)
+            return b""
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            stderr = ""
+            if exc.stderr:
+                try:
+                    stderr = exc.stderr.decode("utf-8", "ignore") if isinstance(exc.stderr, bytes) else str(exc.stderr)
+                except Exception:
+                    stderr = ""
+            auth_flake = exc.returncode == 4 or "No auth for drive" in stderr or "No auth for docs" in stderr
+            if attempt >= retries or not auth_flake:
+                raise
+            time.sleep(retry_delay_sec)
+        except subprocess.TimeoutExpired as exc:
+            last_error = exc
+            if attempt >= retries:
+                raise
+            time.sleep(retry_delay_sec)
+    if last_error:
+        raise last_error
+    raise RuntimeError("unreachable gog retry helper")
+
+
 def drive_search_docs(folder_id: str, env: Dict[str, str], account: str, since_iso: str, max_docs: int) -> List[Dict[str, Any]]:
     folder_id = folder_id.strip()
     query = (
@@ -1773,7 +1811,7 @@ def drive_search_docs(folder_id: str, env: Dict[str, str], account: str, since_i
     ]
     if account:
         cmd += ["--account", account]
-    out = subprocess.check_output(cmd, env=env, timeout=60)
+    out = _run_gog_with_retry(cmd, env=env, timeout=60)
     return json.loads(out)
 
 
@@ -1784,7 +1822,7 @@ def fetch_drive_file_metadata(doc_id: str, env: Dict[str, str], account: str) ->
     cmd = ["gog", "drive", "get", doc_id, "--json", "--results-only", "--no-input"]
     if account:
         cmd += ["--account", account]
-    out = subprocess.check_output(cmd, env=env, timeout=60)
+    out = _run_gog_with_retry(cmd, env=env, timeout=60)
     data = json.loads(out)
     return data if isinstance(data, dict) else {}
 
@@ -1794,7 +1832,7 @@ def export_doc_text(doc_id: str, env: Dict[str, str], account: str) -> str:
     cmd = ["gog", "docs", "export", doc_id, "--format", "txt", "--out", str(out_path), "--no-input"]
     if account:
         cmd += ["--account", account]
-    subprocess.check_call(cmd, env=env, timeout=60)
+    _run_gog_with_retry(cmd, env=env, timeout=60, expect_output=False)
     text = out_path.read_text(encoding="utf-8", errors="ignore")
     try:
         out_path.unlink()
