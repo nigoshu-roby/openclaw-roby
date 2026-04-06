@@ -176,6 +176,12 @@ ACTIONABLE_NOTICE_HINTS = [
     "ミーティングの件",
 ]
 
+NON_ACTIONABLE_SUBJECT_PATTERNS = [
+    r"(?:自動)?支払い.*完了",
+    r"フィードで.*チェックしよう",
+    r"見逃したコンテンツ",
+]
+
 EXPLICIT_ACTION_REQUEST_PATTERNS = (
     r"(契約書|申込書|見積書)\s*(?:の)?\s*(準備|送付|再送|返送|提出|確認)\s*(?:を)?\s*(?:お願いします|お願い致します|お願いいたします|ください)",
     r"(準備|送付|再送|返送|提出|署名|押印|記入|共有)\s*(?:を)?\s*(?:お願いします|お願い致します|お願いいたします|ください)",
@@ -1594,6 +1600,10 @@ def classify_message(
     )
     is_chatwork_mail = "chatwork" in sender_lower or "ns.chatwork.com" in sender_lower
     is_chatwork_mention = is_chatwork_mail and any(hint in text for hint in CHATWORK_MENTION_HINTS)
+    is_non_actionable_subject = any(
+        re.search(pattern, subject_lower)
+        for pattern in NON_ACTIONABLE_SUBJECT_PATTERNS
+    )
 
     if is_calendar_response:
         return "archive", _dedupe_tags(tags + ["rule:calendar_response"]), False, "calendar_response", meta
@@ -1605,6 +1615,8 @@ def classify_message(
         return "archive", _dedupe_tags(tags + ["rule:internal_instagram_recap_archive"]), False, "internal_instagram_recap_archive", meta
     if is_chatwork_mail and not is_chatwork_mention:
         return "archive", _dedupe_tags(tags + ["rule:chatwork_non_mention_archive"]), False, "chatwork_non_mention_archive", meta
+    if is_non_actionable_subject:
+        return "archive", _dedupe_tags(tags + ["rule:non_actionable_subject_archive"]), False, "non_actionable_subject_archive", meta
 
     is_autoro_error_notice = "autoro" in header_text and "スケジュールエラー通知" in subject_lower
     override_category, override_rule = match_user_override(subject, sender, rules or {}, cc=cc)
