@@ -8,8 +8,8 @@ import subprocess
 import sys
 import time
 import hashlib
+import tempfile
 from datetime import datetime, timedelta
-from email.utils import parseaddr
 from html import unescape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -19,13 +19,39 @@ if str(OPENCLAW_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(OPENCLAW_SCRIPTS_DIR))
 
 from roby_context_seed import load_context_seed
+from roby_gmail_classify import (
+    apply_local_preclassify_result,
+    build_email_signals,
+    decide_work_bucket,
+    detect_early_archive_rule,
+    detect_related_tools,
+    detect_reply_intent,
+)
+from roby_gmail_context import (
+    apply_contact_override,
+    apply_project_override,
+    build_context_project_hints,
+    build_context_sender_hints,
+    contact_importance,
+    match_context_projects,
+)
+from roby_gmail_tasks import (
+    build_tasks,
+    cap_extracted_actions,
+    decide_task_gate,
+    extract_explicit_email_actions,
+    normalize_extracted_actions,
+    summarize_tasks,
+)
 from roby_local_first import env_flag as shared_env_flag, int_from_env as shared_int_from_env, run_ollama_json
+from roby_neuronic import build_neuronic_headers, build_neuronic_items, get_neuronic_urls, post_neuronic_items
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
 CONTACT_INDEX_PATH = Path.home() / ".openclaw" / "roby" / "gmail_contact_index.json"
+REPLY_REVIEW_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "roby-mail-reply-review.py"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
@@ -44,11 +70,14 @@ DEFAULT_MAX = 50
 
 WORK_BUCKETS = ("archive", "digest", "review", "task")
 WORK_BUCKET_LABELS = {
-    "archive": "アーカイブ候補",
-    "digest": "後で確認",
+    "archive": "一括保管",
+    "digest": "後で読む",
     "review": "要確認",
-    "task": "タスク化",
+    # Gmail labels should stay simple: actionable mail is marked as review,
+    # while the task/reply distinction is handled by PBS/Neuronic.
+    "task": "要確認",
 }
+MANAGED_GMAIL_LABELS = tuple(sorted(set(WORK_BUCKET_LABELS.values())))
 
 
 def build_run_id(prefix: str = "gmail") -> str:
@@ -158,6 +187,11 @@ PROMO_SUBJECT_HINTS = [
     "アンケート",
     "お知らせが",
     "実践を語る",
+    "30% off",
+    "discount",
+    "割引",
+    "キャンセル保険",
+    "一括設置",
 ]
 
 ACTIONABLE_NOTICE_HINTS = [
@@ -183,8 +217,10 @@ NON_ACTIONABLE_SUBJECT_PATTERNS = [
 ]
 
 EXPLICIT_ACTION_REQUEST_PATTERNS = (
-    r"(契約書|申込書|見積書)\s*(?:の)?\s*(準備|送付|再送|返送|提出|確認)\s*(?:を)?\s*(?:お願いします|お願い致します|お願いいたします|ください)",
+    r"(契約書|申込書|見積書|発注書)\s*(?:の)?\s*(準備|送付|再送|返送|提出|確認)\s*(?:を)?\s*(?:お願いします|お願い致します|お願いいたします|ください|いただけます)",
     r"(準備|送付|再送|返送|提出|署名|押印|記入|共有)\s*(?:を)?\s*(?:お願いします|お願い致します|お願いいたします|ください)",
+    r"(日程候補|候補日|候補日時)\s*(?:を)?\s*(?:[0-9０-９一二三四五六七八九十]+つほど)?\s*(?:いただけます|頂けます|お願いします|お願いいたします)",
+    r"(打ち合わせ|ミーティング).*?(日程候補|候補日|候補日時)",
 )
 
 ALERT_HINTS = [
@@ -201,6 +237,7 @@ ALERT_HINTS = [
 EXPLICIT_REPLY_PATTERNS = (
     r"(ご返信|返信|ご返答|返答|ご回答|回答)\s*(?:を)?\s*(?:お願いします|ください|願います|お願いいたします|いただけますか|頂けますか)",
     r"(返信|返答|回答)\s*(?:期日|期限|締切|締め切り|by)\b",
+    r"(日程候補|候補日|候補日時)\s*(?:を)?\s*(?:[0-9０-９一二三四五六七八九十]+つほど)?\s*(?:いただけます|頂けます|お願いします|お願いいたします)",
     r"(please|kindly)\s+reply\b",
     r"reply\s+(?:requested|required|needed)\b",
     r"respond\s+(?:by|required|needed)\b",
@@ -218,6 +255,10 @@ PROMO_REPLY_SUPPRESS_HINTS = (
     "キャンペーン",
     "event",
     "イベント",
+    "discount",
+    "割引",
+    "キャンセル保険",
+    "一括設置",
 )
 
 CHATWORK_MENTION_HINTS = (
@@ -250,6 +291,7 @@ PROMO_SENDER_DOMAINS = [
     "mail.instagram.com",
     "stream.co.jp",
     "shein.com",
+    "mail.nordvpn.com",
 ]
 
 RULE_BUCKET_KEYS = ("sender_domains", "sender_contains", "subject_contains", "subject_regex")
@@ -261,6 +303,14 @@ DEFAULT_RULES_TEMPLATE: Dict[str, Dict[str, List[str]]] = {
             "yads-no-reply@mail.yahoo.co.jp",
             "blends-info@toridori.co.jp",
             "hello@mapbox.com",
+            "asobi-yoyaku@bornelund.co.jp",
+            "contact@jp.sansan.com",
+            "just-enterprise@mail.justsystems.com",
+            "dep-mk@iridge.jp",
+            "noreply-mfw-con@moneyforward.co.jp",
+            "freee@freee.co.jp",
+            "info@invox.co.jp",
+            "info@social-db.co.jp",
         ],
         "subject_contains": [
             "申込受付中",
@@ -578,132 +628,6 @@ def load_contact_index(path: Path | None = None) -> Dict[str, Any]:
     return {}
 
 
-def build_context_sender_hints(seed: Dict[str, Any] | None) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
-    sender_hints: Dict[str, Dict[str, Any]] = {}
-    domain_hints: Dict[str, Dict[str, Any]] = {}
-    if not isinstance(seed, dict):
-        return sender_hints, domain_hints
-    for row in ((seed.get("email") or {}).get("important_senders") or []):
-        if not isinstance(row, dict):
-            continue
-        importance = str(row.get("importance") or "").strip().lower()
-        name = str(row.get("name") or "").strip()
-        company = str(row.get("company") or "").strip()
-        topics = str(row.get("topics") or "").strip()
-        emails = [str(x).strip().lower() for x in (row.get("emails") or []) if str(x).strip()]
-        domains = [str(x).strip().lower() for x in (row.get("domains") or []) if str(x).strip()]
-        payload = {
-            "name": name,
-            "company": company,
-            "importance": importance,
-            "topics": topics,
-        }
-        for email in emails:
-            sender_hints[email] = payload
-        for domain in domains:
-            domain_hints.setdefault(domain, payload)
-    return sender_hints, domain_hints
-
-
-def contact_importance(
-    thread_id: str,
-    sender: str,
-    index: Dict[str, Any] | None,
-    *,
-    context_sender_hints: Dict[str, Dict[str, Any]] | None = None,
-    context_domain_hints: Dict[str, Dict[str, Any]] | None = None,
-) -> Dict[str, Any]:
-    info = {
-        "known": False,
-        "thread_replied": False,
-        "sender_email": "",
-        "sender_domain": "",
-        "sender_thread_count": 0,
-        "domain_thread_count": 0,
-        "tier": "none",
-        "score": 0,
-        "context_seed": False,
-    }
-    _sender_name, sender_email = parseaddr(sender or "")
-    sender_email = (sender_email or "").strip().lower()
-    sender_domain = sender_email.split("@", 1)[1] if "@" in sender_email else ""
-    thread_index = (index or {}).get("thread_index") or {}
-    sender_index = (index or {}).get("sender_index") or {}
-    domain_index = (index or {}).get("domain_index") or {}
-    thread_info = thread_index.get((thread_id or "").strip())
-    sender_info = sender_index.get(sender_email, {})
-    domain_info = domain_index.get(sender_domain, {})
-
-    info["sender_email"] = sender_email
-    info["sender_domain"] = sender_domain
-    info["thread_replied"] = bool(thread_info)
-    info["sender_thread_count"] = int(sender_info.get("thread_count", 0) or 0)
-    info["domain_thread_count"] = int(domain_info.get("thread_count", 0) or 0)
-    info["known"] = info["thread_replied"] or info["sender_thread_count"] > 0 or info["domain_thread_count"] > 0
-
-    score = 0
-    if info["thread_replied"]:
-        score += 6
-    if info["sender_thread_count"] >= 6:
-        score += 4
-    elif info["sender_thread_count"] >= 3:
-        score += 3
-    elif info["sender_thread_count"] >= 1:
-        score += 2
-    if info["domain_thread_count"] >= 12:
-        score += 3
-    elif info["domain_thread_count"] >= 6:
-        score += 2
-    elif info["domain_thread_count"] >= 2:
-        score += 1
-
-    context_sender = (context_sender_hints or {}).get(sender_email, {})
-    context_domain = (context_domain_hints or {}).get(sender_domain, {})
-    context_match = context_sender or context_domain
-    if context_match:
-        info["known"] = True
-        info["context_seed"] = True
-        importance = str(context_match.get("importance") or "").lower()
-        if importance == "高":
-            score = max(score, 6)
-        elif importance == "中":
-            score = max(score, 4)
-        elif importance == "低":
-            score = max(score, 2)
-
-    info["score"] = score
-    if score >= 8:
-        info["tier"] = "high"
-    elif score >= 4:
-        info["tier"] = "medium"
-    elif score >= 2:
-        info["tier"] = "low"
-    return info
-
-
-def apply_contact_override(
-    category: str,
-    tags: List[str],
-    meta: Dict[str, Any],
-    contact_meta: Dict[str, Any],
-    *,
-    is_noreply: bool,
-) -> Tuple[str, List[str], Dict[str, Any]]:
-    if not contact_meta.get("known"):
-        return category, tags, meta
-    tier = contact_meta.get("tier")
-    if category == "archive":
-        if contact_meta.get("thread_replied") or (tier in {"high", "medium"} and not is_noreply):
-            category = "needs_review"
-            tags = _dedupe_tags(tags + ["contact:override"])
-            meta["contact_reason"] = "known_contact_promoted_from_archive"
-    elif category == "later_check" and tier in {"high", "medium"}:
-        category = "needs_review"
-        tags = _dedupe_tags(tags + ["contact:override"])
-        meta["contact_reason"] = "known_contact_promoted_from_later_check"
-    return category, tags, meta
-
-
 def archive_thread(account: str, thread_id: str, env: Dict[str, str]) -> None:
     cmd = [
         "gog",
@@ -720,6 +644,129 @@ def archive_thread(account: str, thread_id: str, env: Dict[str, str]) -> None:
         cmd += ["--account", account]
     timeout_sec = int((env.get("GMAIL_TRIAGE_ARCHIVE_TIMEOUT_SEC", "20") or "20").strip())
     subprocess.run(cmd, env=env, check=True, timeout=timeout_sec)
+
+
+def label_changes_for_work_bucket(
+    work_bucket: str,
+    *,
+    archive_digest: bool = True,
+) -> Tuple[List[str], List[str]]:
+    label = WORK_BUCKET_LABELS.get(work_bucket, "")
+    add = [label] if label else []
+    remove = [other for other in MANAGED_GMAIL_LABELS if other != label]
+    if work_bucket == "digest" and archive_digest:
+        remove.append("INBOX")
+    return add, remove
+
+
+def modify_thread_labels(
+    account: str,
+    thread_id: str,
+    env: Dict[str, str],
+    *,
+    add: List[str],
+    remove: List[str],
+) -> None:
+    add = [x for x in _dedupe_tags(add) if x]
+    remove = [x for x in _dedupe_tags(remove) if x]
+    if not thread_id or (not add and not remove):
+        return
+    cmd = [
+        "gog",
+        "gmail",
+        "labels",
+        "modify",
+        thread_id,
+        "--no-input",
+        "--force",
+    ]
+    if add:
+        cmd += ["--add", ",".join(add)]
+    if remove:
+        cmd += ["--remove", ",".join(remove)]
+    if account:
+        cmd += ["--account", account]
+    timeout_sec = int((env.get("GMAIL_TRIAGE_LABEL_TIMEOUT_SEC", "20") or "20").strip())
+    subprocess.run(cmd, env=env, check=True, timeout=timeout_sec)
+
+
+def should_propose_reply_review(
+    work_bucket: str,
+    raw_category: str,
+    needs_reply: bool,
+    meta: Dict[str, Any],
+    tags: List[str],
+    sender: str,
+) -> bool:
+    if work_bucket != "task":
+        return False
+    signals = meta.get("signals") if isinstance(meta, dict) else {}
+    if not isinstance(signals, dict):
+        signals = {}
+    sender_lower = (sender or "").lower()
+    if signals.get("is_noreply") or "no-reply" in sender_lower or "noreply" in sender_lower:
+        return False
+    if any(tag in {"tool:autoro", "tool:aws", "tool:google", "tool:notion"} for tag in tags):
+        return False
+    if raw_category == "needs_reply" or needs_reply:
+        return True
+    if signals.get("meeting_coordination") or signals.get("contract_followup_subject"):
+        return True
+    if signals.get("context_project_match") and (signals.get("business_review") or signals.get("actionable_notice")):
+        return True
+    return False
+
+
+def propose_reply_review(
+    account: str,
+    msg: Dict[str, Any],
+    body: str,
+    env: Dict[str, str],
+) -> Dict[str, Any]:
+    if not REPLY_REVIEW_SCRIPT.exists():
+        return {"ok": False, "skipped": True, "reason": "script_missing"}
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
+        f.write(body or "")
+        body_path = f.name
+    cmd = [
+        "python3",
+        str(REPLY_REVIEW_SCRIPT),
+        "propose",
+        "--message-id",
+        str(msg.get("id") or ""),
+        "--thread-id",
+        str(msg.get("threadId") or ""),
+        "--subject",
+        str(msg.get("subject") or ""),
+        "--sender",
+        str(msg.get("from") or ""),
+        "--body-file",
+        body_path,
+    ]
+    if account:
+        cmd += ["--account", account]
+    try:
+        proc = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=shared_int_from_env(env, "GMAIL_REPLY_REVIEW_PROPOSE_TIMEOUT_SEC", 90),
+        )
+        raw = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else "{}"
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {"ok": False, "raw": raw}
+        if proc.returncode != 0:
+            data["ok"] = False
+            data["error"] = (proc.stderr or proc.stdout or f"exit={proc.returncode}")[:1200]
+        return data
+    finally:
+        try:
+            Path(body_path).unlink()
+        except Exception:
+            pass
 
 
 def send_slack(webhook_url: str, text: str) -> None:
@@ -749,361 +796,14 @@ def format_gmail_slack_message(msg: Dict[str, Any], category: str) -> str:
     return "\n".join(lines)
 
 
-def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
-    prompt = (
-        "Extract actionable tasks from the message. "
-        "Return ONLY a JSON array of objects with keys: title, due_date, project, note, task_kind. "
-        "task_kind must be one of reply or action. "
-        "due_date must be YYYY-MM-DD or empty string. "
-        "Use concise, executable Japanese titles. "
-        "A task must have a clear next action, an owner, a cost if ignored, and a checkable notion of done. "
-        "Do not output generic titles like '対応' or '確認'. "
-        "Do not output pure status reports, completed work, or commentary as tasks. "
-        "If the mail asks for a concrete deliverable, include that deliverable in title. "
-        "Split sequential actions into multiple tasks when useful. "
-        "If no tasks, return []."
-    )
-    cmd = [
-        "summarize",
-        "-",
-        "--json",
-        "--plain",
-        "--metrics",
-        "off",
-        "--prompt",
-        prompt,
-        "--max-output-tokens",
-        "1200",
-    ]
-    out = subprocess.check_output(cmd, input=text.encode("utf-8"), env=env, timeout=60)
-    data = json.loads(out)
-    summary = data.get("summary", "")
-    if not summary:
-        return []
-    # summary should be JSON array
-    try:
-        parsed = json.loads(summary)
-        return parsed if isinstance(parsed, list) else []
-    except Exception:
-        m = re.search(r"\[.*\]", summary, re.DOTALL)
-        if m:
-            try:
-                parsed = json.loads(m.group(0))
-                return parsed if isinstance(parsed, list) else []
-            except Exception:
-                return []
-        return []
-
-
-def extract_explicit_email_actions(
-    subject: str,
-    body: str,
-    *,
-    raw_category: str,
-    meta: Dict[str, Any] | None = None,
-    tags: List[str] | None = None,
-) -> List[Dict[str, Any]]:
-    text = f"{subject}\n{body}"
-    actions: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def add_action(title: str, *, task_kind: str = "action", note: str = "") -> None:
-        normalized = title.strip()
-        if not normalized or normalized in seen:
-            return
-        seen.add(normalized)
-        actions.append(
-            {
-                "title": normalized,
-                "due_date": "",
-                "project": "email",
-                "note": note,
-                "task_kind": task_kind,
-            }
-        )
-
-    if raw_category == "needs_reply":
-        add_action(f"【返信】{subject}" if subject else "返信内容を確認して返信する", task_kind="reply")
-
-    doc_patterns = [
-        ("契約書", "準備", "契約書を準備する"),
-        ("契約書", "送付", "契約書を送付する"),
-        ("契約書", "提出", "契約書を提出する"),
-        ("見積書", "送付", "見積書を送付する"),
-        ("見積書", "再送", "見積書を再送する"),
-        ("申込書", "提出", "申込書を提出する"),
-        ("申込書", "記入", "申込書を記入する"),
-    ]
-    lowered = text.lower()
-    for noun, verb, title in doc_patterns:
-        if noun in text and verb in text:
-            add_action(title)
-
-    if (meta or {}).get("signals", {}).get("contract_followup_subject"):
-        if not actions:
-            add_action("契約内容を確認して対応する")
-
-    tag_list = tags or []
-    if "tool:autoro" in tag_list and (meta or {}).get("signals", {}).get("alert"):
-        add_action("AUTOROのエラー内容を確認する")
-
-    if not actions:
-        if "確認" in text and ("お願い" in text or "ください" in text):
-            add_action("依頼内容を確認して対応する")
-
-    return actions
-
-
-GENERIC_ACTION_PREFIXES = (
-    "対応:",
-    "対応：",
-    "タスク:",
-    "タスク：",
-    "要対応:",
-    "要対応：",
-    "ネクストアクション:",
-    "ネクストアクション：",
-    "アクション:",
-    "アクション：",
-)
-
-
-def _looks_like_reply_task(title: str, note: str = "") -> bool:
-    text = f"{title} {note}".lower()
-    hints = ("返信", "返答", "回答", "reply", "respond", "返事", "メール返信")
-    return any(h in text for h in hints)
-
-
-def _rewrite_email_action_title(title: str, raw_category: str, note: str = "") -> str:
-    text = (title or "").strip()
-    for prefix in GENERIC_ACTION_PREFIXES:
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip()
-            break
-    text = re.sub(r"^(確認事項|対応事項|タスク候補)\s*[:：-]\s*", "", text).strip()
-    if not text:
-        return "返信内容を確認して返信する" if raw_category == "needs_reply" else "メール内容を確認して対応する"
-
-    generic_only = {
-        "確認",
-        "確認する",
-        "対応",
-        "対応する",
-        "返信",
-        "返信する",
-        "返答する",
-        "回答する",
-        "連絡する",
-    }
-    if text in generic_only:
-        if raw_category == "needs_reply" or _looks_like_reply_task(text, note):
-            return "返信内容を確認して返信する"
-        return "メール内容を確認して対応する"
-    return text
-
-
-def normalize_extracted_actions(
-    extracted: List[Dict[str, Any]],
-    *,
-    raw_category: str,
-    subject: str,
-) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    has_reply = False
-
-    for item in extracted:
-        title = _rewrite_email_action_title(str(item.get("title") or ""), raw_category, str(item.get("note") or ""))
-        note = str(item.get("note") or "").strip()
-        task_kind = str(item.get("task_kind") or "").strip().lower()
-        if task_kind not in {"reply", "action"}:
-            task_kind = "reply" if _looks_like_reply_task(title, note) else "action"
-        if task_kind == "reply":
-            has_reply = True
-        key = (task_kind, title)
-        if key in seen:
-            continue
-        seen.add(key)
-        normalized.append(
-            {
-                "title": title,
-                "due_date": str(item.get("due_date") or "").strip(),
-                "project": str(item.get("project") or "").strip() or "email",
-                "note": note,
-                "task_kind": task_kind,
-            }
-        )
-
-    if raw_category == "needs_reply" and not has_reply:
-        reply_title = f"【返信】{subject}" if subject else "返信内容を確認して返信する"
-        normalized.insert(
-            0,
-            {
-                "title": _rewrite_email_action_title(reply_title, raw_category),
-                "due_date": "",
-                "project": "email",
-                "note": "",
-                "task_kind": "reply",
-            },
-        )
-
-    return normalized
-
-
-GENERIC_EMAIL_TASK_TITLES = {
-    "返信内容を確認して返信する",
-    "メール内容を確認して対応する",
-}
-
-
-def _is_specific_email_task(item: Dict[str, Any]) -> bool:
-    title = str(item.get("title") or "").strip()
-    if not title:
-        return False
-    if title in GENERIC_EMAIL_TASK_TITLES:
-        return False
-    return len(title) >= 8
-
-
-def decide_task_gate(
-    raw_category: str,
-    work_bucket: str,
-    extracted: List[Dict[str, Any]],
-    meta: Dict[str, Any],
-    tags: List[str] | None = None,
-) -> Tuple[str, str, Dict[str, Any]]:
-    if work_bucket != "task":
-        gate = {"applied": False, "confidence": None, "reason": "not_task_bucket"}
-        if isinstance(meta, dict):
-            meta["task_gate"] = gate
-        return work_bucket, "task_gate_not_applicable", meta
-
-    signals = meta.get("signals") if isinstance(meta, dict) else {}
-    if not isinstance(signals, dict):
-        signals = {}
-    bucket_scores = meta.get("bucket_scores") if isinstance(meta, dict) else {}
-    if not isinstance(bucket_scores, dict):
-        bucket_scores = {}
-    contact_meta = meta.get("contact_importance") if isinstance(meta, dict) else {}
-    if not isinstance(contact_meta, dict):
-        contact_meta = {}
-
-    confidence = 0.0
-    reasons: List[str] = []
-    tag_list = tags or []
-    has_reply_task = any(str(item.get("task_kind") or "") == "reply" for item in extracted)
-    has_specific_task = any(_is_specific_email_task(item) for item in extracted)
-    has_due_date = any(str(item.get("due_date") or "").strip() for item in extracted)
-    has_autoro_tag = any(str(tag) == "tool:autoro" for tag in tag_list)
-
-    if raw_category == "needs_reply":
-        confidence += 4.0
-        reasons.append("raw_needs_reply")
-    if has_reply_task:
-        confidence += 2.0
-        reasons.append("reply_task_present")
-    if signals.get("meeting_coordination"):
-        confidence += 4.0
-        reasons.append("meeting_coordination")
-    if signals.get("business_review"):
-        confidence += 2.0
-        reasons.append("business_review")
-    if signals.get("actionable_notice"):
-        confidence += 2.0
-        reasons.append("actionable_notice")
-    if signals.get("explicit_action_request"):
-        confidence += 4.0
-        reasons.append("explicit_action_request")
-    if signals.get("contract_followup_subject"):
-        confidence += 4.0
-        reasons.append("contract_followup_subject")
-    if signals.get("alert"):
-        confidence += 2.0
-        reasons.append("alert")
-    if has_autoro_tag and (signals.get("alert") or signals.get("actionable_notice")):
-        confidence += 3.0
-        reasons.append("autoro_operational_notice")
-    if has_specific_task:
-        confidence += 2.0
-        reasons.append("specific_task")
-    if has_due_date:
-        confidence += 1.0
-        reasons.append("due_date")
-    if any(str(tag).startswith("contact:known") for tag in tag_list):
-        confidence += 1.0
-        reasons.append("known_contact")
-
-    tier = str(contact_meta.get("tier") or "none")
-    if contact_meta.get("thread_replied"):
-        confidence += 2.0
-        reasons.append("replied_thread")
-    elif tier == "high":
-        confidence += 1.5
-        reasons.append("high_contact_tier")
-    elif tier == "medium":
-        confidence += 1.0
-        reasons.append("medium_contact_tier")
-
-    if float(bucket_scores.get("newsletter", 0) or 0) >= 4 and not signals.get("business_review"):
-        confidence -= 3.0
-        reasons.append("newsletter_risk")
-    if signals.get("promo_sender_domain") and not signals.get("business_review") and not signals.get("actionable_notice") and not signals.get("alert"):
-        confidence -= 3.0
-        reasons.append("promo_sender_domain")
-    if signals.get("is_noreply") and not signals.get("business_review") and not signals.get("actionable_notice") and not signals.get("alert"):
-        confidence -= 1.0
-        reasons.append("noreply_penalty")
-    if extracted and not has_specific_task and raw_category != "needs_reply":
-        confidence -= 2.0
-        reasons.append("generic_only")
-
-    applied = confidence >= 4.0
-    reason = "high_confidence_task" if applied else "low_confidence_downgraded_to_review"
-    gate = {
-        "applied": applied,
-        "confidence": round(confidence, 2),
-        "reason": reason,
-        "signals": reasons,
-        "has_specific_task": has_specific_task,
-        "task_count": len(extracted),
-    }
-    if isinstance(meta, dict):
-        meta["task_gate"] = gate
-    return ("task" if applied else "review"), reason, meta
-
-
 def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
     if not tasks:
         return {"created": 0, "updated": 0, "skipped": 0}
-    import urllib.request
     import urllib.error
 
-    url = env.get("NEURONIC_URL", "http://127.0.0.1:5174/api/v1/tasks/import")
-    fallback_url = env.get("NEURONIC_FALLBACK_URL", "http://127.0.0.1:5174/api/v1/tasks/bulk")
-    token = env.get("NEURONIC_TOKEN") or env.get("TASKD_AUTH_TOKEN")
-    payload_items = []
-    for item in tasks:
-        row = dict(item)
-        if "parent_origin_id" in row:
-            row["parentOriginId"] = row.get("parent_origin_id")
-        if "sibling_order" in row:
-            row["siblingOrder"] = row.get("sibling_order")
-        if "external_ref" in row:
-            row["externalRef"] = row.get("external_ref")
-        if "run_id" in row:
-            row["runId"] = row.get("run_id")
-        if "feedback_state" in row:
-            row["feedbackState"] = row.get("feedback_state")
-        if "source_doc_id" in row:
-            row["sourceDocId"] = row.get("source_doc_id")
-        if "source_doc_title" in row:
-            row["sourceDocTitle"] = row.get("source_doc_title")
-        payload_items.append(row)
-
-    headers = {"Content-Type": "application/json"}
-    if token:
-        header_name = env.get("NEURONIC_AUTH_HEADER", "Authorization")
-        headers[header_name] = f"Bearer {token}"
+    url, fallback_url = get_neuronic_urls(env)
+    payload_items = build_neuronic_items(tasks, include_outline_path=False)
+    headers = build_neuronic_headers(env)
 
     def _is_payload_too_large(resp: Dict[str, Any]) -> bool:
         status = str(resp.get("status_code") or "")
@@ -1111,21 +811,24 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
         return status == "413" or "payload too large" in detail or "request entity too large" in detail
 
     def _post(target_url: str, batch_items: List[Dict[str, Any]]) -> Dict[str, Any]:
-        payload = {"items": batch_items}
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(target_url, data=data, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            status_code = getattr(resp, "status", 200)
-            body = resp.read().decode("utf-8", "ignore")
+        res = post_neuronic_items(target_url, batch_items, headers=headers, timeout=10)
+        parsed = res.get("body")
+        if isinstance(parsed, dict):
+            parsed.setdefault("status_code", res.get("status_code"))
+            parsed.setdefault("endpoint_used", res.get("endpoint_used"))
+            return parsed
+        return {"status_code": res.get("status_code"), "endpoint_used": res.get("endpoint_used"), "response": parsed}
+
+    def _http_error_detail(error: urllib.error.HTTPError) -> str:
         try:
-            parsed = json.loads(body)
-            if isinstance(parsed, dict):
-                parsed.setdefault("status_code", status_code)
-                parsed.setdefault("endpoint_used", target_url)
-                return parsed
-            return {"status_code": status_code, "endpoint_used": target_url, "response": parsed}
+            body = error.read()
         except Exception:
-            return {"status_code": status_code, "endpoint_used": target_url, "response": body}
+            body = b""
+        if isinstance(body, bytes):
+            detail = body.decode("utf-8", "ignore").strip()
+        else:
+            detail = str(body or "").strip()
+        return detail or str(getattr(error, "reason", "") or getattr(error, "msg", "") or f"HTTP {error.code}")
 
     def _send_once(batch_items: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
@@ -1138,13 +841,13 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
                     return {
                         "error": f"HTTP {e2.code}",
                         "status_code": e2.code,
-                        "detail": e2.read().decode("utf-8", "ignore"),
+                        "detail": _http_error_detail(e2),
                         "endpoint_used": fallback_url,
                     }
             return {
                 "error": f"HTTP {e.code}",
                 "status_code": e.code,
-                "detail": e.read().decode("utf-8", "ignore"),
+                "detail": _http_error_detail(e),
                 "endpoint_used": url,
             }
         except Exception as e:
@@ -1202,18 +905,6 @@ def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str,
     return aggregate
 
 
-def _stable_origin_id(task: Dict[str, Any], source_key: str = "") -> str:
-    raw = "|".join([
-        (task.get("title") or "").strip(),
-        (task.get("project") or "").strip(),
-        (task.get("due_date") or "").strip(),
-        (task.get("assignee") or "").strip(),
-        (source_key or "").strip(),
-    ])
-    sha1_12 = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
-    return f"roby:auto:{sha1_12}"
-
-
 def _dedupe_tags(tags: List[str]) -> List[str]:
     seen = set()
     out = []
@@ -1225,119 +916,6 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
         seen.add(t)
         out.append(t)
     return out
-
-
-def _sender_label(raw_from: str) -> str:
-    display_name, address = parseaddr((raw_from or "").strip())
-    label = (display_name or address or "").strip().strip("\"'")
-    if not label:
-        return "送信者不明"
-    return re.sub(r"\s+", " ", label)[:48]
-
-
-def _decorate_email_task_title(title: str, sender_label: str) -> str:
-    base = (title or "").strip() or "メール確認タスク"
-    return f"【{sender_label}】{base}"
-
-
-def decide_work_bucket(
-    category: str,
-    needs_reply: bool,
-    meta: Dict[str, Any],
-    tags: List[str] | None = None,
-) -> Tuple[str, str]:
-    signals = meta.get("signals") if isinstance(meta, dict) else {}
-    if not isinstance(signals, dict):
-        signals = {}
-    contact_meta = meta.get("contact_importance") if isinstance(meta, dict) else {}
-    if not isinstance(contact_meta, dict):
-        contact_meta = {}
-    tag_list = tags or []
-    has_tool_tag = any(str(tag).startswith("tool:") for tag in tag_list)
-
-    newsletter_score = 0
-    review_score = 0
-    task_score = 0
-
-    if signals.get("promo_subject"):
-        newsletter_score += 3
-    if signals.get("marketing_sender"):
-        newsletter_score += 2
-    if signals.get("promo_sender_domain"):
-        newsletter_score += 3
-    if signals.get("ad_hint"):
-        newsletter_score += 1
-    if signals.get("is_noreply"):
-        newsletter_score += 1
-
-    if signals.get("business_review"):
-        review_score += 4
-    if signals.get("actionable_notice"):
-        review_score += 3
-    if signals.get("contract_followup_subject"):
-        review_score += 2
-    if signals.get("alert"):
-        review_score += 3
-    if signals.get("urgent"):
-        review_score += 1
-    if has_tool_tag:
-        review_score += 1
-
-    tier = str(contact_meta.get("tier") or "none")
-    if contact_meta.get("thread_replied"):
-        review_score += 3
-    elif tier == "high":
-        review_score += 2
-    elif tier == "medium":
-        review_score += 1
-
-    if needs_reply:
-        task_score += 4
-    if signals.get("meeting_coordination"):
-        task_score += 3
-    if signals.get("urgent"):
-        task_score += 1
-    if signals.get("actionable_notice"):
-        task_score += 1
-    if signals.get("explicit_action_request"):
-        task_score += 4
-    if signals.get("contract_followup_subject"):
-        task_score += 4
-    if has_tool_tag and signals.get("actionable_notice") and signals.get("alert"):
-        task_score += 3
-
-    meta["bucket_scores"] = {
-        "newsletter": newsletter_score,
-        "review": review_score,
-        "task": task_score,
-        "has_tool_tag": has_tool_tag,
-    }
-
-    if category == "archive":
-        if task_score >= 4:
-            return "task", "weighted_action_override"
-        if review_score >= 4:
-            return "review", "weighted_review_override"
-        return "archive", "promo_or_low_value"
-    if category == "later_check":
-        if task_score >= 4:
-            return "task", "weighted_task_from_tool_notice"
-        if review_score >= 3:
-            return "review", "weighted_review_from_tool_notice"
-        if newsletter_score >= 5 and not has_tool_tag:
-            return "archive", "newsletter_low_value"
-        return "digest", "tool_notice_or_digest"
-    if category == "needs_reply" or needs_reply:
-        return "task", "explicit_reply_or_action"
-
-    if category == "needs_review":
-        if task_score >= 3:
-            return "task", "coordination_requires_followup"
-        if newsletter_score >= 4 and review_score == 0:
-            return "digest", "newsletter_review_downgraded"
-        return "review", "human_review_needed"
-
-    return "review", "default_review"
 
 
 def _parse_jsonish_text(raw: str) -> Any:
@@ -1498,35 +1076,6 @@ def should_apply_llm_override(
     return True
 
 
-def should_apply_local_override(
-    current_category: str,
-    local_category: str,
-    sender: str,
-    subject: str,
-) -> bool:
-    if local_category == current_category:
-        return False
-    sender_lower = (sender or "").lower()
-    subject_lower = (subject or "").lower()
-
-    if local_category == "archive":
-        is_noreply = ("no-reply" in sender_lower) or ("noreply" in sender_lower)
-        promo_domain = any(dom in sender_lower for dom in PROMO_SENDER_DOMAINS)
-        promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
-        has_business_keyword = any(k.lower() in subject_lower for k in BUSINESS_REVIEW_KEYWORDS)
-        if has_business_keyword:
-            return False
-        return is_noreply or promo_domain or promo_subject
-
-    if current_category == "archive" and local_category in {"needs_review", "needs_reply"}:
-        return True
-    if current_category == "later_check" and local_category in {"needs_review", "needs_reply"}:
-        return True
-    if current_category == "needs_review" and local_category == "needs_reply":
-        return True
-    return False
-
-
 def classify_message(
     subject: str,
     sender: str,
@@ -1538,6 +1087,7 @@ def classify_message(
     contact_index: Dict[str, Any] | None = None,
     context_sender_hints: Dict[str, Dict[str, Any]] | None = None,
     context_domain_hints: Dict[str, Dict[str, Any]] | None = None,
+    context_project_hints: List[Dict[str, Any]] | None = None,
 ) -> Tuple[str, List[str], bool, str | None, Dict[str, Any]]:
     text = f"{subject} {sender} {cc} {body}".lower()
     header_text = f"{subject} {sender} {cc}".lower()
@@ -1564,59 +1114,31 @@ def classify_message(
         if contact_meta.get("thread_replied"):
             tags.append("contact:replied_thread")
 
-    def _tool_match(tool: str) -> bool:
-        t = tool.lower()
-        if re.fullmatch(r"[a-z0-9!+._-]+", t):
-            # Avoid substring false-positives like "line" in "pipeline".
-            return re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", header_text) is not None
-        return t in header_text
-
-    related = [tool for tool in RELATED_TOOLS if _tool_match(tool)]
-    if not related:
-        for dom, label in RELATED_DOMAINS.items():
-            if dom in sender_lower:
-                related = [label]
-                break
+    related = detect_related_tools(
+        sender,
+        header_text,
+        related_tools=RELATED_TOOLS,
+        related_domains=RELATED_DOMAINS,
+    )
     if related:
         tags.extend([f"tool:{t}" for t in related])
 
-    is_calendar_response = subject_lower.startswith(("承諾:", "辞退:", "accepted:", "declined:"))
-    is_pipeline_success = ("[aws pipeline]" in subject_lower and "成功" in subject_lower and "etl結果" in subject_lower)
-    is_tokiwagi_base_info = (
-        "tokiwagi-base" in subject_lower
-        and any(
-            hint in subject_lower
-            for hint in (
-                "最新版ではありません",
-                "新しいログイン動作を検知しました",
-                "synology nas への新しいログイン",
-            )
-        )
-    )
-    is_internal_instagram_recap = (
-        "instagram" in sender_lower
-        and "info@tokiwa-gi.com" in sender_lower
-        and any(hint in subject_lower for hint in ("チェックしよう", "見逃したコンテンツ", "フィードで"))
-    )
-    is_chatwork_mail = "chatwork" in sender_lower or "ns.chatwork.com" in sender_lower
-    is_chatwork_mention = is_chatwork_mail and any(hint in text for hint in CHATWORK_MENTION_HINTS)
-    is_non_actionable_subject = any(
-        re.search(pattern, subject_lower)
-        for pattern in NON_ACTIONABLE_SUBJECT_PATTERNS
-    )
+    matched_projects = match_context_projects(subject, sender, cc, body, context_project_hints)
+    if matched_projects:
+        meta["context_projects"] = matched_projects
+        tags = _dedupe_tags(tags + [f"context_project:{str(row.get('project') or '').strip()}" for row in matched_projects if str(row.get('project') or '').strip()])
 
-    if is_calendar_response:
-        return "archive", _dedupe_tags(tags + ["rule:calendar_response"]), False, "calendar_response", meta
-    if is_pipeline_success:
-        return "archive", _dedupe_tags(tags + ["rule:pipeline_success_archive"]), False, "pipeline_success_archive", meta
-    if is_tokiwagi_base_info:
-        return "archive", _dedupe_tags(tags + ["rule:tokiwagi_base_info_archive"]), False, "tokiwagi_base_info_archive", meta
-    if is_internal_instagram_recap:
-        return "archive", _dedupe_tags(tags + ["rule:internal_instagram_recap_archive"]), False, "internal_instagram_recap_archive", meta
-    if is_chatwork_mail and not is_chatwork_mention:
-        return "archive", _dedupe_tags(tags + ["rule:chatwork_non_mention_archive"]), False, "chatwork_non_mention_archive", meta
-    if is_non_actionable_subject:
-        return "archive", _dedupe_tags(tags + ["rule:non_actionable_subject_archive"]), False, "non_actionable_subject_archive", meta
+    early_archive_rule, suppress_project_override = detect_early_archive_rule(
+        subject,
+        sender,
+        body,
+        chatwork_mention_hints=CHATWORK_MENTION_HINTS,
+        non_actionable_subject_patterns=NON_ACTIONABLE_SUBJECT_PATTERNS,
+    )
+    if early_archive_rule:
+        if suppress_project_override:
+            meta["suppress_project_override"] = True
+        return "archive", _dedupe_tags(tags + [f"rule:{early_archive_rule}"]), False, early_archive_rule, meta
 
     is_autoro_error_notice = "autoro" in header_text and "スケジュールエラー通知" in subject_lower
     override_category, override_rule = match_user_override(subject, sender, rules or {}, cc=cc)
@@ -1630,42 +1152,50 @@ def classify_message(
     if "tokiwa-gi.com" in sender_lower or "tokiwa-gi.com" in cc_lower:
         return "needs_review", _dedupe_tags(tags + ["rule:internal_domain_review"]), needs_reply, "internal_domain_review", meta
 
-    urgent = any(k in text for k in IMPORTANT_KEYWORDS)
-    is_alert = any(k in text for k in ALERT_HINTS)
-    is_ad_hint = any(h in text for h in AD_HINTS)
-    is_promo_subject = any(h.lower() in subject_lower for h in PROMO_SUBJECT_HINTS)
-    is_actionable_notice = any(h.lower() in text for h in ACTIONABLE_NOTICE_HINTS)
-    has_business_review_signal = any(k in text for k in BUSINESS_REVIEW_KEYWORDS)
-    is_contract_followup_subject = (
-        subject_lower.startswith("re:")
-        and "契約" in subject_lower
-        and contact_meta.get("known")
+    signals = build_email_signals(
+        subject,
+        sender,
+        cc,
+        body,
+        contact_meta=contact_meta,
+        matched_projects=matched_projects,
+        important_keywords=IMPORTANT_KEYWORDS,
+        alert_hints=ALERT_HINTS,
+        ad_hints=AD_HINTS,
+        promo_subject_hints=PROMO_SUBJECT_HINTS,
+        actionable_notice_hints=ACTIONABLE_NOTICE_HINTS,
+        business_review_keywords=BUSINESS_REVIEW_KEYWORDS,
+        promo_sender_domains=PROMO_SENDER_DOMAINS,
     )
-    meeting_coordination = any(k in (subject or "") for k in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"])
+    meta["signals"] = signals
+    urgent = bool(signals.get("urgent"))
+    is_alert = bool(signals.get("alert"))
+    is_ad_hint = bool(signals.get("ad_hint"))
+    is_promo_subject = bool(signals.get("promo_subject"))
+    is_actionable_notice = bool(signals.get("actionable_notice"))
+    has_business_review_signal = bool(signals.get("business_review"))
+    meeting_coordination = bool(signals.get("meeting_coordination"))
+    is_marketing_sender = bool(signals.get("marketing_sender"))
+    is_promo_sender_domain = bool(signals.get("promo_sender_domain"))
 
-    is_marketing_sender = any(x in sender_lower for x in [
-        "seminar",
-        "event",
-        "marketing",
-        "news",
-        "mailmag",
-        "メルマガ",
-        "運営事務局",
-    ])
-    is_promo_sender_domain = any(dom in sender_lower for dom in PROMO_SENDER_DOMAINS)
-    meta["signals"] = {
-        "urgent": urgent,
-        "alert": is_alert,
-        "promo_subject": is_promo_subject,
-        "ad_hint": is_ad_hint,
-        "actionable_notice": is_actionable_notice,
-        "business_review": has_business_review_signal,
-        "contract_followup_subject": is_contract_followup_subject,
-        "marketing_sender": is_marketing_sender,
-        "promo_sender_domain": is_promo_sender_domain,
-        "meeting_coordination": meeting_coordination,
-        "is_noreply": is_noreply,
-    }
+    def _apply_local_preclassify(category: str, tags: List[str], meta: Dict[str, Any], needs_reply: bool) -> Tuple[str, List[str], Dict[str, Any], bool]:
+        if not env:
+            return category, tags, meta, needs_reply
+        local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
+        return apply_local_preclassify_result(
+            category,
+            tags,
+            meta,
+            needs_reply,
+            local_category=local_category,
+            local_reason=local_reason,
+            local_meta=local_meta,
+            sender=sender,
+            subject=subject,
+            promo_sender_domains=PROMO_SENDER_DOMAINS,
+            promo_subject_hints=PROMO_SUBJECT_HINTS,
+            business_review_keywords=BUSINESS_REVIEW_KEYWORDS,
+        )
 
     # Sender-domain blacklist is authoritative for known promotional sources.
     # Their bodies often contain words like "更新", "確認", "reply-to" that trigger false positives.
@@ -1675,66 +1205,61 @@ def classify_message(
         else:
             category = "archive"
             needs_reply = False
-        if env:
-            local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
-            meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
-            if local_category and should_apply_local_override(category, local_category, sender, subject):
-                category = local_category
-                tags = _dedupe_tags(tags + ["local:override"])
-                if local_category == "needs_reply":
-                    needs_reply = True
-                if local_reason:
-                    meta["local_reason"] = local_reason
+        category, tags, meta, needs_reply = _apply_local_preclassify(category, tags, meta, needs_reply)
         category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
+        category, tags, meta = apply_project_override(category, tags, meta)
         return category, tags, needs_reply, None, meta
 
     # Tool-specific operational notifications we still want to see.
     if ("support@crmstyle.com" in sender_lower or "synergy" in text) and "アカウント発行" in (subject or ""):
         category, tags, meta = apply_contact_override("needs_review", tags, meta, contact_meta, is_noreply=is_noreply)
+        category, tags, meta = apply_project_override(category, tags, meta)
         return category, tags, needs_reply, None, meta
 
     # AWS / batch job notifications are operationally important even on success.
     if "aws" in text and ("pipeline" in text or "etl" in text):
         category, tags, meta = apply_contact_override("needs_review", tags, meta, contact_meta, is_noreply=is_noreply)
+        category, tags, meta = apply_project_override(category, tags, meta)
         return category, tags, needs_reply, None, meta
 
     # Meeting / coordination mails should remain visible.
     if meeting_coordination:
         category, tags, meta = apply_contact_override(("needs_reply" if needs_reply else "needs_review"), tags, meta, contact_meta, is_noreply=is_noreply)
+        category, tags, meta = apply_project_override(category, tags, meta)
         return category, tags, needs_reply, None, meta
 
     # Frequent ad-platform auto notices (approval/budget consumed/news) are noisy by default.
     if ("line.me" in sender_lower or "mail.yahoo.co.jp" in sender_lower) and is_noreply:
         if has_business_review_signal or is_actionable_notice or is_alert:
             category, tags, meta = apply_contact_override("needs_review", tags, meta, contact_meta, is_noreply=is_noreply)
+            category, tags, meta = apply_project_override(category, tags, meta)
             return category, tags, needs_reply, None, meta
         if any(k in (subject or "") for k in ["広告が承認されました", "広告アカウントが承認されました", "予算が消化されました"]):
+            meta["suppress_project_override"] = True
             category, tags, meta = apply_contact_override("archive", tags, meta, contact_meta, is_noreply=is_noreply)
+            category, tags, meta = apply_project_override(category, tags, meta)
             return category, tags, needs_reply, None, meta
         if "ads update" in subject_lower or "新着情報" in (subject or ""):
             category, tags, meta = apply_contact_override("archive", tags, meta, contact_meta, is_noreply=is_noreply)
+            category, tags, meta = apply_project_override(category, tags, meta)
             return category, tags, needs_reply, None, meta
 
     # Strong promotional signals override reply heuristics to reduce false positives.
     if (is_promo_subject or (is_ad_hint and is_marketing_sender)) and not is_alert and not is_actionable_notice and not has_business_review_signal:
         category = "archive"
-        if env:
-            local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
-            meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
-            if local_category and should_apply_local_override(category, local_category, sender, subject):
-                category = local_category
-                tags = _dedupe_tags(tags + ["local:override"])
-                if local_category == "needs_reply":
-                    needs_reply = True
-                if local_reason:
-                    meta["local_reason"] = local_reason
+        category, tags, meta, needs_reply = _apply_local_preclassify(category, tags, meta, needs_reply)
         category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
+        category, tags, meta = apply_project_override(category, tags, meta)
         return category, tags, needs_reply, None, meta
 
-    reply_text = re.sub(r"reply-to", " ", text)
-    has_reply_phrase = any(re.search(pattern, reply_text) for pattern in EXPLICIT_REPLY_PATTERNS)
-    has_explicit_action_request = any(re.search(pattern, reply_text) for pattern in EXPLICIT_ACTION_REQUEST_PATTERNS)
-    promo_reply_risk = any(h.lower() in reply_text for h in PROMO_REPLY_SUPPRESS_HINTS)
+    has_reply_phrase, has_explicit_action_request, promo_reply_risk = detect_reply_intent(
+        text,
+        explicit_reply_patterns=EXPLICIT_REPLY_PATTERNS,
+        explicit_action_request_patterns=EXPLICIT_ACTION_REQUEST_PATTERNS,
+        promo_reply_suppress_hints=PROMO_REPLY_SUPPRESS_HINTS,
+    )
+    if promo_reply_risk:
+        meta["signals"]["promo_reply_risk"] = True
     if (
         (not is_noreply)
         and has_reply_phrase
@@ -1757,32 +1282,16 @@ def classify_message(
                 category = "needs_review"
             else:
                 category = "later_check"
-            if env:
-                local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
-                meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
-                if local_category and should_apply_local_override(category, local_category, sender, subject):
-                    category = local_category
-                    tags = _dedupe_tags(tags + ["local:override"])
-                    if local_category == "needs_reply":
-                        needs_reply = True
-                    if local_reason:
-                        meta["local_reason"] = local_reason
+            category, tags, meta, needs_reply = _apply_local_preclassify(category, tags, meta, needs_reply)
+            category, tags, meta = apply_project_override(category, tags, meta)
             return category, tags, needs_reply, None, meta
         if urgent:
             category = "needs_reply" if needs_reply else "needs_review"
         else:
             category = "needs_reply" if needs_reply else "later_check"
-        if env:
-            local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
-            meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
-            if local_category and should_apply_local_override(category, local_category, sender, subject):
-                category = local_category
-                tags = _dedupe_tags(tags + ["local:override"])
-                if local_category == "needs_reply":
-                    needs_reply = True
-                if local_reason:
-                    meta["local_reason"] = local_reason
+        category, tags, meta, needs_reply = _apply_local_preclassify(category, tags, meta, needs_reply)
         category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
+        category, tags, meta = apply_project_override(category, tags, meta)
         return category, tags, needs_reply, None, meta
 
     if urgent:
@@ -1792,118 +1301,11 @@ def classify_message(
     else:
         category = "needs_review"
 
-    if env:
-        local_category, local_reason, local_meta = local_preclassify_email(subject, sender, cc, body, env)
-        meta["local_preclassify"] = {**local_meta, "category": local_category, "reason": local_reason}
-        if local_category and should_apply_local_override(category, local_category, sender, subject):
-            category = local_category
-            tags = _dedupe_tags(tags + ["local:override"])
-            if local_category == "needs_reply":
-                needs_reply = True
-            if local_reason:
-                meta["local_reason"] = local_reason
+    category, tags, meta, needs_reply = _apply_local_preclassify(category, tags, meta, needs_reply)
 
     category, tags, meta = apply_contact_override(category, tags, meta, contact_meta, is_noreply=is_noreply)
+    category, tags, meta = apply_project_override(category, tags, meta)
     return category, _dedupe_tags(tags), needs_reply, None, meta
-
-
-def build_tasks(
-    extracted: List[Dict[str, Any]],
-    msg: Dict[str, Any],
-    category: str,
-    tags: List[str],
-    run_id: str,
-    *,
-    raw_category: str = "",
-) -> List[Dict[str, Any]]:
-    tasks: List[Dict[str, Any]] = []
-    base_tags = ["source:gmail", f"category:{category}"] + tags
-    assignee = "私"
-    msg_subject = (msg.get("subject") or "").strip()
-    sender_label = _sender_label(msg.get("from", ""))
-    msg_thread_id = (msg.get("threadId") or "").strip()
-    msg_id = (msg.get("id") or "").strip()
-    msg_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_thread_id}"
-
-    parent_task = {
-        "title": _decorate_email_task_title(
-            f"メール確認: {msg_subject}" if msg_subject else "メール確認タスク",
-            sender_label,
-        ),
-        "project": "email",
-        "due_date": "",
-        "assignee": assignee,
-        "note": (
-            f"Email: {msg_subject}\n"
-            f"From: {msg.get('from','')}\n"
-            f"Date: {msg.get('date','')}\n"
-            f"Link: {msg_url}"
-        ),
-        "source": "roby",
-        "status": "inbox",
-        "priority": 1 if category == "task" else 0,
-        "tags": _dedupe_tags(base_tags + ["project:email", f"assignee:{assignee}", "task_type:email_review"]),
-        "parent_origin_id": None,
-        "sibling_order": 0,
-        "run_id": run_id,
-        "feedback_state": "pending",
-        "source_doc_id": msg_id or msg_thread_id,
-        "source_doc_title": msg_subject,
-    }
-    parent_origin = _stable_origin_id(parent_task, f"{msg_thread_id}|parent")
-    parent_task["origin_id"] = parent_origin
-    parent_task["external_ref"] = f"group:{parent_origin}"
-    tasks.append(parent_task)
-
-    for i, item in enumerate(extracted):
-        title = (item.get("title") or "").strip()
-        if not title:
-            continue
-        due = (item.get("due_date") or "").strip()
-        project = (item.get("project") or "").strip() or "email"
-        note = (item.get("note") or "").strip()
-        task_kind = str(item.get("task_kind") or "").strip().lower()
-        if task_kind not in {"reply", "action"}:
-            task_kind = "reply" if _looks_like_reply_task(title, note) else "action"
-        task_type_tag = "task_type:reply" if task_kind == "reply" else "task_type:action"
-        item_tags = _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", task_type_tag])
-        note_prefix = "返信対応" if task_kind == "reply" else "実行タスク"
-        note = (
-            (note + "\n\n" if note else "")
-            + f"Task Type: {note_prefix}\n"
-            + f"Parent: {parent_task['title']}\n"
-            + f"Email: {msg_subject}\n"
-            + f"From: {msg.get('from','')}\n"
-            + f"Date: {msg.get('date','')}\n"
-            + f"Link: {msg_url}"
-        )
-        task = {
-            "title": _decorate_email_task_title(_rewrite_email_action_title(title, raw_category, note), sender_label),
-            "project": project,
-            "due_date": due,
-            "assignee": assignee,
-            "note": note,
-            "source": "roby",
-            "status": "inbox",
-            "priority": 1 if category == "task" else 0,
-            "tags": item_tags,
-            "parent_origin_id": parent_origin,
-            "sibling_order": i,
-            "run_id": run_id,
-            "feedback_state": "pending",
-            "source_doc_id": msg_id or msg_thread_id,
-            "source_doc_title": msg_subject,
-            "external_ref": f"group:{parent_origin}",
-        }
-        task["origin_id"] = _stable_origin_id(task, f"{msg_thread_id}|child|{i}")
-        tasks.append(task)
-    return tasks
-
-
-def cap_extracted_actions(extracted: List[Dict[str, Any]], max_actions: int) -> List[Dict[str, Any]]:
-    if max_actions <= 0:
-        return extracted
-    return extracted[:max_actions]
 
 
 def main() -> int:
@@ -1917,14 +1319,20 @@ def main() -> int:
     parser.add_argument("--rules-path", default="")
     parser.add_argument("--archive-ads", dest="archive_ads", action="store_true")
     parser.add_argument("--no-archive-ads", dest="archive_ads", action="store_false")
-    parser.set_defaults(archive_ads=True)
+    parser.add_argument("--apply-labels", dest="apply_labels", action="store_true")
+    parser.add_argument("--no-apply-labels", dest="apply_labels", action="store_false")
+    parser.add_argument("--reply-review", dest="reply_review", action="store_true")
+    parser.add_argument("--no-reply-review", dest="reply_review", action="store_false")
+    parser.set_defaults(archive_ads=True, apply_labels=None, reply_review=None)
     args = parser.parse_args()
 
     env = load_env()
     rules_path = Path(args.rules_path).expanduser() if args.rules_path else Path(env.get("ROBY_GMAIL_TRIAGE_RULES_PATH", str(RULES_PATH))).expanduser()
     rules = load_rules(rules_path)
     contact_index = load_contact_index(Path(env.get("ROBY_GMAIL_CONTACT_INDEX_PATH", str(CONTACT_INDEX_PATH))))
-    context_sender_hints, context_domain_hints = build_context_sender_hints(load_context_seed())
+    context_seed = load_context_seed()
+    context_sender_hints, context_domain_hints = build_context_sender_hints(context_seed)
+    context_project_hints = build_context_project_hints(context_seed)
     state = ensure_state()
     processed = state.get("processed", {})
 
@@ -1944,6 +1352,12 @@ def main() -> int:
         "local_preclassified": 0,
         "local_overrides": 0,
         "task_gate_downgraded": 0,
+        "labels_applied": 0,
+        "label_errors": 0,
+        "digest_archived": 0,
+        "reply_reviews": 0,
+        "reply_review_skipped": 0,
+        "reply_review_errors": 0,
     }
     run_id = build_run_id("gmail")
     summary["run_id"] = run_id
@@ -1959,6 +1373,9 @@ def main() -> int:
     notify_max_per_run = int((env.get("GMAIL_TRIAGE_NOTIFY_MAX_PER_RUN", "12") or "12").strip())
     task_actions_max_per_mail = int((env.get("GMAIL_TRIAGE_TASK_MAX_ACTIONS_PER_MAIL", "6") or "6").strip())
     task_items_max_per_run = int((env.get("GMAIL_TRIAGE_TASK_MAX_ITEMS_PER_RUN", "120") or "120").strip())
+    apply_labels = bool(args.apply_labels) if args.apply_labels is not None else shared_env_flag(env, "GMAIL_TRIAGE_APPLY_LABELS", True)
+    archive_digest = shared_env_flag(env, "GMAIL_TRIAGE_ARCHIVE_DIGEST", True)
+    reply_review_enabled = bool(args.reply_review) if args.reply_review is not None else shared_env_flag(env, "GMAIL_REPLY_REVIEW_ENABLE", True)
 
     for msg in messages:
         msg_id = msg.get("id")
@@ -1983,6 +1400,7 @@ def main() -> int:
             contact_index=contact_index,
             context_sender_hints=context_sender_hints,
             context_domain_hints=context_domain_hints,
+            context_project_hints=context_project_hints,
         )
         local_meta = classify_meta.get("local_preclassify") if isinstance(classify_meta, dict) else None
         if isinstance(local_meta, dict) and local_meta.get("enabled") is not False:
@@ -2076,6 +1494,39 @@ def main() -> int:
                             summary["order_applied"] = resp.get("order_applied")
 
         category_counts[work_bucket] = category_counts.get(work_bucket, 0) + 1
+
+        if (
+            reply_review_enabled
+            and not args.dry_run
+            and should_propose_reply_review(work_bucket, category, needs_reply, classify_meta, tags, sender)
+        ):
+            resp = propose_reply_review(args.account, msg, body, env)
+            if resp.get("ok"):
+                if resp.get("skipped"):
+                    summary["reply_review_skipped"] += 1
+                else:
+                    summary["reply_reviews"] += 1
+            elif resp.get("skipped"):
+                summary["reply_review_skipped"] += 1
+            else:
+                summary["reply_review_errors"] += 1
+
+        if apply_labels and not args.dry_run:
+            add_labels, remove_labels = label_changes_for_work_bucket(work_bucket, archive_digest=archive_digest)
+            try:
+                modify_thread_labels(
+                    args.account,
+                    msg.get("threadId", ""),
+                    env,
+                    add=add_labels,
+                    remove=remove_labels,
+                )
+                if add_labels or remove_labels:
+                    summary["labels_applied"] += 1
+                    if "INBOX" in remove_labels:
+                        summary["digest_archived"] += 1
+            except Exception:
+                summary["label_errors"] += 1
 
         # Slack notify
         slack_url = env.get("SLACK_WEBHOOK_URL")

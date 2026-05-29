@@ -251,7 +251,7 @@ class TestRobySelfGrowth(TestCase):
         text = self.mod.summarize_growth_focus({}, {}, {}, {}, {})
         self.assertEqual(text, "GROWTH FOCUS\n- no current focus")
 
-    def test_main_skips_when_git_tree_dirty(self):
+    def test_main_uses_advisor_mode_when_git_tree_dirty(self):
         def fake_run_cmd(cmd, env, timeout=60):
             if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
                 if "--porcelain" in cmd:
@@ -263,9 +263,26 @@ class TestRobySelfGrowth(TestCase):
 
         result = self.run_main_with({}, fake_run_cmd)
         self.assertEqual(result["rc"], 0)
-        self.assertIn("SKIP: working tree is dirty", result["stdout"])
-        self.assertEqual(result["entry"]["patch_status"], "skipped")
+        self.assertIn("ADVISOR: patch mode skipped", result["stdout"])
+        self.assertIn("working tree is dirty", result["stdout"])
+        self.assertEqual(result["entry"]["patch_status"], "advisor_only")
+        self.assertEqual(result["entry"]["patch_scope_status"], "not_applicable")
         self.assertEqual(result["entry"]["test_status"], "skipped")
+
+    def test_main_uses_advisor_mode_when_explicitly_requested(self):
+        def fake_run_cmd(cmd, env, timeout=60):
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "status"]:
+                if "--porcelain" in cmd:
+                    return ""
+                return "## main"
+            if cmd[:4] == ["git", "-C", str(self.mod.REPO_DIR), "log"]:
+                return "abc123 test"
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        result = self.run_main_with({"SELF_GROWTH_MODE": "advisor"}, fake_run_cmd)
+        self.assertEqual(result["rc"], 0)
+        self.assertIn("SELF_GROWTH_MODE=advisor", result["stdout"])
+        self.assertEqual(result["entry"]["patch_status"], "advisor_only")
 
     def test_main_records_no_change_without_applying_patch(self):
         def fake_run_cmd(cmd, env, timeout=60):

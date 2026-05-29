@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
 
 
 def _load_module():
@@ -85,6 +86,42 @@ class TestRobyEvalHarness(TestCase):
 
     def test_report_schema_version_constant(self):
         self.assertEqual(self.mod.REPORT_SCHEMA_VERSION, 2)
+
+    def test_run_orchestrator_uses_child_env_and_timeout(self):
+        case = self.mod.EvalCase(id="c1", description="", message="hello")
+        observed = {}
+
+        def fake_run(cmd, cwd=None, capture_output=None, text=None, env=None, timeout=None):
+            observed["env"] = dict(env or {})
+            observed["timeout"] = timeout
+
+            class Result:
+                returncode = 0
+                stdout = '{"route":"qa_gemini","action":{"ok":true}}'
+                stderr = ""
+
+            return Result()
+
+        with patch.object(self.mod.subprocess, "run", side_effect=fake_run):
+            result = self.mod.run_orchestrator(case, {"GEMINI_API_KEY": "secret-1"}, 77)
+
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(observed["env"].get("GEMINI_API_KEY"), "secret-1")
+        self.assertEqual(observed["env"].get("ROBY_ORCH_AB_ROUTER"), "0")
+        self.assertEqual(observed["timeout"], 77)
+
+    def test_run_orchestrator_timeout_returns_124(self):
+        case = self.mod.EvalCase(id="c1", description="", message="hello")
+
+        def fake_run(cmd, cwd=None, capture_output=None, text=None, env=None, timeout=None):
+            raise self.mod.subprocess.TimeoutExpired(cmd=cmd, timeout=timeout, output=b"partial", stderr=b"stuck")
+
+        with patch.object(self.mod.subprocess, "run", side_effect=fake_run):
+            result = self.mod.run_orchestrator(case, {}, 3)
+
+        self.assertEqual(result["returncode"], 124)
+        self.assertIn("partial", result["stdout"])
+        self.assertIn("timed out after 3s", result["stderr"])
 
 
 if __name__ == "__main__":

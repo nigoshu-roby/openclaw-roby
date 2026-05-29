@@ -381,6 +381,44 @@ def compute_quality_delta(before: Dict[str, Any], after: Dict[str, Any]) -> Dict
     }
 
 
+def normalize_growth_mode(value: str) -> str:
+    mode = (value or "auto").strip().lower()
+    if mode in {"advisor", "advisory", "proposal", "proposals", "report"}:
+        return "advisor"
+    if mode in {"patch", "apply", "agent"}:
+        return "patch"
+    return "auto"
+
+
+def build_advisor_report(
+    growth_focus: Dict[str, Any],
+    *,
+    git_dirty: str,
+    mode: str,
+    allow_dirty: bool,
+) -> str:
+    lines = ["ADVISOR: patch mode skipped; reporting growth focus only."]
+    if git_dirty and not allow_dirty:
+        dirty_count = len([line for line in git_dirty.splitlines() if line.strip()])
+        lines.append(f"REASON: working tree is dirty ({dirty_count} paths).")
+        lines.append("PATCH: deferred until clean worktree or SELF_GROWTH_ALLOW_DIRTY=1.")
+    elif mode == "advisor":
+        lines.append("REASON: SELF_GROWTH_MODE=advisor.")
+    else:
+        lines.append("REASON: patch mode disabled for this run.")
+
+    target_labels = growth_focus.get("target_labels") if isinstance(growth_focus, dict) else []
+    if isinstance(target_labels, list) and target_labels:
+        lines.append("NEXT_TARGETS: " + ", ".join(str(label) for label in target_labels[:3] if str(label).strip()))
+    suggested_files = growth_focus.get("suggested_files") if isinstance(growth_focus, dict) else []
+    if isinstance(suggested_files, list) and suggested_files:
+        lines.append("CANDIDATE_FILES: " + ", ".join(str(path) for path in suggested_files[:5] if str(path).strip()))
+    summary = str(growth_focus.get("summary_text") or "").strip() if isinstance(growth_focus, dict) else ""
+    if summary:
+        lines.extend(["", summary])
+    return "\n".join(lines)
+
+
 def load_env() -> Dict[str, str]:
     env = dict(os.environ)
     env_file = Path(env.get("ROBY_ENV_FILE", str(ENV_PATH))).expanduser()
@@ -564,6 +602,7 @@ def main() -> int:
     env = load_env()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+    growth_mode = normalize_growth_mode(env.get("SELF_GROWTH_MODE", "auto"))
     allow_dirty = env.get("SELF_GROWTH_ALLOW_DIRTY", "0") == "1"
     auto_commit = env.get("SELF_GROWTH_AUTO_COMMIT", "1") == "1"
     test_cmd = env.get("SELF_GROWTH_TEST_CMD", "pnpm -s test:fast")
@@ -628,7 +667,17 @@ def main() -> int:
     slack_status = "skipped"
     touched_files: List[str] = []
 
-    if git_dirty and not allow_dirty:
+    advisor_only = growth_mode == "advisor" or (growth_mode == "auto" and bool(git_dirty) and not allow_dirty)
+    if advisor_only:
+        patch_status = "advisor_only"
+        patch_scope_status = "not_applicable"
+        report = build_advisor_report(
+            growth_focus,
+            git_dirty=git_dirty,
+            mode=growth_mode,
+            allow_dirty=allow_dirty,
+        )
+    elif git_dirty and not allow_dirty:
         steps.append("SKIP: working tree is dirty (set SELF_GROWTH_ALLOW_DIRTY=1 to override).")
         report = "\n".join(steps)
     else:

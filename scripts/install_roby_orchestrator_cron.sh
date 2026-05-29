@@ -5,7 +5,7 @@ set -euo pipefail
 # Defaults (safe baseline):
 # - self_growth : every hour at minute 5
 # - minutes_sync: every 2 hours at minute 15 (last 3 days, max 4)
-# - gmail_triage: every 30 minutes
+# - gmail_triage: every 10 minutes
 # - eval_harness: disabled by default (set ROBY_ORCH_ENABLE_EVAL=1)
 # - runbook_drill: disabled by default (set ROBY_ORCH_ENABLE_DRILL=1)
 # - notion_sync: disabled by default (set ROBY_ORCH_ENABLE_NOTION_SYNC=1)
@@ -15,17 +15,33 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/install_roby_orchestrator_cron.sh
-#   SELF_GROWTH_CRON="5 * * * *" MINUTES_SYNC_CRON="15 */2 * * *" GMAIL_TRIAGE_CRON="*/30 * * * *" WEEKLY_REPORT_CRON="30 9 * * 1" scripts/install_roby_orchestrator_cron.sh
+#   SELF_GROWTH_CRON="5 * * * *" MINUTES_SYNC_CRON="15 */2 * * *" GMAIL_TRIAGE_CRON="*/10 * * * *" WEEKLY_REPORT_CRON="30 9 * * 1" scripts/install_roby_orchestrator_cron.sh
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 KEYCHAIN_SERVICE="${ROBY_KEYCHAIN_SERVICE:-roby-pbs}"
 SECRET_WRAPPER="${ROBY_SECRET_WRAPPER:-$ROOT_DIR/scripts/roby-keychain-run.sh}"
+INLINE_SECRETS="${ROBY_ORCH_CRON_INLINE_SECRETS:-1}"
+
+CRON_SECRET_BEGIN="# ROBY_ORCH_CRON_SECRET_ENV_BEGIN"
+CRON_SECRET_END="# ROBY_ORCH_CRON_SECRET_ENV_END"
+SECRET_KEYS=(
+  GOG_KEYRING_PASSWORD
+  GEMINI_API_KEY
+  OPENAI_API_KEY
+  NOTION_TOKEN
+  NOTION_API_KEY
+  SLACK_WEBHOOK_URL
+  SLACK_SIGNING_SECRET
+  SLACK_BOT_TOKEN
+  NEURONIC_TOKEN
+  OLLAMA_API_KEY
+)
 
 SELF_GROWTH_CRON="${SELF_GROWTH_CRON:-5 * * * *}"
 MINUTES_SYNC_CRON="${MINUTES_SYNC_CRON:-15 */2 * * *}"
 MINUTES_SYNC_DAYS="${MINUTES_SYNC_DAYS:-3}"
 MINUTES_SYNC_MAX="${MINUTES_SYNC_MAX:-4}"
-GMAIL_TRIAGE_CRON="${GMAIL_TRIAGE_CRON:-*/30 * * * *}"
+GMAIL_TRIAGE_CRON="${GMAIL_TRIAGE_CRON:-*/10 * * * *}"
 EVAL_HARNESS_CRON="${EVAL_HARNESS_CRON:-35 */6 * * *}"
 RUNBOOK_DRILL_CRON="${RUNBOOK_DRILL_CRON:-20 8 * * 1}"
 NOTION_SYNC_CRON="${NOTION_SYNC_CRON:-20 9 * * *}"
@@ -53,6 +69,51 @@ TAG_FEEDBACK="ROBY_ORCH_CRON_FEEDBACK_SYNC"
 TAG_MEMORY="ROBY_ORCH_CRON_MEMORY_SYNC"
 TAG_WEEKLY="ROBY_ORCH_CRON_WEEKLY_REPORT"
 
+cron_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
+build_cron_secret_env_block() {
+  local key value
+  for key in "${SECRET_KEYS[@]}"; do
+    value="${!key:-}"
+    if [[ -z "$value" ]] && command -v security >/dev/null 2>&1; then
+      value="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$key" -w 2>/dev/null || true)"
+    fi
+    if [[ -z "$value" ]]; then
+      continue
+    fi
+    if [[ "$value" == *$'\n'* ]]; then
+      echo "Skipping ${key}: newline values cannot be written to crontab env" >&2
+      continue
+    fi
+    printf '%s=%s\n' "$key" "$(cron_quote "$value")"
+  done
+}
+
+print_crontab_redacted() {
+  crontab -l | awk -v keys="${SECRET_KEYS[*]}" '
+    BEGIN {
+      n = split(keys, arr, " ")
+      for (i = 1; i <= n; i++) {
+        secret[arr[i]] = 1
+      }
+    }
+    /^[A-Za-z_][A-Za-z0-9_]*=/ {
+      key = $0
+      sub(/=.*/, "", key)
+      if (key in secret) {
+        print key "=<redacted>"
+        next
+      }
+    }
+    { print }
+  '
+}
+
 BASE_ENV="ROBY_KEYCHAIN_SERVICE=\"$KEYCHAIN_SERVICE\" ROBY_SECRET_WRAPPER=\"$SECRET_WRAPPER\""
 MINUTES_ENV="${BASE_ENV} ROBY_ORCH_MINUTES_DAYS=\"$MINUTES_SYNC_DAYS\" ROBY_ORCH_MINUTES_CRON_MAX=\"$MINUTES_SYNC_MAX\""
 CMD_SELF="cd \"$ROOT_DIR\" && ${BASE_ENV} /bin/bash \"$ROOT_DIR/scripts/roby-cron-dispatch.sh\" self_growth ${SELF_GROWTH_TIMEOUT} >> \"$HOME/.openclaw/roby/cron_self_growth.log\" 2>&1"
@@ -76,10 +137,42 @@ LINE_MEMORY="${MEMORY_SYNC_CRON} ${CMD_MEMORY} # ${TAG_MEMORY}"
 LINE_WEEKLY="${WEEKLY_REPORT_CRON} ${CMD_WEEKLY} # ${TAG_WEEKLY}"
 
 current="$(crontab -l 2>/dev/null || true)"
-filtered="$(printf "%s\n" "$current" | sed "/${TAG_SELF}/d;/${TAG_MINUTES}/d;/${TAG_GMAIL}/d;/${TAG_EVAL}/d;/${TAG_DRILL}/d;/${TAG_NOTION}/d;/${TAG_FEEDBACK}/d;/${TAG_MEMORY}/d;/${TAG_WEEKLY}/d")"
+filtered="$(
+  printf "%s\n" "$current" \
+    | awk -v begin="$CRON_SECRET_BEGIN" -v end="$CRON_SECRET_END" -v keys="${SECRET_KEYS[*]}" '
+        BEGIN {
+          n = split(keys, arr, " ")
+          for (i = 1; i <= n; i++) {
+            secret[arr[i]] = 1
+          }
+        }
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        /^[A-Za-z_][A-Za-z0-9_]*=/ {
+          key = $0
+          sub(/=.*/, "", key)
+          if (key in secret) {
+            next
+          }
+        }
+        !skip { print }
+      ' \
+    | sed "/${TAG_SELF}/d;/${TAG_MINUTES}/d;/${TAG_GMAIL}/d;/${TAG_EVAL}/d;/${TAG_DRILL}/d;/${TAG_NOTION}/d;/${TAG_FEEDBACK}/d;/${TAG_MEMORY}/d;/${TAG_WEEKLY}/d"
+)"
+
+SECRET_ENV_BLOCK=""
+if [[ "$INLINE_SECRETS" == "1" ]]; then
+  SECRET_ENV_BLOCK="$(build_cron_secret_env_block)"
+fi
+SECRET_ENV_COUNT="$(printf "%s\n" "$SECRET_ENV_BLOCK" | awk 'NF { c++ } END { print c + 0 }')"
 
 {
   printf "%s\n" "$filtered"
+  if [[ -n "$SECRET_ENV_BLOCK" ]]; then
+    printf "%s\n" "$CRON_SECRET_BEGIN"
+    printf "%s\n" "$SECRET_ENV_BLOCK"
+    printf "%s\n" "$CRON_SECRET_END"
+  fi
   printf "%s\n" "$LINE_SELF"
   printf "%s\n" "$LINE_MINUTES"
   printf "%s\n" "$LINE_GMAIL"
@@ -102,6 +195,11 @@ filtered="$(printf "%s\n" "$current" | sed "/${TAG_SELF}/d;/${TAG_MINUTES}/d;/${
 } | awk 'NF' | crontab -
 
 echo "Installed orchestrator cron jobs:"
+if [[ "$INLINE_SECRETS" == "1" ]]; then
+  echo "Cron secret env block: installed ${SECRET_ENV_COUNT} key(s) from env/Keychain (values redacted)"
+else
+  echo "Cron secret env block: skipped (ROBY_ORCH_CRON_INLINE_SECRETS=0)"
+fi
 echo "$LINE_SELF"
 echo "$LINE_MINUTES"
 echo "$LINE_GMAIL"
@@ -132,5 +230,5 @@ else
   echo "(not installed) weekly_report: set ROBY_ORCH_ENABLE_WEEKLY_REPORT=1 to enable"
 fi
 echo
-echo "Current crontab:"
-crontab -l
+echo "Current crontab (secret values redacted):"
+print_crontab_redacted

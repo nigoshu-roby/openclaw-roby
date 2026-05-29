@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 DEFAULT_ROBY_SCRIPT = "/Users/shu/OpenClaw/skills/roby-mail/scripts/gmail_triage.py"
+DEFAULT_MAIL_REPLY_REVIEW_SCRIPT = "/Users/shu/OpenClaw/scripts/roby-mail-reply-review.py"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8788
 DEFAULT_EVENTS_PATH = "/slack/events"
@@ -114,6 +115,7 @@ class Config:
     backfill_channels: set[str]
     allowed_users: set[str]
     forward_cmd: str
+    mail_reply_review_channel: str
     allow_plain_messages: bool
     state_path: str
     log_path: str
@@ -132,6 +134,7 @@ class Config:
         backfill_channels = _csv_set("ROBY_SLACK_BACKFILL_CHANNELS")
         allowed_users = _csv_set("ROBY_ALLOWED_SLACK_USERS")
         forward_cmd = os.getenv("ROBY_MENTION_FORWARD_CMD", "").strip() or DEFAULT_FORWARD_CMD
+        mail_reply_review_channel = os.getenv("GMAIL_REPLY_REVIEW_CHANNEL", "").strip() or os.getenv("ROBY_GMAIL_REPLY_REVIEW_CHANNEL", "").strip()
         allow_plain_messages = _truthy("ROBY_ALLOW_PLAIN_MESSAGES", "1")
         state_path = os.getenv("ROBY_SLACK_STATE_PATH", DEFAULT_STATE_PATH).strip() or DEFAULT_STATE_PATH
         log_path = os.getenv("ROBY_SLACK_LOG_PATH", DEFAULT_LOG_PATH).strip() or DEFAULT_LOG_PATH
@@ -158,6 +161,7 @@ class Config:
             backfill_channels=backfill_channels,
             allowed_users=allowed_users,
             forward_cmd=forward_cmd,
+            mail_reply_review_channel=mail_reply_review_channel,
             allow_plain_messages=allow_plain_messages,
             state_path=state_path,
             log_path=log_path,
@@ -265,7 +269,9 @@ def parse_triage_command(rest: str, default_account: str) -> Tuple[List[str], st
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--archive-ads", dest="archive_ads", action="store_true")
     parser.add_argument("--no-archive-ads", dest="archive_ads", action="store_false")
-    parser.set_defaults(archive_ads=True)
+    parser.add_argument("--reply-review", dest="reply_review", action="store_true")
+    parser.add_argument("--no-reply-review", dest="reply_review", action="store_false")
+    parser.set_defaults(archive_ads=True, reply_review=None)
 
     try:
         args = parser.parse_args(tokens)
@@ -283,6 +289,10 @@ def parse_triage_command(rest: str, default_account: str) -> Tuple[List[str], st
         cmd.append("--verbose")
     if not args.archive_ads:
         cmd.append("--no-archive-ads")
+    if args.reply_review:
+        cmd.append("--reply-review")
+    elif args.reply_review is False:
+        cmd.append("--no-reply-review")
     return cmd, "ok"
 
 
@@ -295,6 +305,7 @@ def help_text() -> str:
         "- @roby triage --query \"newer_than:1d in:inbox\" --max 30\n"
         "- @roby ask 相談内容...\n"
         "- @roby dev 開発指示...\n"
+        "- メール返信案スレッドでは `1` / `2` で送信、`1を...` で修正、`キャンセル` で中止\n"
         "- メンションなしでもチャンネル投稿を処理できます\n\n"
         "※ ask/dev を省略した場合は自動判定します（開発系→dev、それ以外→ask）。"
     )
@@ -383,6 +394,43 @@ def _is_authorized(cfg: Config, channel: str, user_id: str) -> bool:
     return True
 
 
+def _is_mail_reply_review_channel(cfg: Config, channel: str) -> bool:
+    return bool(cfg.mail_reply_review_channel) and channel == cfg.mail_reply_review_channel
+
+
+def handle_mail_reply_review(cfg: Config, text: str, channel: str, thread_ts: str, user_id: str) -> bool:
+    script = os.getenv("ROBY_MAIL_REPLY_REVIEW_SCRIPT", DEFAULT_MAIL_REPLY_REVIEW_SCRIPT).strip() or DEFAULT_MAIL_REPLY_REVIEW_SCRIPT
+    if not Path(script).exists():
+        return False
+    cmd = [
+        "python3",
+        script,
+        "handle-slack",
+        "--channel",
+        channel,
+        "--thread",
+        thread_ts,
+        "--user",
+        user_id,
+        "--text",
+        text,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except Exception:
+        return False
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()[:1500]
+        if err:
+            post_message(cfg.bot_token, channel, f"メール返信レビュー処理でエラーが発生しました。\n```{err}```", thread_ts)
+        return True
+    try:
+        data = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        return False
+    return bool(data.get("handled"))
+
+
 def update_state_for_event(cfg: Config, channel: str, ts: str, source: str) -> None:
     with STATE_LOCK:
         state = load_state(cfg.state_path)
@@ -433,6 +481,13 @@ def dispatch_mention(cfg: Config, event: Dict) -> None:
     thread_ts = event.get("thread_ts") or event.get("ts") or ""
     if not _is_authorized(cfg, channel, user_id):
         return
+    if handle_mail_reply_review(cfg, text, channel, thread_ts, user_id):
+        update_state_for_event(cfg, channel, event.get("ts", thread_ts), "mail_reply_review")
+        return
+    if _is_mail_reply_review_channel(cfg, channel):
+        post_message(cfg.bot_token, channel, "このチャンネルはメール返信レビュー専用です。対象スレッドで `1` / `2` / `キャンセル` を送ってください。", thread_ts)
+        update_state_for_event(cfg, channel, event.get("ts", thread_ts), "mail_reply_review_channel_guard")
+        return
     if not text or text == "help":
         post_message(cfg.bot_token, channel, help_text(), thread_ts)
         update_state_for_event(cfg, channel, event.get("ts", thread_ts), "mention_help")
@@ -469,6 +524,13 @@ def dispatch_message(cfg: Config, event: Dict) -> None:
     if not text:
         return
     if not _is_authorized(cfg, channel, user_id):
+        return
+    if handle_mail_reply_review(cfg, text, channel, thread_ts, user_id):
+        update_state_for_event(cfg, channel, event.get("ts", thread_ts), "mail_reply_review")
+        return
+    if _is_mail_reply_review_channel(cfg, channel):
+        post_message(cfg.bot_token, channel, "このチャンネルはメール返信レビュー専用です。対象スレッドで `1` / `2` / `キャンセル` を送ってください。", thread_ts)
+        update_state_for_event(cfg, channel, event.get("ts", thread_ts), "mail_reply_review_channel_guard")
         return
     if text == "help":
         post_message(cfg.bot_token, channel, help_text(), thread_ts)

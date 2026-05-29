@@ -15,6 +15,7 @@ import urllib.error
 from roby_audit import append_audit_event
 from roby_context_seed import load_context_seed
 from roby_local_first import env_flag, int_from_env, run_ollama_json
+from roby_neuronic import build_neuronic_headers, build_neuronic_items, get_neuronic_urls, post_neuronic_items
 
 STATE_PATH = Path.home() / ".openclaw" / "roby" / "minutes_state.json"
 RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "minutes_runs.jsonl"
@@ -3515,47 +3516,12 @@ def build_neuronic_tasks(
 
 
 def _send_neuronic_once(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
-    url = env.get("NEURONIC_URL", "http://127.0.0.1:5174/api/v1/tasks/import")
-    fallback_url = env.get("NEURONIC_FALLBACK_URL", "http://127.0.0.1:5174/api/v1/tasks/bulk")
-    token = env.get("NEURONIC_TOKEN") or env.get("TASKD_AUTH_TOKEN")
-    payload_items = []
-    for item in tasks:
-        row = dict(item)
-        # Compatibility: send both snake_case and camelCase for taskd variants.
-        if "parent_origin_id" in row:
-            row["parentOriginId"] = row.get("parent_origin_id")
-        if "sibling_order" in row:
-            row["siblingOrder"] = row.get("sibling_order")
-        if "outline_path" in row:
-            row["outlinePath"] = row.get("outline_path")
-        if "external_ref" in row:
-            row["externalRef"] = row.get("external_ref")
-        if "run_id" in row:
-            row["runId"] = row.get("run_id")
-        if "feedback_state" in row:
-            row["feedbackState"] = row.get("feedback_state")
-        if "source_doc_id" in row:
-            row["sourceDocId"] = row.get("source_doc_id")
-        if "source_doc_title" in row:
-            row["sourceDocTitle"] = row.get("source_doc_title")
-        payload_items.append(row)
-    payload = {"items": payload_items}
-    data = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if token:
-        header_name = env.get("NEURONIC_AUTH_HEADER", "Authorization")
-        headers[header_name] = f"Bearer {token}"
+    url, fallback_url = get_neuronic_urls(env)
+    payload_items = build_neuronic_items(tasks, include_outline_path=True)
+    headers = build_neuronic_headers(env)
 
     def _post(target_url: str) -> Dict[str, Any]:
-        req = urllib.request.Request(target_url, data=data, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            status_code = getattr(resp, "status", 200)
-            body = resp.read().decode("utf-8", "ignore")
-        try:
-            parsed = json.loads(body)
-        except Exception:
-            parsed = {"response": body}
-        return {"ok": True, "status_code": status_code, "body": parsed}
+        return post_neuronic_items(target_url, payload_items, headers=headers, timeout=10, endpoint_style="path")
 
     try:
         res = _post(url)

@@ -55,19 +55,20 @@ class TestRobyMinutesNeuronic(TestCase):
                 "project": "TOKIWAGI_MASTER",
                 "assignee": "私",
                 "subtasks": [
-                    {"title": "子タスク1", "project": "TOKIWAGI_MASTER", "assignee": "私"},
-                    {"title": "子タスク2", "project": "TOKIWAGI_MASTER", "assignee": "私"},
+                    {"title": "社内改善の具体アクションを整理する", "project": "TOKIWAGI_MASTER", "assignee": "私"},
+                    {"title": "自分の宿題として資料整理を進める", "project": "TOKIWAGI_MASTER", "assignee": "私"},
                 ],
             }
         ]
         tasks = self.mod.build_neuronic_tasks(
             extracted=extracted,
             source="notion",
-            source_title="2026/02/17 社内定例MTG",
+            source_title="2026/02/17 TOKIWAGI_MASTER 社内定例MTG",
             source_url="https://example.com/notion",
             default_project="TOKIWAGI_MASTER",
             source_id="page_001",
             run_id="run_test_001",
+            doc_project_hints=["TOKIWAGI_MASTER"],
             include_legacy_group_tag=False,
         )
 

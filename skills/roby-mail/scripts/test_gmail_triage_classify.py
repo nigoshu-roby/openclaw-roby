@@ -37,6 +37,9 @@ class TestGmailTriageClassify(TestCase):
             self.assertIn("force_review", rules)
             self.assertIn("force_reply", rules)
             self.assertIn("mapbox.com", [x.lower() for x in rules["force_archive"]["sender_domains"]])
+            self.assertIn("asobi-yoyaku@bornelund.co.jp", [x.lower() for x in rules["force_archive"]["sender_contains"]])
+            self.assertIn("just-enterprise@mail.justsystems.com", [x.lower() for x in rules["force_archive"]["sender_contains"]])
+            self.assertIn("info@social-db.co.jp", [x.lower() for x in rules["force_archive"]["sender_contains"]])
             self.assertIn("tokiwa-gi.com", [x.lower() for x in rules["force_review"]["sender_domains"]])
 
     def test_internal_domain_in_cc_forces_review(self):
@@ -292,6 +295,57 @@ class TestGmailTriageClassify(TestCase):
         )
         self.assertEqual(category, "archive")
 
+    def test_line_budget_notice_stays_archive_even_with_project_context(self):
+        project_hints = self.mod.build_context_project_hints(
+            {
+                "projects": [
+                    {
+                        "project": "広告運用",
+                        "client_name": "株式会社TOKIWAGI",
+                        "aliases": ["LINE広告"],
+                        "related_entities": [],
+                    }
+                ]
+            }
+        )
+        category, tags, needs_reply, _rule, meta = self.mod.classify_message(
+            subject="キャンペーンの予算が消化されました",
+            sender="LINE Ads Platform <no-reply@line.me>",
+            body="株式会社TOKIWAGI の広告キャンペーンの予算が消化されました。",
+            rules={},
+            context_project_hints=project_hints,
+        )
+        self.assertEqual(category, "archive")
+        self.assertFalse(needs_reply)
+        self.assertTrue(meta.get("suppress_project_override"))
+        self.assertNotIn("context:project", tags)
+
+    def test_bornelund_asobi_promo_sender_stays_archive_with_project_context(self):
+        project_hints = self.mod.build_context_project_hints(
+            {
+                "projects": [
+                    {
+                        "project": "ボーネルンド / スマレジ",
+                        "client_name": "株式会社ボーネルンド",
+                        "aliases": ["ボーネルンド"],
+                        "related_entities": ["あそび場"],
+                    }
+                ]
+            }
+        )
+        category, tags, needs_reply, rule, meta = self.mod.classify_message(
+            subject="大型連休におすすめ！PLAYFUL WEEKイベント開催＆おすすめあそび場のおしらせ",
+            sender='"ボーネルンドあそび場" <asobi-yoyaku@bornelund.co.jp>',
+            body="ボーネルンドのあそび場イベントをご案内します。",
+            rules={},
+            context_project_hints=project_hints,
+        )
+        self.assertEqual(category, "archive")
+        self.assertEqual(rule, "bornelund_asobi_promo_archive")
+        self.assertFalse(needs_reply)
+        self.assertTrue(meta.get("suppress_project_override"))
+        self.assertNotIn("context:project", tags)
+
     def test_user_rule_can_force_reply(self):
         rules = {
             "force_archive": {"sender_domains": [], "sender_contains": [], "subject_contains": [], "subject_regex": []},
@@ -519,6 +573,150 @@ class TestGmailTriageClassify(TestCase):
         self.assertTrue(meta["known"])
         self.assertTrue(meta["context_seed"])
         self.assertIn(meta["tier"], {"medium", "high"})
+
+    def test_context_project_hint_does_not_promote_project_related_promo(self):
+        project_hints = self.mod.build_context_project_hints(
+            {
+                "projects": [
+                    {
+                        "project": "ボーネルンド",
+                        "client_name": "株式会社ボーネルンド",
+                        "aliases": ["Bornelund"],
+                        "related_entities": ["KIDKID", "キドキド"],
+                    }
+                ]
+            }
+        )
+        category, tags, needs_reply, _rule, meta = self.mod.classify_message(
+            subject="無料セミナーのご案内",
+            sender="Marketing Team <promo@mapbox.com>",
+            body="株式会社ボーネルンドの予約運用に使える最新事例をご紹介します。",
+            rules={},
+            context_project_hints=project_hints,
+        )
+        self.assertEqual(category, "archive")
+        self.assertFalse(needs_reply)
+        self.assertTrue(meta["signals"]["context_project_match"])
+        self.assertIn("context:project", tags)
+        self.assertEqual(meta.get("project_reason"), "context_project_suppressed_for_promo")
+
+    def test_creately_discount_promo_stays_archive(self):
+        category, tags, needs_reply, _rule, meta = self.mod.classify_message(
+            subject="30% off to come back - this week only",
+            sender="Creately <marketing@creately.com>",
+            body="A limited discount to reactivate your workspace.",
+            rules={},
+        )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "archive")
+        self.assertEqual(bucket, "archive")
+        self.assertEqual(reason, "newsletter_low_value")
+        self.assertFalse(needs_reply)
+
+    def test_calendar_invite_notice_stays_review_not_task(self):
+        category, tags, needs_reply, _rule, meta = self.mod.classify_message(
+            subject="招待: 事前review（LINE/YAHOO）",
+            sender="Google Calendar <calendar-notification@google.com>",
+            body="会議への招待です。参加可否をご確認ください。",
+            rules={},
+        )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        final_bucket, gate_reason, gated_meta = self.mod.decide_task_gate(
+            category,
+            bucket,
+            [{"title": "依頼内容を確認して対応する", "task_kind": "action", "note": "", "due_date": "", "project": "email"}],
+            meta,
+            tags,
+        )
+        self.assertEqual(category, "needs_review")
+        self.assertFalse(needs_reply)
+        self.assertEqual(bucket, "review")
+        self.assertEqual(reason, "review_only_notice")
+        self.assertEqual(final_bucket, "review")
+        self.assertEqual(gate_reason, "task_gate_not_applicable")
+        self.assertTrue(gated_meta["signals"]["review_only_notice"])
+
+    def test_tripla_campaign_reply_request_stays_archive(self):
+        category, tags, needs_reply, _rule, meta = self.mod.classify_message(
+            subject="【重要】キャンセル保険ウィジェット 一括設置のお知らせ",
+            sender="tripla株式会社 カスタマーサクセスチーム <cs@tripla.ai>",
+            body="不要な場合は5/25までにご回答ください。キャンセル保険のご案内です。",
+            rules={},
+        )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "archive")
+        self.assertFalse(needs_reply)
+        self.assertEqual(bucket, "archive")
+        self.assertEqual(reason, "newsletter_low_value")
+
+    def test_work_bucket_labels_use_requested_japanese_terms(self):
+        self.assertEqual(self.mod.WORK_BUCKET_LABELS["archive"], "一括保管")
+        self.assertEqual(self.mod.WORK_BUCKET_LABELS["digest"], "後で読む")
+        self.assertEqual(self.mod.WORK_BUCKET_LABELS["review"], "要確認")
+        self.assertEqual(self.mod.WORK_BUCKET_LABELS["task"], "要確認")
+
+    def test_label_changes_for_work_bucket_archives_digest(self):
+        add, remove = self.mod.label_changes_for_work_bucket("digest", archive_digest=True)
+        self.assertEqual(add, ["後で読む"])
+        self.assertIn("INBOX", remove)
+        self.assertIn("要確認", remove)
+        self.assertIn("一括保管", remove)
+
+    def test_label_changes_for_task_uses_review_label(self):
+        add, remove = self.mod.label_changes_for_work_bucket("task", archive_digest=True)
+        self.assertEqual(add, ["要確認"])
+        self.assertIn("後で読む", remove)
+        self.assertIn("一括保管", remove)
+        self.assertNotIn("INBOX", remove)
+
+    def test_reply_review_is_limited_to_human_task_mail(self):
+        self.assertTrue(
+            self.mod.should_propose_reply_review(
+                "task",
+                "needs_reply",
+                True,
+                {"signals": {"is_noreply": False}},
+                [],
+                "Client <client@example.com>",
+            )
+        )
+
+    def test_order_confirmation_and_schedule_candidates_becomes_reply_review_task(self):
+        category, tags, needs_reply, _rule, meta = self.mod.classify_message(
+            subject="発注書のご確認",
+            sender="佐田峰 <nigoshu@gmail.com>",
+            body=(
+                "先日お送りしました発注書について受け取り確認できましたでしょうか。"
+                "本件について急ぎ進めていただきたく、ご査収くださいませ。"
+                "今後の進め方についてもすり合わせしたく、打ち合わせの日程候補を3つほどいただけますと幸いです。"
+            ),
+            rules={},
+        )
+        bucket, _reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "needs_reply")
+        self.assertTrue(needs_reply)
+        self.assertEqual(bucket, "task")
+        self.assertTrue(self.mod.should_propose_reply_review(bucket, category, needs_reply, meta, tags, "佐田峰 <nigoshu@gmail.com>"))
+        self.assertFalse(
+            self.mod.should_propose_reply_review(
+                "task",
+                "needs_reply",
+                True,
+                {"signals": {"is_noreply": True}},
+                [],
+                "no-reply@example.com",
+            )
+        )
+        self.assertFalse(
+            self.mod.should_propose_reply_review(
+                "task",
+                "needs_review",
+                False,
+                {"signals": {"is_noreply": False}},
+                ["tool:autoro"],
+                "AUTORO <noreply@autoro.io>",
+            )
+        )
 
 
 if __name__ == "__main__":

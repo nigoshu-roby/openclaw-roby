@@ -30,22 +30,50 @@ cron jobs are installed in Keychain-first mode by default.
 - secrets source: macOS Keychain (`service=roby-pbs`)
 - helper wrapper: `scripts/roby-keychain-run.sh`
 - fallback config: `~/.openclaw/.env` (low-risk settings only)
+- cron env block: `scripts/install_roby_orchestrator_cron.sh` writes a redacted,
+  idempotent crontab env block for non-interactive cron access
+
+On macOS cron cannot always unlock the Keychain-backed `gog` file keyring or
+provider tokens. The installer therefore mirrors the required PBS secret values
+from the current environment / Keychain into a tagged crontab env block by
+default. Values are not printed by the installer.
+
+Disable inline cron secrets only when another non-interactive secret source is
+available:
+
+```bash
+ROBY_ORCH_CRON_INLINE_SECRETS=0 ./scripts/install_roby_orchestrator_cron.sh
+```
 
 Check current status:
 
 ```bash
 ./scripts/roby-keychain-status.sh
+./scripts/roby-cron-doctor.sh
+./scripts/roby-cron-doctor.sh --deep
 ```
 
 ## Default schedule
 
 - self_growth: `5 * * * *`
 - minutes_sync: `15 */2 * * *`
-- gmail_triage: `*/30 * * * *`
+- gmail_triage: `*/10 * * * *`
 - eval_harness: disabled (enable via env)
 - runbook_drill: disabled (enable via env)
 - notion_sync: disabled (enable via env)
 - weekly_report: disabled (enable via env)
+
+## Self Growth mode
+
+`self_growth` runs in `SELF_GROWTH_MODE=auto` by default.
+
+- clean worktree: patch mode can generate/apply/test a minimal patch.
+- dirty worktree: advisor-only mode records and notifies the current growth focus without touching files.
+- force advisor-only: set `SELF_GROWTH_MODE=advisor`.
+- force patch mode: set `SELF_GROWTH_MODE=patch`; dirty worktrees still require `SELF_GROWTH_ALLOW_DIRTY=1`.
+
+For normal cron operation, keep `SELF_GROWTH_ALLOW_DIRTY` unset. This preserves
+user/Codex work while still making the hourly job useful as an improvement radar.
 
 ## Enable Evaluation Harness job
 
@@ -123,7 +151,7 @@ Artifacts:
 cd <OPENCLAW_REPO>
 SELF_GROWTH_CRON="5 * * * *" \
 MINUTES_SYNC_CRON="45 */1 * * *" \
-GMAIL_TRIAGE_CRON="*/20 * * * *" \
+GMAIL_TRIAGE_CRON="*/10 * * * *" \
 EVAL_HARNESS_CRON="35 */6 * * *" \
 RUNBOOK_DRILL_CRON="20 8 * * 1" \
 WEEKLY_REPORT_CRON="30 9 * * 1" \
@@ -148,6 +176,7 @@ WEEKLY_REPORT_CRON="30 9 * * 1" \
 - `scripts/roby-cron-dispatch.sh` は失敗時（timeout / non-zero exit）に Slack 通知します。
   - 通知先: `SLACK_WEBHOOK_URL`（環境変数 / `.env` / Keychain）
   - 通知内容: `task`, `reason`, `time`, `host`, `log path`
+- Timeout 引数は正の整数のみ受け付けます。
 
 ## QA AB Router (optional)
 
@@ -209,6 +238,8 @@ cd <OPENCLAW_REPO>
 cd <OPENCLAW_REPO>
 ./scripts/uninstall_roby_orchestrator_cron.sh
 ```
+
+This removes the Roby cron entries and the tagged Roby cron secret env block.
 
 ## Rollback
 

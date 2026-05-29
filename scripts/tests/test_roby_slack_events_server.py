@@ -38,6 +38,7 @@ class RobySlackEventsServerTests(TestCase):
             backfill_channels=set(),
             allowed_users=set(),
             forward_cmd="",
+            mail_reply_review_channel="",
             allow_plain_messages=True,
             state_path=str(Path(tmp) / "slack_events_state.json"),
             log_path=str(Path(tmp) / "slack_events_runs.jsonl"),
@@ -122,6 +123,33 @@ class RobySlackEventsServerTests(TestCase):
             self.assertEqual(forward_calls, [("C123", "1774327375.713519")])
             state = json.loads(Path(cfg.state_path).read_text(encoding="utf-8"))
             self.assertEqual(state["channels"]["C123"]["last_seen_ts"], "1774327375.713519")
+
+    def test_mail_reply_review_channel_does_not_fall_back_to_roby(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self._cfg(tmp)
+            cfg.mail_reply_review_channel = "CREV"
+            ev = {
+                "type": "message",
+                "channel": "CREV",
+                "user": "U123",
+                "text": "このままお願いします",
+                "ts": "1774327375.900000",
+                "thread_ts": "1774327375.900000",
+            }
+
+            posts = []
+            with (
+                patch.object(self.mod, "handle_mail_reply_review", return_value=False) as handle_mail_reply_review,
+                patch.object(self.mod, "run_forward") as run_forward,
+                patch.object(self.mod, "run_triage") as run_triage,
+                patch.object(self.mod, "post_message", side_effect=lambda token, channel, text, thread_ts: posts.append((channel, text, thread_ts))),
+            ):
+                self.mod.dispatch_message(cfg, dict(ev))
+
+            handle_mail_reply_review.assert_called_once()
+            run_forward.assert_not_called()
+            run_triage.assert_not_called()
+            self.assertTrue(any("メール返信レビュー専用" in text for _, text, _ in posts))
 
 
 if __name__ == "__main__":

@@ -14,8 +14,18 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 from roby_audit import append_audit_event
+from roby_orch_profiles import apply_gmail_profile, apply_minutes_llm_profile, resolve_local_first_schedule
+from roby_orch_pipelines import (
+    build_eval_harness_plan,
+    build_feedback_sync_plan,
+    build_gmail_pipeline_plan,
+    build_memory_sync_plan,
+    build_minutes_pipeline_plan,
+    build_notion_sync_plan,
+    build_runbook_drill_plan,
+    build_weekly_report_plan,
+)
 
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 STATE_DIR = Path.home() / ".openclaw" / "roby"
@@ -200,198 +210,6 @@ def int_from_env(value: Optional[str], default: int) -> int:
         return int(str(value).strip())
     except Exception:
         return default
-
-
-def _env_enabled(value: Optional[str], default: bool = False) -> bool:
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_hhmm(text: Optional[str], default_minutes: int) -> int:
-    raw = str(text or "").strip()
-    if not raw:
-        return default_minutes
-    match = re.match(r"^(\d{1,2}):(\d{2})$", raw)
-    if not match:
-        return default_minutes
-    hour = max(0, min(23, int(match.group(1))))
-    minute = max(0, min(59, int(match.group(2))))
-    return hour * 60 + minute
-
-
-def _now_in_tz(tz_name: str, now: Optional[datetime] = None) -> datetime:
-    base = now or datetime.now(timezone.utc)
-    if base.tzinfo is None:
-        base = base.replace(tzinfo=timezone.utc)
-    try:
-        return base.astimezone(ZoneInfo(tz_name))
-    except Exception:
-        return base.astimezone(JST)
-
-
-def _within_day_window(now_minutes: int, start_minutes: int, end_minutes: int) -> bool:
-    if start_minutes == end_minutes:
-        return True
-    if start_minutes < end_minutes:
-        return start_minutes <= now_minutes < end_minutes
-    return now_minutes >= start_minutes or now_minutes < end_minutes
-
-
-def resolve_local_first_schedule(
-    env: Dict[str, str],
-    *,
-    route: str,
-    base_profile_key: str,
-    default_profile: str,
-    default_day_profile: str,
-    default_night_profile: str,
-    now: Optional[datetime] = None,
-) -> Dict[str, Any]:
-    tz_name = (env.get("ROBY_ORCH_LOCAL_FIRST_TZ", "Asia/Tokyo") or "Asia/Tokyo").strip()
-    schedule_enabled = _env_enabled(env.get("ROBY_ORCH_LOCAL_FIRST_SCHEDULE"), True)
-    base_profile = (env.get(base_profile_key, default_profile) or default_profile).strip().lower()
-    day_profile = (env.get(f"ROBY_ORCH_{route}_PROFILE_DAY", default_day_profile) or default_day_profile).strip().lower()
-    night_profile = (env.get(f"ROBY_ORCH_{route}_PROFILE_NIGHT", default_night_profile) or default_night_profile).strip().lower()
-    start_raw = env.get("ROBY_ORCH_LOCAL_FIRST_DAY_START", "08:00")
-    end_raw = env.get("ROBY_ORCH_LOCAL_FIRST_DAY_END", "20:00")
-    start_minutes = _parse_hhmm(start_raw, 8 * 60)
-    end_minutes = _parse_hhmm(end_raw, 20 * 60)
-    local_now = _now_in_tz(tz_name, now)
-    minute_of_day = local_now.hour * 60 + local_now.minute
-    in_day = _within_day_window(minute_of_day, start_minutes, end_minutes)
-    effective_profile = base_profile
-    window = "fixed"
-    if schedule_enabled:
-        window = "day" if in_day else "night"
-        effective_profile = day_profile if in_day else night_profile
-    return {
-        "schedule_enabled": schedule_enabled,
-        "tz": tz_name,
-        "window": window,
-        "window_label": "日中" if window == "day" else "深夜" if window == "night" else "固定",
-        "base_profile": base_profile,
-        "day_profile": day_profile,
-        "night_profile": night_profile,
-        "effective_profile": effective_profile,
-        "day_start": start_raw,
-        "day_end": end_raw,
-        "local_time": local_now.strftime("%H:%M"),
-    }
-
-
-def apply_minutes_llm_profile(env: Dict[str, str], now: Optional[datetime] = None) -> Tuple[str, Dict[str, str]]:
-    schedule = resolve_local_first_schedule(
-        env,
-        route="MINUTES",
-        base_profile_key="ROBY_ORCH_MINUTES_LLM_PROFILE",
-        default_profile="hybrid",
-        default_day_profile="hybrid",
-        default_night_profile="local",
-        now=now,
-    )
-    profile = str(schedule["effective_profile"])
-    local_fast = (env.get("ROBY_ORCH_MINUTES_LOCAL_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
-    local_quality = (env.get("ROBY_ORCH_MINUTES_LOCAL_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
-    cloud = (env.get("ROBY_ORCH_MINUTES_CLOUD_MODEL", env.get("MINUTES_GEMINI_MODEL", "google/gemini-3-flash-preview")) or "").strip()
-
-    def _csv(*models: str) -> str:
-        return ",".join([m for m in models if m])
-
-    overrides: Dict[str, str] = {}
-    if profile == "local":
-        overrides = {
-            "MINUTES_LOCAL_PREPROCESS_ENABLE": "1",
-            "MINUTES_LOCAL_PREPROCESS_MODEL": local_quality or local_fast or cloud,
-            "MINUTES_LOCAL_PREPROCESS_MIN_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MIN_CHARS", "1800"),
-            "MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS", "12000"),
-            "MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC": env.get("MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC", "45"),
-            "MINUTES_LOCAL_PREPROCESS_NUM_PREDICT": env.get("MINUTES_LOCAL_PREPROCESS_NUM_PREDICT", "1400"),
-            "MINUTES_REVIEW_MODELS": _csv(local_quality, local_fast, cloud),
-            "MINUTES_TASKS_MODELS": _csv(local_quality, local_fast, cloud),
-            "MINUTES_SUMMARY_MODELS": _csv(local_quality, local_fast, cloud),
-            "MINUTES_COMPACT_MODELS": _csv(local_fast, local_quality, cloud),
-            "MINUTES_REPAIR_MODELS": _csv(local_quality, local_fast, cloud),
-            "MINUTES_ENRICH_MODELS": _csv(local_fast, local_quality, cloud),
-        }
-    elif profile == "cloud":
-        overrides = {
-            "MINUTES_LOCAL_PREPROCESS_ENABLE": env.get("ROBY_ORCH_MINUTES_LOCAL_PREPROCESS_IN_CLOUD", "0"),
-            "MINUTES_LOCAL_PREPROCESS_MODEL": local_fast or local_quality or cloud,
-            "MINUTES_LOCAL_PREPROCESS_MIN_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MIN_CHARS", "1800"),
-            "MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS", "12000"),
-            "MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC": env.get("MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC", "30"),
-            "MINUTES_LOCAL_PREPROCESS_NUM_PREDICT": env.get("MINUTES_LOCAL_PREPROCESS_NUM_PREDICT", "900"),
-            "MINUTES_REVIEW_MODELS": _csv(cloud, local_quality),
-            "MINUTES_TASKS_MODELS": _csv(cloud, local_quality),
-            "MINUTES_SUMMARY_MODELS": _csv(cloud, local_quality),
-            "MINUTES_COMPACT_MODELS": _csv(cloud, local_fast),
-            "MINUTES_REPAIR_MODELS": _csv(cloud, local_quality),
-            "MINUTES_ENRICH_MODELS": _csv(cloud, local_fast),
-        }
-    else:  # hybrid
-        profile = "hybrid"
-        overrides = {
-            "MINUTES_LOCAL_PREPROCESS_ENABLE": "1",
-            "MINUTES_LOCAL_PREPROCESS_MODEL": local_fast or local_quality or cloud,
-            "MINUTES_LOCAL_PREPROCESS_MIN_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MIN_CHARS", "1800"),
-            "MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS": env.get("MINUTES_LOCAL_PREPROCESS_MAX_INPUT_CHARS", "12000"),
-            "MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC": env.get("MINUTES_LOCAL_PREPROCESS_TIMEOUT_SEC", "30"),
-            "MINUTES_LOCAL_PREPROCESS_NUM_PREDICT": env.get("MINUTES_LOCAL_PREPROCESS_NUM_PREDICT", "900"),
-            "MINUTES_REVIEW_MODELS": _csv(cloud, local_quality, local_fast),
-            "MINUTES_TASKS_MODELS": _csv(cloud, local_quality, local_fast),
-            "MINUTES_SUMMARY_MODELS": _csv(cloud, local_quality, local_fast),
-            "MINUTES_COMPACT_MODELS": _csv(local_fast, cloud),
-            "MINUTES_REPAIR_MODELS": _csv(cloud, local_quality, local_fast),
-            "MINUTES_ENRICH_MODELS": _csv(local_fast, cloud),
-        }
-    overrides["ROBY_ORCH_MINUTES_EFFECTIVE_PROFILE"] = profile
-    overrides["ROBY_ORCH_MINUTES_WINDOW"] = str(schedule["window"])
-    return profile, overrides
-
-
-def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> Tuple[str, Dict[str, str]]:
-    schedule = resolve_local_first_schedule(
-        env,
-        route="GMAIL",
-        base_profile_key="ROBY_ORCH_GMAIL_PROFILE",
-        default_profile="fast",
-        default_day_profile="fast",
-        default_night_profile="hybrid",
-        now=now,
-    )
-    profile = str(schedule["effective_profile"])
-    fast_model = (env.get("ROBY_ORCH_GMAIL_LLM_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
-    quality_model = (env.get("ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
-    overrides: Dict[str, str] = {}
-    if profile == "quality":
-        overrides = {
-            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
-            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": quality_model or fast_model,
-            "GMAIL_TRIAGE_LLM_ENABLE": "1",
-            "GMAIL_TRIAGE_LLM_MODEL": quality_model or fast_model,
-            "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_QUALITY", "30"),
-        }
-    elif profile == "hybrid":
-        overrides = {
-            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
-            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
-            "GMAIL_TRIAGE_LLM_ENABLE": "1",
-            "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
-            "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_HYBRID", "10"),
-        }
-    else:  # fast
-        profile = "fast"
-        overrides = {
-            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": env.get("ROBY_ORCH_GMAIL_LOCAL_PRECLASSIFY_FAST", "1"),
-            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
-            "GMAIL_TRIAGE_LLM_ENABLE": "0",
-            "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
-            "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_FAST", "0"),
-        }
-    overrides["ROBY_ORCH_GMAIL_EFFECTIVE_PROFILE"] = profile
-    overrides["ROBY_ORCH_GMAIL_WINDOW"] = str(schedule["window"])
-    return profile, overrides
 
 
 def load_ab_router_config(env: Dict[str, str]) -> Dict[str, Any]:
@@ -2132,65 +1950,16 @@ def handle_minutes_pipeline(message: str, env: Dict[str, str], execute: bool, ve
     if is_direct_neuronic_register_request(intent_text):
         return handle_neuronic_direct_register(intent_text, env, execute)
 
-    select_match = re.search(r"--select\s+\"([^\"]+)\"|--select\s+'([^']+)'|--select\s+(\S+)", intent_text)
-    select_val = None
-    if select_match:
-        select_val = next((g for g in select_match.groups() if g), None)
-
-    run_mode = "list"
-    if any(k in intent_text for k in ["実行", "取り込み", "連携", "Neuronic", "タスク化", "登録", "タスク登録"]):
-        run_mode = "run"
-
-    cmd = ["python3", str(MINUTES_SCRIPT)]
-    if run_mode == "run":
-        cmd.append("--run")
-    else:
-        cmd.append("--list")
-    if select_val:
-        cmd.extend(["--select", select_val])
-    elif run_mode == "run":
-        cron_context = env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1"
-        policy = env.get("ROBY_ORCH_MINUTES_POLICY", "").strip()
-        if not policy and cron_context:
-            policy = "ops_default"
-        if policy:
-            cmd.extend(["--policy", policy])
-        if env.get("ROBY_ORCH_MINUTES_FORCE", "0") == "1":
-            cmd.append("--force")
-        if env.get("ROBY_ORCH_MINUTES_REFRESH", "0") == "1":
-            cmd.append("--refresh")
-        if env.get("ROBY_ORCH_MINUTES_SKIP_NOTION", "0") == "1":
-            cmd.append("--skip-notion")
-        if env.get("ROBY_ORCH_MINUTES_SKIP_GDOCS", "0") == "1":
-            cmd.append("--skip-gdocs")
-        if env.get("ROBY_ORCH_MINUTES_DAYS", "").strip():
-            cmd.extend(["--days", env["ROBY_ORCH_MINUTES_DAYS"].strip()])
-        max_items = env.get("ROBY_ORCH_MINUTES_MAX", "").strip()
-        if not max_items and cron_context:
-            max_items = env.get("ROBY_ORCH_MINUTES_CRON_MAX", "4").strip()
-        if max_items:
-            cmd.extend(["--max", max_items])
-    if verbose:
-        cmd.append("--debug")
-
-    profile, profile_env = apply_minutes_llm_profile(env)
-    child_env = dict(env)
-    child_env.update(profile_env)
-    if child_env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1":
-        cron_local_preprocess = env.get("ROBY_ORCH_MINUTES_CRON_LOCAL_PREPROCESS", "").strip()
-        if cron_local_preprocess:
-            child_env["MINUTES_LOCAL_PREPROCESS_ENABLE"] = cron_local_preprocess
-    if child_env.get("ROBY_ORCH_CRON_CONTEXT", "0") == "1" and "MINUTES_DOC_TIMEOUT_SEC" not in env:
-        child_env["MINUTES_DOC_TIMEOUT_SEC"] = child_env.get("ROBY_ORCH_MINUTES_CRON_DOC_TIMEOUT_SEC", "45") or "45"
-
-    result = {
-        "route": ROUTE_MINUTES,
-        "mode": run_mode,
-        "llm_profile": profile,
-        "llm_overrides": profile_env,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-    }
+    plan = build_minutes_pipeline_plan(
+        intent_text,
+        env,
+        minutes_script=MINUTES_SCRIPT,
+        verbose=verbose,
+        route=ROUTE_MINUTES,
+    )
+    cmd = plan["cmd"]
+    child_env = plan["child_env"]
+    result = plan["result"]
     if execute:
         timeout_sec = int((env.get("ROBY_ORCH_MINUTES_TIMEOUT_SEC", "1800") or "1800").strip())
         try:
@@ -2235,42 +2004,16 @@ def handle_self_growth(env: Dict[str, str], execute: bool) -> Dict[str, Any]:
 
 
 def handle_gmail_pipeline(message: str, env: Dict[str, str], execute: bool, verbose: bool) -> Dict[str, Any]:
-    account = env.get("ROBY_GMAIL_ACCOUNT") or env.get("GOG_ACCOUNT") or ""
-    query = env.get("ROBY_GMAIL_QUERY", "newer_than:1d in:inbox")
-    max_items = env.get("ROBY_GMAIL_MAX", "20")
-
-    m_query = re.search(r"(newer_than:\S+.*|in:inbox.*)$", message, flags=re.IGNORECASE)
-    if m_query:
-        query = m_query.group(1).strip()
-    m_max = re.search(r"--max\s+(\d+)|(\d+)\s*件", message)
-    if m_max:
-        max_items = next((g for g in m_max.groups() if g), max_items)
-
-    cmd = [
-        "python3", str(GMAIL_TRIAGE_SCRIPT),
-        "--account", account,
-        "--query", query,
-        "--max", str(max_items),
-    ]
-    if verbose:
-        cmd.append("--verbose")
-    if any(k in message for k in ["dry-run", "ドライラン", "確認だけ", "一覧だけ"]):
-        cmd.append("--dry-run")
-
-    profile, profile_env = apply_gmail_profile(env)
-    child_env = dict(env)
-    child_env.update(profile_env)
-
-    result = {
-        "route": ROUTE_GMAIL,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-        "llm_profile": profile,
-        "llm_overrides": profile_env,
-        "account": account,
-        "query": query,
-        "max": int(max_items),
-    }
+    plan = build_gmail_pipeline_plan(
+        message,
+        env,
+        gmail_triage_script=GMAIL_TRIAGE_SCRIPT,
+        verbose=verbose,
+        route=ROUTE_GMAIL,
+    )
+    cmd = plan["cmd"]
+    child_env = plan["child_env"]
+    result = plan["result"]
     if execute:
         timeout_sec = int((env.get("ROBY_ORCH_GMAIL_TIMEOUT_SEC", "240") or "240").strip())
         try:
@@ -2297,137 +2040,80 @@ def handle_gmail_pipeline(message: str, env: Dict[str, str], execute: bool, verb
     return result
 
 
-def handle_notion_sync(env: Dict[str, str], execute: bool, dry_run: bool = False) -> Dict[str, Any]:
-    owner = env.get("ROBY_GH_OWNER", "nigoshu-roby")
-    project_number = env.get("ROBY_GH_PROJECT_NUMBER", "1")
-    page_id = env.get("ROBY_NOTION_SYNC_PAGE_ID", "")
-    cmd = [
-        "python3", str(NOTION_SYNC_SCRIPT),
-        "--owner", owner,
-        "--project-number", str(project_number),
-    ]
-    if page_id:
-        cmd.extend(["--page-id", page_id])
-    if dry_run:
-        cmd.append("--dry-run")
-
-    result: Dict[str, Any] = {
-        "route": ROUTE_NOTION_SYNC,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-    }
+def _run_subprocess_plan(plan: Dict[str, Any], execute: bool) -> Dict[str, Any]:
+    result = plan["result"]
     if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
+        proc = subprocess.run(
+            plan["cmd"],
+            cwd=str(OPENCLAW_REPO),
+            env=plan["child_env"],
+            capture_output=True,
+            text=True,
+        )
         result["executed"] = True
         result["ok"] = proc.returncode == 0
         result["stdout"] = proc.stdout
         result["stderr"] = proc.stderr
         result["returncode"] = proc.returncode
     return result
+
+
+def handle_notion_sync(env: Dict[str, str], execute: bool, dry_run: bool = False) -> Dict[str, Any]:
+    plan = build_notion_sync_plan(
+        env,
+        notion_sync_script=NOTION_SYNC_SCRIPT,
+        route=ROUTE_NOTION_SYNC,
+        dry_run=dry_run,
+    )
+    return _run_subprocess_plan(plan, execute)
 
 
 def handle_feedback_sync(env: Dict[str, str], execute: bool, dry_run: bool = False) -> Dict[str, Any]:
-    cmd = [
-        "python3", str(FEEDBACK_SYNC_SCRIPT),
-        "--json",
-    ]
-    if dry_run:
-        cmd.append("--dry-run")
-    result: Dict[str, Any] = {
-        "route": ROUTE_FEEDBACK,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-    }
-    if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
-        result["executed"] = True
-        result["ok"] = proc.returncode == 0
-        result["stdout"] = proc.stdout
-        result["stderr"] = proc.stderr
-        result["returncode"] = proc.returncode
-    return result
+    plan = build_feedback_sync_plan(
+        env,
+        feedback_sync_script=FEEDBACK_SYNC_SCRIPT,
+        route=ROUTE_FEEDBACK,
+        dry_run=dry_run,
+    )
+    return _run_subprocess_plan(plan, execute)
 
 
 def handle_memory_sync(env: Dict[str, str], execute: bool, dry_run: bool = False) -> Dict[str, Any]:
-    cmd = [
-        "python3", str(MEMORY_SYNC_SCRIPT),
-        "--json",
-    ]
-    if dry_run:
-        cmd.append("--dry-run")
-    result: Dict[str, Any] = {
-        "route": ROUTE_MEMORY_SYNC,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-    }
-    if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
-        result["executed"] = True
-        result["ok"] = proc.returncode == 0
-        result["stdout"] = proc.stdout
-        result["stderr"] = proc.stderr
-        result["returncode"] = proc.returncode
-    return result
+    plan = build_memory_sync_plan(
+        env,
+        memory_sync_script=MEMORY_SYNC_SCRIPT,
+        route=ROUTE_MEMORY_SYNC,
+        dry_run=dry_run,
+    )
+    return _run_subprocess_plan(plan, execute)
 
 
 def handle_eval_harness(env: Dict[str, str], execute: bool, verbose: bool) -> Dict[str, Any]:
-    cmd = [
-        "python3", str(EVAL_HARNESS_SCRIPT),
-        "--json",
-    ]
-    if verbose:
-        cmd.append("--verbose")
-    result: Dict[str, Any] = {
-        "route": ROUTE_EVAL,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-    }
-    if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
-        result["executed"] = True
-        result["ok"] = proc.returncode == 0
-        result["stdout"] = proc.stdout
-        result["stderr"] = proc.stderr
-        result["returncode"] = proc.returncode
-    return result
+    plan = build_eval_harness_plan(
+        env,
+        eval_harness_script=EVAL_HARNESS_SCRIPT,
+        route=ROUTE_EVAL,
+        verbose=verbose,
+    )
+    return _run_subprocess_plan(plan, execute)
 
 
 def handle_runbook_drill(env: Dict[str, str], execute: bool) -> Dict[str, Any]:
-    cmd = [
-        "python3", str(DRILL_SCRIPT), "--json",
-    ]
-    result: Dict[str, Any] = {
-        "route": ROUTE_DRILL,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-    }
-    if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
-        result["executed"] = True
-        result["ok"] = proc.returncode == 0
-        result["stdout"] = proc.stdout
-        result["stderr"] = proc.stderr
-        result["returncode"] = proc.returncode
-    return result
+    plan = build_runbook_drill_plan(
+        env,
+        drill_script=DRILL_SCRIPT,
+        route=ROUTE_DRILL,
+    )
+    return _run_subprocess_plan(plan, execute)
 
 
 def handle_weekly_report(env: Dict[str, str], execute: bool) -> Dict[str, Any]:
-    cmd = [
-        "python3", str(WEEKLY_REPORT_SCRIPT), "--json",
-    ]
-    result: Dict[str, Any] = {
-        "route": ROUTE_WEEKLY_REPORT,
-        "command": " ".join(shlex.quote(x) for x in cmd),
-        "executed": False,
-    }
-    if execute:
-        proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), env=env, capture_output=True, text=True)
-        result["executed"] = True
-        result["ok"] = proc.returncode == 0
-        result["stdout"] = proc.stdout
-        result["stderr"] = proc.stderr
-        result["returncode"] = proc.returncode
-    return result
+    plan = build_weekly_report_plan(
+        env,
+        weekly_report_script=WEEKLY_REPORT_SCRIPT,
+        route=ROUTE_WEEKLY_REPORT,
+    )
+    return _run_subprocess_plan(plan, execute)
 
 
 def handle_qa_gemini(

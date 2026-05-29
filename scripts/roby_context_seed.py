@@ -53,6 +53,42 @@ def _split_phrase_values(raw: str) -> List[str]:
     return values
 
 
+def _extract_related_entity_names(raw: str) -> List[str]:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    names: List[str] = []
+    for chunk in re.split(r"[\n、,]+", text):
+        item = chunk.strip().strip("・")
+        if not item:
+            continue
+        head = re.split(r"[=＝:：]", item, maxsplit=1)[0].strip()
+        if not head:
+            continue
+        if "（" in head and "）" in head:
+            left, _, tail = head.partition("（")
+            inside, _, _rest = tail.partition("）")
+            left = left.strip()
+            inside = inside.strip()
+            if left:
+                names.append(left)
+            if inside:
+                names.append(inside)
+            continue
+        if "(" in head and ")" in head:
+            left, _, tail = head.partition("(")
+            inside, _, _rest = tail.partition(")")
+            left = left.strip()
+            inside = inside.strip()
+            if left:
+                names.append(left)
+            if inside:
+                names.append(inside)
+            continue
+        names.append(head)
+    return list(dict.fromkeys([x for x in names if x]))
+
+
 def _extract_person_names(text: str) -> List[str]:
     names: List[str] = []
     patterns = [
@@ -111,7 +147,9 @@ def _parse_projects(section: str) -> List[Dict[str, Any]]:
         project = _extract_field(block, '正式名')
         if not project:
             continue
+        client_name = _extract_field(block, 'クライアント名')
         aliases = _split_inline_values(_extract_field(block, '略称 / 別名'))
+        related_entities = _extract_related_entity_names(_extract_field(block, '関連会社 / 関連ブランド'))
         keywords = _split_inline_values(_extract_field(block, '会議や議事録でよく出る固有語'))
         relation_text = _extract_subblock(block, '関係者')
         owner_hints = _extract_person_names(relation_text)
@@ -132,7 +170,9 @@ def _parse_projects(section: str) -> List[Dict[str, Any]]:
         projects.append(
             {
                 "project": project,
+                "client_name": client_name,
                 "aliases": list(dict.fromkeys([a for a in aliases if a and a != project])),
+                "related_entities": list(dict.fromkeys([x for x in related_entities if x and x != project and x != client_name])),
                 "keywords": list(dict.fromkeys([k for k in keywords if k])),
                 "owner_hints": list(dict.fromkeys([n for n in owner_hints if n])),
                 "action_hints": list(dict.fromkeys(action_hints)),

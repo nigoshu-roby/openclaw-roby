@@ -54,6 +54,10 @@ esac
 if [[ -z "$TIMEOUT_SEC" ]]; then
   TIMEOUT_SEC="$DEFAULT_TIMEOUT"
 fi
+if ! [[ "$TIMEOUT_SEC" =~ ^[0-9]+$ ]] || (( TIMEOUT_SEC <= 0 )); then
+  echo "Invalid timeout_sec: ${TIMEOUT_SEC}" >&2
+  exit 2
+fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="${HOME}/.openclaw/roby"

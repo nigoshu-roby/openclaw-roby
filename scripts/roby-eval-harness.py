@@ -86,6 +86,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--max-retries", type=int, default=None, help="Override policy max_retries")
     parser.add_argument("--retry-delay-ms", type=int, default=None, help="Override policy retry_delay_ms")
+    parser.add_argument(
+        "--case-timeout-sec",
+        type=int,
+        default=None,
+        help="Override per-case orchestrator timeout in seconds",
+    )
     parser.add_argument("--write-markdown", default=str(LATEST_MD_PATH))
     parser.add_argument("--skip-gates", action="store_true", help="Only evaluate checks without policy gating")
     parser.add_argument("--soft-fail", action="store_true", help="Always exit 0")
@@ -126,6 +132,14 @@ def load_env() -> Dict[str, str]:
         except Exception:
             continue
     return env
+
+
+def _timeout_output_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def send_slack(webhook_url: str, text: str) -> None:
@@ -201,7 +215,7 @@ def get_by_path(data: Any, dotted: str) -> Any:
     return cur
 
 
-def run_orchestrator(case: EvalCase) -> Dict[str, Any]:
+def run_orchestrator(case: EvalCase, child_env: Dict[str, str], timeout_sec: int) -> Dict[str, Any]:
     cmd = [
         "python3",
         str(ORCH_SCRIPT),
@@ -214,11 +228,33 @@ def run_orchestrator(case: EvalCase) -> Dict[str, Any]:
     if case.execute:
         cmd.append("--execute")
     started = time.perf_counter()
-    child_env = dict(os.environ)
     # Keep evaluation deterministic and low-variance:
     # disable AB routing during harness runs.
-    child_env["ROBY_ORCH_AB_ROUTER"] = "0"
-    proc = subprocess.run(cmd, cwd=str(OPENCLAW_REPO), capture_output=True, text=True, env=child_env)
+    run_env = dict(child_env)
+    run_env["ROBY_ORCH_AB_ROUTER"] = "0"
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(OPENCLAW_REPO),
+            capture_output=True,
+            text=True,
+            env=run_env,
+            timeout=max(timeout_sec, 1),
+        )
+    except subprocess.TimeoutExpired as exc:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        stdout = _timeout_output_text(exc.stdout).strip()
+        stderr = _timeout_output_text(exc.stderr).strip()
+        timeout_note = f"orchestrator timed out after {timeout_sec}s"
+        stderr = f"{stderr}\n{timeout_note}".strip()
+        return {
+            "returncode": 124,
+            "stdout": stdout,
+            "stderr": stderr,
+            "parsed": {},
+            "parse_error": "",
+            "elapsed_ms": elapsed_ms,
+        }
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
@@ -309,7 +345,7 @@ def extract_retry_signal(attempt: Dict[str, Any], policy: EvalPolicy) -> bool:
     return any(marker in blob for marker in policy.transient_failure_markers)
 
 
-def evaluate_case(case: EvalCase, policy: EvalPolicy) -> Dict[str, Any]:
+def evaluate_case(case: EvalCase, policy: EvalPolicy, child_env: Dict[str, str], timeout_sec: int) -> Dict[str, Any]:
     max_attempts = max(int(policy.max_retries), 0) + 1
     attempts: List[Dict[str, Any]] = []
     final_failures: List[str] = []
@@ -317,7 +353,7 @@ def evaluate_case(case: EvalCase, policy: EvalPolicy) -> Dict[str, Any]:
     transient_retry_used = 0
 
     for idx in range(max_attempts):
-        attempt = run_orchestrator(case)
+        attempt = run_orchestrator(case, child_env, timeout_sec)
         failure_reasons: List[str] = []
         if int(attempt["returncode"]) != 0:
             failure_reasons.append(f"orchestrator_exit: {attempt['returncode']}")
@@ -511,6 +547,12 @@ def main() -> int:
         policy.max_retries = max(args.max_retries, 0)
     if args.retry_delay_ms is not None:
         policy.retry_delay_ms = max(args.retry_delay_ms, 0)
+    case_timeout_sec = max(
+        args.case_timeout_sec
+        if args.case_timeout_sec is not None
+        else int(str(env.get("ROBY_EVAL_CASE_TIMEOUT_SEC", "180")).strip() or "180"),
+        1,
+    )
 
     selected = set(args.case or [])
     if selected:
@@ -524,7 +566,7 @@ def main() -> int:
 
     started = datetime.now(JST)
     previous = load_previous_latest(LATEST_PATH)
-    case_results = [evaluate_case(case, policy) for case in cases]
+    case_results = [evaluate_case(case, policy, env, case_timeout_sec) for case in cases]
     passed = sum(1 for r in case_results if r.get("ok"))
     failed = len(case_results) - passed
     elapsed_values = [int(r.get("elapsed_ms", 0)) for r in case_results]
@@ -543,6 +585,7 @@ def main() -> int:
             "max_avg_ms": policy.max_avg_ms,
             "max_retries": policy.max_retries,
             "retry_delay_ms": policy.retry_delay_ms,
+            "case_timeout_sec": case_timeout_sec,
         },
         "total": len(case_results),
         "passed": passed,

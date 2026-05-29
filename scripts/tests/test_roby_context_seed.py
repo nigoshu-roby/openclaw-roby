@@ -35,6 +35,8 @@ class TestRobyContextSeed(TestCase):
 ### Project
 - 正式名: ボーネルンド
 - 略称 / 別名: ボーネルンド, Bornelund
+- クライアント名: 株式会社ボーネルンド
+- 関連会社 / 関連ブランド: KIDKID（キドキド）＝屋内あそび場, Mooovi（モーヴィー）＝施設ブランド
 - 関係者:
   - クライアント担当者: 飯野さん、早川さん
   - 社内担当者: 高田さん
@@ -65,7 +67,10 @@ class TestRobyContextSeed(TestCase):
         self.assertIn("にーご", parsed["role"]["self_aliases"])
         self.assertIn("高田", parsed["owner_rules"]["other_owner_names"])
         self.assertEqual(parsed["projects"][0]["project"], "ボーネルンド")
+        self.assertEqual(parsed["projects"][0]["client_name"], "株式会社ボーネルンド")
         self.assertIn("Bornelund", parsed["projects"][0]["aliases"])
+        self.assertIn("KIDKID", parsed["projects"][0]["related_entities"])
+        self.assertIn("キドキド", parsed["projects"][0]["related_entities"])
         self.assertIn("飯野", parsed["projects"][0]["owner_hints"])
         self.assertIn("会議調整", parsed["projects"][0]["action_hints"])
         self.assertIn("資料修正", parsed["projects"][0]["positive_task_hints"])
