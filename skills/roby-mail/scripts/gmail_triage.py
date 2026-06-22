@@ -945,27 +945,76 @@ def _extract_summary_text(data: Dict[str, Any]) -> str:
     return ""
 
 
-def llm_triage_decision(subject: str, sender: str, cc: str, body: str, env: Dict[str, str]) -> Tuple[Optional[str], str]:
-    if (env.get("GMAIL_TRIAGE_LLM_ENABLE", "0") or "0").strip() not in {"1", "true", "yes", "on"}:
-        return None, ""
+def normalize_semantic_triage(parsed: Any) -> Dict[str, Any]:
+    if not isinstance(parsed, dict):
+        return {}
+    category = str(parsed.get("category") or parsed.get("bucket") or "").strip()
+    if category == "task":
+        category = "needs_reply" if parsed.get("requires_reply") else "needs_review"
+    if category not in {"archive", "later_check", "needs_review", "needs_reply"}:
+        if parsed.get("requires_reply"):
+            category = "needs_reply"
+        elif parsed.get("requires_user_action"):
+            category = "needs_review"
+        else:
+            category = ""
 
-    model = (env.get("GMAIL_TRIAGE_LLM_MODEL", "ollama/llama3.2:3b") or "").strip()
+    def _bool(key: str) -> bool:
+        value = parsed.get(key)
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    try:
+        confidence = float(parsed.get("confidence", 0) or 0)
+    except Exception:
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+
+    return {
+        "category": category,
+        "requires_user_action": _bool("requires_user_action"),
+        "requires_reply": _bool("requires_reply"),
+        "deadline": str(parsed.get("deadline") or parsed.get("due_date") or "").strip(),
+        "is_broadcast": _bool("is_broadcast"),
+        "is_auto_notice": _bool("is_auto_notice"),
+        "confidence": confidence,
+        "reason": str(parsed.get("reason") or "").strip(),
+        "action_type": str(parsed.get("action_type") or "").strip(),
+        "risk_flags": parsed.get("risk_flags") if isinstance(parsed.get("risk_flags"), list) else [],
+    }
+
+
+def semantic_triage_decision(subject: str, sender: str, cc: str, body: str, env: Dict[str, str]) -> Dict[str, Any]:
+    if not shared_env_flag(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE", shared_env_flag(env, "GMAIL_TRIAGE_LLM_ENABLE", False)):
+        return {}
+
+    model = (
+        env.get("GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL")
+        or env.get("GMAIL_TRIAGE_LLM_MODEL")
+        or env.get("GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL")
+        or "ollama/llama3.2:3b"
+    ).strip()
     if not model:
-        return None, ""
-    timeout_sec = int((env.get("GMAIL_TRIAGE_LLM_TIMEOUT_SEC", "45") or "45").strip())
-    max_input_chars = int((env.get("GMAIL_TRIAGE_LLM_MAX_INPUT_CHARS", "5000") or "5000").strip())
-    max_output_tokens = (env.get("GMAIL_TRIAGE_LLM_MAX_OUTPUT_TOKENS", "180") or "180").strip()
-    length = (env.get("GMAIL_TRIAGE_LLM_LENGTH", "s") or "s").strip()
+        return {}
+    timeout_sec = shared_int_from_env(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_TIMEOUT_SEC", shared_int_from_env(env, "GMAIL_TRIAGE_LLM_TIMEOUT_SEC", 45))
+    max_input_chars = shared_int_from_env(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_INPUT_CHARS", shared_int_from_env(env, "GMAIL_TRIAGE_LLM_MAX_INPUT_CHARS", 7000))
+    max_output_tokens = str(shared_int_from_env(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_OUTPUT_TOKENS", shared_int_from_env(env, "GMAIL_TRIAGE_LLM_MAX_OUTPUT_TOKENS", 420)))
+    length = (env.get("GMAIL_TRIAGE_SEMANTIC_TRIAGE_LENGTH", env.get("GMAIL_TRIAGE_LLM_LENGTH", "s")) or "s").strip()
 
     prompt = (
-        "You classify business email triage for a Japanese solo operator. "
-        "Return ONLY JSON object: {\"category\":\"archive|later_check|needs_review|needs_reply\",\"reason\":\"short\"}. "
-        "Rules: "
-        "archive for obvious promo/newsletter/seminar announcements. "
-        "needs_review for internal coordination, ops notices, and anything involving decisions. "
-        "needs_reply only when explicit response/action is requested from recipient. "
-        "later_check for tool/platform notices worth checking later. "
-        "Be conservative with needs_reply."
+        "You are the semantic triage layer for Japanese business email. "
+        "Read the body, not just keywords. Return ONLY JSON with keys: "
+        "category, requires_user_action, requires_reply, deadline, is_broadcast, is_auto_notice, confidence, action_type, risk_flags, reason. "
+        "category must be one of archive, later_check, needs_review, needs_reply. "
+        "requires_user_action means the recipient should do a future checkable action, not merely read an FYI. "
+        "requires_reply means a human reply/response/report back is expected. "
+        "Use needs_reply when the sender expects a reply or the recipient must complete an action and report back. "
+        "Use needs_review for important decisions, billing, contracts, failures, client coordination, or ambiguous action-worthy mail. "
+        "Use later_check for platform/tool notices worth seeing later but not requiring action. "
+        "Use archive only for clear newsletters, marketing, calendar response receipts, or low-value automated notices. "
+        "If a URL/form/schedule table must be answered, requires_user_action=true and action_type should describe that concrete action. "
+        "Be generous about sending real business mail to AI review, but conservative about deleting/archive decisions."
     )
     body_trim = (body or "")[:max_input_chars]
     source_text = (
@@ -989,14 +1038,17 @@ def llm_triage_decision(subject: str, sender: str, cc: str, body: str, env: Dict
         data = json.loads(out)
         raw = _extract_summary_text(data)
         parsed = _parse_jsonish_text(raw)
-        if isinstance(parsed, dict):
-            cat = str(parsed.get("category") or "").strip()
-            reason = str(parsed.get("reason") or "").strip()
-            if cat in {"archive", "later_check", "needs_review", "needs_reply"}:
-                return cat, reason
+        decision = normalize_semantic_triage(parsed)
+        if decision.get("category"):
+            return decision
     except Exception:
-        return None, ""
-    return None, ""
+        return {}
+    return {}
+
+
+def llm_triage_decision(subject: str, sender: str, cc: str, body: str, env: Dict[str, str]) -> Tuple[Optional[str], str]:
+    decision = semantic_triage_decision(subject, sender, cc, body, env)
+    return (str(decision.get("category") or "") or None), str(decision.get("reason") or "")
 
 
 def local_preclassify_email(
@@ -1075,6 +1127,73 @@ def should_apply_llm_override(
         return True
 
     return True
+
+
+def apply_semantic_triage_result(
+    category: str,
+    needs_reply: bool,
+    meta: Dict[str, Any],
+    tags: List[str],
+    decision: Dict[str, Any],
+    *,
+    sender: str,
+    subject: str,
+) -> Tuple[str, bool, Dict[str, Any], List[str], bool]:
+    if not isinstance(decision, dict) or not decision.get("category"):
+        return category, needs_reply, meta, tags, False
+
+    signals = meta.get("signals")
+    if not isinstance(signals, dict):
+        signals = {}
+        meta["signals"] = signals
+    meta["semantic_triage"] = decision
+
+    semantic_category = str(decision.get("category") or "").strip()
+    confidence = float(decision.get("confidence", 0) or 0)
+    requires_user_action = bool(decision.get("requires_user_action"))
+    requires_reply = bool(decision.get("requires_reply"))
+    is_broadcast = bool(decision.get("is_broadcast"))
+    is_auto_notice = bool(decision.get("is_auto_notice"))
+    current_category = category
+    current_needs_reply = needs_reply
+
+    if requires_user_action:
+        signals["semantic_requires_user_action"] = True
+        signals["explicit_action_request"] = True
+    if requires_reply:
+        signals["semantic_requires_reply"] = True
+        needs_reply = True
+    if decision.get("deadline"):
+        signals["semantic_deadline"] = str(decision.get("deadline"))
+        signals["urgent"] = True
+    if is_broadcast:
+        signals["semantic_broadcast"] = True
+        signals["broadcast_like"] = True
+    if is_auto_notice:
+        signals["semantic_auto_notice"] = True
+    if decision.get("action_type"):
+        signals["semantic_action_type"] = str(decision.get("action_type"))
+
+    archive_guarded = semantic_category == "archive" and not (
+        (is_broadcast or is_auto_notice or signals.get("promo_subject") or signals.get("promo_sender_domain") or signals.get("marketing_sender"))
+        and not requires_user_action
+        and not requires_reply
+    )
+    if archive_guarded:
+        meta["semantic_archive_guarded"] = True
+        semantic_category = "needs_review" if category != "needs_reply" else category
+
+    if requires_reply:
+        category = "needs_reply"
+    elif requires_user_action and semantic_category == "archive":
+        category = "needs_review"
+    elif semantic_category in {"archive", "later_check", "needs_review", "needs_reply"} and confidence >= 0.35:
+        category = semantic_category
+
+    applied = category != current_category or needs_reply != current_needs_reply
+    if applied:
+        tags = _dedupe_tags(tags + ["semantic:triage"])
+    return category, needs_reply, meta, tags, applied
 
 
 def classify_message(
@@ -1368,9 +1487,13 @@ def main() -> int:
     task_gate_reason_counts: Dict[str, int] = {}
 
     skip_tasks = args.skip_tasks or args.dry_run
-    llm_enabled = (env.get("GMAIL_TRIAGE_LLM_ENABLE", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
-    llm_max_reviews = int((env.get("GMAIL_TRIAGE_LLM_MAX_REVIEWS", "0") or "0").strip())
-    llm_review_count = 0
+    semantic_enabled = shared_env_flag(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE", shared_env_flag(env, "GMAIL_TRIAGE_LLM_ENABLE", False))
+    semantic_max_reviews = shared_int_from_env(
+        env,
+        "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN",
+        shared_int_from_env(env, "GMAIL_TRIAGE_LLM_MAX_REVIEWS", 0),
+    )
+    semantic_review_count = 0
     notify_max_per_run = int((env.get("GMAIL_TRIAGE_NOTIFY_MAX_PER_RUN", "12") or "12").strip())
     task_actions_max_per_mail = int((env.get("GMAIL_TRIAGE_TASK_MAX_ACTIONS_PER_MAIL", "6") or "6").strip())
     task_items_max_per_run = int((env.get("GMAIL_TRIAGE_TASK_MAX_ITEMS_PER_RUN", "120") or "120").strip())
@@ -1408,16 +1531,23 @@ def main() -> int:
             summary["local_preclassified"] += 1
         if "local:override" in tags:
             summary["local_overrides"] += 1
-        llm_category = None
-        llm_reason = ""
-        if llm_enabled and llm_max_reviews > 0 and llm_review_count < llm_max_reviews and not rule_applied and category in ("needs_review", "later_check", "needs_reply"):
-            llm_category, llm_reason = llm_triage_decision(subject, sender, cc, body, env)
-            llm_review_count += 1
-            summary["llm_reviewed"] += 1
-            if llm_category and should_apply_llm_override(category, llm_category, sender, subject):
-                category = llm_category
-                summary["llm_overrides"] += 1
-                tags = _dedupe_tags(tags + ["llm:override"])
+        semantic_decision: Dict[str, Any] = {}
+        if semantic_enabled and semantic_max_reviews > 0 and semantic_review_count < semantic_max_reviews and not rule_applied and category in ("archive", "needs_review", "later_check", "needs_reply"):
+            semantic_decision = semantic_triage_decision(subject, sender, cc, body, env)
+            semantic_review_count += 1
+            summary["semantic_reviewed"] = int(summary.get("semantic_reviewed", 0)) + 1
+            if semantic_decision:
+                category, needs_reply, classify_meta, tags, semantic_applied = apply_semantic_triage_result(
+                    category,
+                    needs_reply,
+                    classify_meta,
+                    tags,
+                    semantic_decision,
+                    sender=sender,
+                    subject=subject,
+                )
+                if semantic_applied:
+                    summary["semantic_overrides"] = int(summary.get("semantic_overrides", 0)) + 1
         work_bucket, bucket_reason = decide_work_bucket(category, needs_reply, classify_meta, tags)
         classify_meta["work_bucket"] = work_bucket
         classify_meta["work_bucket_reason"] = bucket_reason
@@ -1566,10 +1696,8 @@ def main() -> int:
             }
             if rule_applied:
                 row["rule"] = rule_applied
-            if llm_category:
-                row["llm_category"] = llm_category
-            if llm_reason:
-                row["llm_reason"] = llm_reason
+            if semantic_decision:
+                row["semantic_triage"] = semantic_decision
             if isinstance(classify_meta, dict) and classify_meta.get("local_reason"):
                 row["local_reason"] = classify_meta.get("local_reason")
             row["bucket_reason"] = bucket_reason

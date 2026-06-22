@@ -177,6 +177,9 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
         overrides = {
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE": "1",
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN": env.get("ROBY_ORCH_GMAIL_SEMANTIC_MAX_QUALITY", "50"),
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
             "GMAIL_TRIAGE_LLM_MODEL": quality_model or fast_model,
             "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or fast_model,
@@ -186,6 +189,9 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
         overrides = {
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE": "1",
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN": env.get("ROBY_ORCH_GMAIL_SEMANTIC_MAX_HYBRID", "40"),
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
             "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or fast_model,
@@ -196,6 +202,9 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
         overrides = {
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": env.get("ROBY_ORCH_GMAIL_LOCAL_PRECLASSIFY_FAST", "1"),
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE": env.get("ROBY_ORCH_GMAIL_SEMANTIC_FAST", "1"),
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN": env.get("ROBY_ORCH_GMAIL_SEMANTIC_MAX_FAST", "50"),
             "GMAIL_TRIAGE_LLM_ENABLE": "0",
             "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_TASK_LLM_MODEL": fast_model or quality_model,

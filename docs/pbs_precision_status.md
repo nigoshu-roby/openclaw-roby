@@ -46,6 +46,12 @@
   - LLM 返却 JSON は `tasks/action_items/actions` を正規化し、`due_date` の `YYYY/MM/DD` や `7月10日` 形式を `YYYY-MM-DD` に揃える。
   - 具体的な返信 task がある場合、`Re: <件名>` をそのままコピーした generic reply は削除する。
   - Gmail profile から `GMAIL_TRIAGE_TASK_LLM_MODEL` を明示し、fast/hybrid/quality のどの運用でも task extraction は LLM を使う。
+- Gmail の「task 処理が必要かどうか」の初期判定を LLM-first semantic triage へ移行。
+  - `semantic_triage_decision()` を追加し、`category / requires_user_action / requires_reply / deadline / is_broadcast / is_auto_notice / confidence / action_type / risk_flags / reason` を構造化して返す。
+  - AI 判定のハードルを下げ、profile 既定では fast/hybrid/quality いずれも `GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE=1`、最大 `50` 件/run まで semantic triage を通す。
+  - semantic triage の `requires_user_action` は `explicit_action_request` signal として既存 gate に接続し、`requires_reply` は `needs_reply` として task bucket に接続する。
+  - archive 判定だけは安全弁を残し、broadcast / auto notice / promo 根拠がない archive は review 側に guarded する。
+  - ChatGPT Plus/Business の通常サブスクは API 利用とは別請求のため、常時判定はローカル/低コストモデル、曖昧・重要ケースは Gemini/GPT API へ昇格できる構成を維持する。
 
 ### ゴールから逆算した次の計画
 
@@ -66,7 +72,8 @@
 - `python3 -m unittest scripts.tests.test_roby_gmail_tasks`: PASS `12 tests`
 - `python3 -m unittest scripts.tests.test_roby_orch_profiles`: PASS `4 tests`
 - `python3 -m unittest discover scripts/tests`: PASS `225 tests`
-- `python3 -m unittest skills/roby-mail/scripts/test_gmail_triage_classify.py skills/roby-mail/scripts/test_gmail_triage_neuronic.py`: PASS `56 tests`
+- `python3 -m unittest skills/roby-mail/scripts/test_gmail_triage_classify.py`: PASS `52 tests`
+- `python3 -m unittest skills/roby-mail/scripts/test_gmail_triage_classify.py skills/roby-mail/scripts/test_gmail_triage_neuronic.py`: PASS `59 tests`
 
 ---
 

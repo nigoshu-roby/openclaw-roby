@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
 
 
 def _load_module():
@@ -430,6 +432,91 @@ class TestGmailTriageClassify(TestCase):
             self.assertNotIn("local:override", tags)
         finally:
             self.mod.local_preclassify_email = original
+
+    def test_semantic_triage_decision_reads_structured_action_need(self):
+        payload = {
+            "summary": json.dumps(
+                {
+                    "category": "needs_reply",
+                    "requires_user_action": True,
+                    "requires_reply": True,
+                    "deadline": "2026-07-10",
+                    "is_broadcast": False,
+                    "is_auto_notice": False,
+                    "confidence": 0.91,
+                    "action_type": "schedule_form_response",
+                    "risk_flags": [],
+                    "reason": "URLから候補日程の可否回答と回答後の返信が求められている。",
+                },
+                ensure_ascii=False,
+            )
+        }
+
+        with patch.object(self.mod.subprocess, "check_output", return_value=json.dumps(payload).encode("utf-8")) as mock_check:
+            decision = self.mod.semantic_triage_decision(
+                "Re: 兼清杯開催日程のご相談",
+                "高田彰 <takata@example.com>",
+                "",
+                "URLから候補日程の◯✕を7月10日までに回答し、回答後に返信ください。",
+                {"GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE": "1", "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": "ollama/qwen2.5:7b"},
+            )
+
+        self.assertEqual(decision["category"], "needs_reply")
+        self.assertTrue(decision["requires_user_action"])
+        self.assertTrue(decision["requires_reply"])
+        self.assertEqual(decision["deadline"], "2026-07-10")
+        self.assertIn("--model", mock_check.call_args.args[0])
+
+    def test_apply_semantic_triage_promotes_action_to_task_signals(self):
+        category, needs_reply, meta, tags, applied = self.mod.apply_semantic_triage_result(
+            "needs_review",
+            False,
+            {"signals": {}, "bucket_scores": {}},
+            [],
+            {
+                "category": "needs_reply",
+                "requires_user_action": True,
+                "requires_reply": True,
+                "deadline": "2026-07-10",
+                "confidence": 0.86,
+                "is_broadcast": False,
+                "is_auto_notice": False,
+            },
+            sender="高田彰 <takata@example.com>",
+            subject="Re: 兼清杯開催日程のご相談",
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(category, "needs_reply")
+        self.assertTrue(needs_reply)
+        self.assertIn("semantic:triage", tags)
+        self.assertTrue(meta["signals"]["explicit_action_request"])
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(bucket, "task")
+        self.assertEqual(reason, "explicit_reply_or_action")
+
+    def test_apply_semantic_triage_guards_archive_without_broadcast_evidence(self):
+        category, needs_reply, meta, tags, applied = self.mod.apply_semantic_triage_result(
+            "needs_review",
+            False,
+            {"signals": {"business_review": True}},
+            [],
+            {
+                "category": "archive",
+                "requires_user_action": False,
+                "requires_reply": False,
+                "confidence": 0.9,
+                "is_broadcast": False,
+                "is_auto_notice": False,
+            },
+            sender="Client <client@example.com>",
+            subject="請求書の確認",
+        )
+
+        self.assertFalse(applied)
+        self.assertEqual(category, "needs_review")
+        self.assertFalse(needs_reply)
+        self.assertTrue(meta["semantic_archive_guarded"])
 
     def test_known_replied_thread_promotes_archive_to_review(self):
         contact_index = {
