@@ -35,6 +35,10 @@
   - ただし BW連携による接触数増加で SNW社との協力関係が再び強まる可能性があるため、SNW社との再始動・協業方針が明示される場合は `SNW様-777BEACON` も候補に残す。
   - repair 候補の `BWのビーコン管理システム...` と `ビーコン管理システム構築の進捗確認` は LINE広告配信に補正。
   - 更新後の repair 候補: `semantic_parent_misnested=6`, `duplicate_groups=0`。
+- Gmail task UX を改善。
+  - 単一の返信/対応タスクは親子化せず、フラットな1タスクとして Neuronic に投入する。
+  - 複数の具体アクションがある場合だけ `メール対応: <件名>` を親にして子タスク化する。
+  - 返信タスクのタイトルは `Re:` を落として、`【送信者】【返信】<件名>` の形に整える。
 
 ### ゴールから逆算した次の計画
 
@@ -52,7 +56,8 @@
 - `python3 -m unittest scripts.tests.test_roby_minutes_quality`: PASS `58 tests`
 - `python3 -m unittest scripts.tests.test_roby_precision_diagnostics`: PASS `8 tests`
 - `python3 -m unittest scripts.tests.test_roby_precision_repair_candidates`: PASS `2 tests`
-- `python3 -m unittest discover scripts/tests`: PASS `219 tests`
+- `python3 -m unittest scripts.tests.test_roby_gmail_tasks`: PASS `8 tests`
+- `python3 -m unittest discover scripts/tests`: PASS `221 tests`
 - `python3 -m unittest skills/roby-mail/scripts/test_gmail_triage_classify.py`: PASS `49 tests`
 
 ---

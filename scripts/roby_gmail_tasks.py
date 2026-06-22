@@ -374,6 +374,56 @@ def _decorate_email_task_title(title: str, sender_label: str) -> str:
     return f"【{sender_label}】{base}"
 
 
+def _clean_email_subject(subject: str) -> str:
+    text = (subject or "").strip()
+    while True:
+        cleaned = re.sub(r"^(?:re|fw|fwd)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
+        if cleaned == text:
+            return cleaned or text
+        text = cleaned
+
+
+def _display_email_action_title(title: str, raw_category: str, note: str, subject: str) -> str:
+    rewritten = _rewrite_email_action_title(title, raw_category, note)
+    if _looks_like_reply_task(rewritten, note):
+        reply_prefix = "【返信】"
+        body = rewritten
+        if body.startswith(reply_prefix):
+            body = body[len(reply_prefix):].strip()
+        if not body or body in {"返信内容を確認して返信する", "返信内容を確認する"}:
+            body = subject or "返信内容を確認する"
+        body = _clean_email_subject(body)
+        return f"{reply_prefix}{body}" if body else "返信内容を確認して返信する"
+    return rewritten
+
+
+def _email_task_note(
+    *,
+    note: str,
+    task_kind: str,
+    msg_subject: str,
+    msg: Dict[str, Any],
+    msg_url: str,
+    parent_title: str = "",
+) -> str:
+    note_prefix = "返信対応" if task_kind == "reply" else "実行タスク"
+    lines = []
+    if note:
+        lines.extend([note, ""])
+    lines.append(f"Task Type: {note_prefix}")
+    if parent_title:
+        lines.append(f"Parent: {parent_title}")
+    lines.extend(
+        [
+            f"Email: {msg_subject}",
+            f"From: {msg.get('from','')}",
+            f"Date: {msg.get('date','')}",
+            f"Link: {msg_url}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def build_tasks(
     extracted: List[Dict[str, Any]],
     msg: Dict[str, Any],
@@ -392,9 +442,69 @@ def build_tasks(
     msg_id = (msg.get("id") or "").strip()
     msg_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_thread_id}"
 
+    normalized_items: List[Dict[str, Any]] = []
+    for item in extracted:
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        note = (item.get("note") or "").strip()
+        task_kind = str(item.get("task_kind") or "").strip().lower()
+        if task_kind not in {"reply", "action"}:
+            task_kind = "reply" if _looks_like_reply_task(title, note) else "action"
+        normalized_items.append(
+            {
+                **item,
+                "title": title,
+                "note": note,
+                "task_kind": task_kind,
+            }
+        )
+
+    if not normalized_items:
+        return []
+
+    parent_origin = ""
+    parent_title = ""
+    use_parent = len(normalized_items) > 1
+
+    if not use_parent:
+        item = normalized_items[0]
+        task_kind = str(item.get("task_kind") or "action")
+        project = (item.get("project") or "").strip() or "email"
+        due = (item.get("due_date") or "").strip()
+        note = str(item.get("note") or "").strip()
+        task_type_tag = "task_type:reply" if task_kind == "reply" else "task_type:action"
+        display_title = _display_email_action_title(str(item.get("title") or ""), raw_category, note, msg_subject)
+        task = {
+            "title": _decorate_email_task_title(display_title, sender_label),
+            "project": project,
+            "due_date": due,
+            "assignee": assignee,
+            "note": _email_task_note(
+                note=note,
+                task_kind=task_kind,
+                msg_subject=msg_subject,
+                msg=msg,
+                msg_url=msg_url,
+            ),
+            "source": "roby",
+            "status": "inbox",
+            "priority": 1 if category == "task" else 0,
+            "tags": _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", task_type_tag]),
+            "parent_origin_id": None,
+            "sibling_order": 0,
+            "run_id": run_id,
+            "feedback_state": "pending",
+            "source_doc_id": msg_id or msg_thread_id,
+            "source_doc_title": msg_subject,
+        }
+        task["origin_id"] = _stable_origin_id(task, f"{msg_thread_id}|single|{task_kind}")
+        task["external_ref"] = f"group:{task['origin_id']}"
+        return [task]
+
     parent_task = {
         "title": _decorate_email_task_title(
-            f"メール確認: {msg_subject}" if msg_subject else "メール確認タスク",
+            f"メール対応: {msg_subject}" if msg_subject else "メール対応タスク",
             sender_label,
         ),
         "project": "email",
@@ -420,9 +530,10 @@ def build_tasks(
     parent_origin = _stable_origin_id(parent_task, f"{msg_thread_id}|parent")
     parent_task["origin_id"] = parent_origin
     parent_task["external_ref"] = f"group:{parent_origin}"
+    parent_title = parent_task["title"]
     tasks.append(parent_task)
 
-    for i, item in enumerate(extracted):
+    for i, item in enumerate(normalized_items):
         title = (item.get("title") or "").strip()
         if not title:
             continue
@@ -434,22 +545,22 @@ def build_tasks(
             task_kind = "reply" if _looks_like_reply_task(title, note) else "action"
         task_type_tag = "task_type:reply" if task_kind == "reply" else "task_type:action"
         item_tags = _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", task_type_tag])
-        note_prefix = "返信対応" if task_kind == "reply" else "実行タスク"
-        note = (
-            (note + "\n\n" if note else "")
-            + f"Task Type: {note_prefix}\n"
-            + f"Parent: {parent_task['title']}\n"
-            + f"Email: {msg_subject}\n"
-            + f"From: {msg.get('from','')}\n"
-            + f"Date: {msg.get('date','')}\n"
-            + f"Link: {msg_url}"
-        )
         task = {
-            "title": _decorate_email_task_title(_rewrite_email_action_title(title, raw_category, note), sender_label),
+            "title": _decorate_email_task_title(
+                _display_email_action_title(title, raw_category, note, msg_subject),
+                sender_label,
+            ),
             "project": project,
             "due_date": due,
             "assignee": assignee,
-            "note": note,
+            "note": _email_task_note(
+                note=note,
+                task_kind=task_kind,
+                msg_subject=msg_subject,
+                msg=msg,
+                msg_url=msg_url,
+                parent_title=parent_title,
+            ),
             "source": "roby",
             "status": "inbox",
             "priority": 1 if category == "task" else 0,

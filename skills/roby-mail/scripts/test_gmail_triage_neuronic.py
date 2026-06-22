@@ -124,7 +124,7 @@ class TestGmailTriageNeuronic(TestCase):
         self.assertEqual(called["bulk"], 1)
         self.assertTrue(result.get("fallback_used"))
 
-    def test_build_tasks_prefixes_sender_on_parent_and_children(self):
+    def test_build_tasks_keeps_single_action_flat(self):
         msg = {
             "subject": "見積書の件",
             "threadId": "thread-1",
@@ -143,10 +143,9 @@ class TestGmailTriageNeuronic(TestCase):
 
         tasks = self.mod.build_tasks(extracted, msg, "needs_review", [], "roby:gmail:test")
 
-        self.assertEqual(len(tasks), 2)
-        self.assertTrue(tasks[0]["title"].startswith("【高田彰】メール確認: 見積書の件"))
-        self.assertEqual(tasks[1]["title"], "【高田彰】返信内容を確認する")
-        self.assertEqual(tasks[1]["parent_origin_id"], tasks[0]["origin_id"])
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["title"], "【高田彰】【返信】見積書の件")
+        self.assertIsNone(tasks[0]["parent_origin_id"])
 
     def test_normalize_extracted_actions_inserts_reply_for_needs_reply(self):
         rows = self.mod.normalize_extracted_actions(
@@ -174,6 +173,7 @@ class TestGmailTriageNeuronic(TestCase):
         self.assertEqual(len(tasks), 3)
         self.assertIn("task_type:reply", tasks[1]["tags"])
         self.assertIn("task_type:action", tasks[2]["tags"])
+        self.assertEqual(tasks[0]["title"], "【高田彰】メール対応: ミーティング日程の件")
 
     def test_task_gate_downgrades_generic_low_confidence_task(self):
         final_bucket, reason, meta = self.mod.decide_task_gate(

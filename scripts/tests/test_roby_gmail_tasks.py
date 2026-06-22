@@ -83,7 +83,7 @@ class TestRobyGmailTasks(TestCase):
         self.assertEqual(reason, "high_confidence_task")
         self.assertTrue(gated_meta["task_gate"]["applied"])
 
-    def test_build_tasks_creates_parent_and_child_hierarchy(self):
+    def test_build_tasks_keeps_single_email_action_flat(self):
         tasks = self.mod.build_tasks(
             [{"title": "契約書を準備する", "project": "契約", "task_kind": "action"}],
             {
@@ -99,12 +99,59 @@ class TestRobyGmailTasks(TestCase):
             raw_category="needs_review",
         )
 
-        self.assertEqual(len(tasks), 2)
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNone(tasks[0]["parent_origin_id"])
+        self.assertEqual(tasks[0]["title"], "【田中さん】契約書を準備する")
+        self.assertEqual(tasks[0]["sibling_order"], 0)
+        self.assertIn("task_type:action", tasks[0]["tags"])
+        self.assertIn("Link: https://mail.google.com/mail/u/0/#inbox/thread-1", tasks[0]["note"])
+        self.assertNotIn("Parent:", tasks[0]["note"])
+
+    def test_build_tasks_creates_parent_only_for_multiple_email_actions(self):
+        tasks = self.mod.build_tasks(
+            [
+                {"title": "【返信】Re: 兼清杯開催日程のご相談", "project": "email", "task_kind": "reply"},
+                {"title": "候補日を整理する", "project": "email", "task_kind": "action"},
+            ],
+            {
+                "id": "msg-2",
+                "threadId": "thread-2",
+                "subject": "Re: 兼清杯開催日程のご相談",
+                "from": "高田彰 <takata@example.com>",
+                "date": "2026-05-28",
+            },
+            "task",
+            [],
+            run_id="roby:gmail:test",
+            raw_category="needs_reply",
+        )
+
+        self.assertEqual(len(tasks), 3)
+        self.assertEqual(tasks[0]["title"], "【高田彰】メール対応: Re: 兼清杯開催日程のご相談")
         self.assertIsNone(tasks[0]["parent_origin_id"])
         self.assertEqual(tasks[1]["parent_origin_id"], tasks[0]["origin_id"])
-        self.assertEqual(tasks[1]["sibling_order"], 0)
-        self.assertIn("task_type:action", tasks[1]["tags"])
-        self.assertIn("Link: https://mail.google.com/mail/u/0/#inbox/thread-1", tasks[1]["note"])
+        self.assertEqual(tasks[1]["title"], "【高田彰】【返信】兼清杯開催日程のご相談")
+        self.assertEqual(tasks[2]["title"], "【高田彰】候補日を整理する")
+
+    def test_build_tasks_cleans_single_reply_subject_without_parent(self):
+        tasks = self.mod.build_tasks(
+            [{"title": "【返信】Re: 兼清杯開催日程のご相談", "project": "email", "task_kind": "reply"}],
+            {
+                "id": "msg-3",
+                "threadId": "thread-3",
+                "subject": "Re: 兼清杯開催日程のご相談",
+                "from": "高田彰 <takata@example.com>",
+                "date": "2026-05-28",
+            },
+            "task",
+            [],
+            run_id="roby:gmail:test",
+            raw_category="needs_reply",
+        )
+
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNone(tasks[0]["parent_origin_id"])
+        self.assertEqual(tasks[0]["title"], "【高田彰】【返信】兼清杯開催日程のご相談")
 
     def test_cap_extracted_actions_can_be_disabled(self):
         rows = [{"title": "a"}, {"title": "b"}]
