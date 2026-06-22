@@ -59,6 +59,8 @@
   - 実メールプローブで `summarize` 経由だと短文メールの JSON が切れることを確認したため、Gemini モデルでは Gemini API の JSON response を直接使う。
   - `internal_domain_review` や `force_reply` など review/reply 系ルールでも semantic triage を通し、明確な archive ルールだけ semantic triage を skip する。
   - Gemini が高信頼で「完了済み・返信不要」と判断した場合は、既存の `force_reply` を task から review へ落とす。
+  - `google/gemini-3-flash-preview` が 429 の場合は `google/gemini-3.1-flash-lite-preview` へ fallback する。
+  - 実メール `Re: 【LINE公式アカウントに関する個別のご案内】特別プランについて` で、`needs_reply/task` 判定と `株式会社ボーネルンドへの特別プランに関する承諾の取り付けと眞山氏への共有` の task 抽出を確認。
 
 ### ゴールから逆算した次の計画
 
