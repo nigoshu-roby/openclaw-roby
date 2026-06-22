@@ -56,6 +56,9 @@
   - `GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL` と `GMAIL_TRIAGE_TASK_LLM_MODEL` の既定を `google/gemini-3-flash-preview` に設定。
   - `ROBY_ORCH_GMAIL_CLOUD_MODEL` または `GMAIL_TRIAGE_GEMINI_MODEL` で Gemini model を差し替え可能。
   - ローカル preclassify は補助として残すが、task 必要性判断と本文からの task 抽出は Gemini を主系にする。
+  - 実メールプローブで `summarize` 経由だと短文メールの JSON が切れることを確認したため、Gemini モデルでは Gemini API の JSON response を直接使う。
+  - `internal_domain_review` や `force_reply` など review/reply 系ルールでも semantic triage を通し、明確な archive ルールだけ semantic triage を skip する。
+  - Gemini が高信頼で「完了済み・返信不要」と判断した場合は、既存の `force_reply` を task から review へ落とす。
 
 ### ゴールから逆算した次の計画
 

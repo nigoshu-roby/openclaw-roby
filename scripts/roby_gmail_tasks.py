@@ -9,6 +9,8 @@ from datetime import datetime
 from email.utils import parseaddr
 from typing import Any, Dict, List, Tuple
 
+from roby_gemini import is_gemini_model, run_gemini_json_prompt
+
 
 def _int_from_env(env: Dict[str, str], key: str, default: int) -> int:
     value = env.get(key)
@@ -158,6 +160,17 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     if model:
         cmd.extend(["--model", model])
     source_text = (text or "")[:max_input_chars]
+    if is_gemini_model(model):
+        parsed, _raw = run_gemini_json_prompt(
+            prompt=prompt,
+            source_text=source_text,
+            env=env,
+            model=model,
+            timeout_sec=timeout_sec,
+            max_output_tokens=int(max_output_tokens or "1400"),
+            temperature=0.1,
+        )
+        return _normalize_llm_task_items(parsed)
     out = subprocess.check_output(cmd, input=source_text.encode("utf-8"), env=env, timeout=timeout_sec)
     data = json.loads(out)
     parsed = _parse_jsonish_text(_extract_summary_text(data))

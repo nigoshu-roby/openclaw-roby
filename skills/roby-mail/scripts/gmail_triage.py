@@ -43,6 +43,7 @@ from roby_gmail_tasks import (
     normalize_extracted_actions,
     summarize_tasks,
 )
+from roby_gemini import is_gemini_model, run_gemini_json_prompt
 from roby_local_first import env_flag as shared_env_flag, int_from_env as shared_int_from_env, run_ollama_json
 from roby_neuronic import build_neuronic_headers, build_neuronic_items, get_neuronic_urls, post_neuronic_items
 
@@ -999,7 +1000,7 @@ def semantic_triage_decision(subject: str, sender: str, cc: str, body: str, env:
         return {}
     timeout_sec = shared_int_from_env(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_TIMEOUT_SEC", shared_int_from_env(env, "GMAIL_TRIAGE_LLM_TIMEOUT_SEC", 45))
     max_input_chars = shared_int_from_env(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_INPUT_CHARS", shared_int_from_env(env, "GMAIL_TRIAGE_LLM_MAX_INPUT_CHARS", 7000))
-    max_output_tokens = str(shared_int_from_env(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_OUTPUT_TOKENS", shared_int_from_env(env, "GMAIL_TRIAGE_LLM_MAX_OUTPUT_TOKENS", 420)))
+    max_output_tokens = str(shared_int_from_env(env, "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_OUTPUT_TOKENS", 900))
     length = (env.get("GMAIL_TRIAGE_SEMANTIC_TRIAGE_LENGTH", env.get("GMAIL_TRIAGE_LLM_LENGTH", "s")) or "s").strip()
 
     prompt = (
@@ -1023,6 +1024,23 @@ def semantic_triage_decision(subject: str, sender: str, cc: str, body: str, env:
         f"CC: {cc}\n\n"
         f"Body:\n{body_trim}\n"
     )
+    if is_gemini_model(model):
+        try:
+            parsed, _raw = run_gemini_json_prompt(
+                prompt=prompt,
+                source_text=source_text,
+                env=env,
+                model=model,
+                timeout_sec=timeout_sec,
+                max_output_tokens=int(max_output_tokens or "900"),
+                temperature=0.1,
+            )
+            decision = normalize_semantic_triage(parsed)
+            if decision.get("category"):
+                return decision
+        except Exception:
+            return {}
+        return {}
     cmd = [
         "summarize", "-",
         "--json", "--plain",
@@ -1163,6 +1181,8 @@ def apply_semantic_triage_result(
     if requires_reply:
         signals["semantic_requires_reply"] = True
         needs_reply = True
+    elif confidence >= 0.6:
+        needs_reply = False
     if decision.get("deadline"):
         signals["semantic_deadline"] = str(decision.get("deadline"))
         signals["urgent"] = True
@@ -1181,7 +1201,7 @@ def apply_semantic_triage_result(
     )
     if archive_guarded:
         meta["semantic_archive_guarded"] = True
-        semantic_category = "needs_review" if category != "needs_reply" else category
+        semantic_category = "needs_review"
 
     if requires_reply:
         category = "needs_reply"
@@ -1194,6 +1214,23 @@ def apply_semantic_triage_result(
     if applied:
         tags = _dedupe_tags(tags + ["semantic:triage"])
     return category, needs_reply, meta, tags, applied
+
+
+SEMANTIC_TRIAGE_SKIP_RULES = {
+    "calendar_response",
+    "pipeline_success_archive",
+    "tokiwagi_base_info_archive",
+    "internal_instagram_recap_archive",
+    "chatwork_non_mention_archive",
+    "bornelund_asobi_promo_archive",
+    "ambassador_newsletter_archive",
+    "non_actionable_subject_archive",
+    "force_archive",
+}
+
+
+def should_skip_semantic_triage(rule_applied: str | None) -> bool:
+    return bool(rule_applied and rule_applied in SEMANTIC_TRIAGE_SKIP_RULES)
 
 
 def classify_message(
@@ -1532,7 +1569,7 @@ def main() -> int:
         if "local:override" in tags:
             summary["local_overrides"] += 1
         semantic_decision: Dict[str, Any] = {}
-        if semantic_enabled and semantic_max_reviews > 0 and semantic_review_count < semantic_max_reviews and not rule_applied and category in ("archive", "needs_review", "later_check", "needs_reply"):
+        if semantic_enabled and semantic_max_reviews > 0 and semantic_review_count < semantic_max_reviews and not should_skip_semantic_triage(rule_applied) and category in ("archive", "needs_review", "later_check", "needs_reply"):
             semantic_decision = semantic_triage_decision(subject, sender, cc, body, env)
             semantic_review_count += 1
             summary["semantic_reviewed"] = int(summary.get("semantic_reviewed", 0)) + 1

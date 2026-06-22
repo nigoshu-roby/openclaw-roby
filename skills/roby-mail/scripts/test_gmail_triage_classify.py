@@ -495,6 +495,32 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(bucket, "task")
         self.assertEqual(reason, "explicit_reply_or_action")
 
+    def test_apply_semantic_triage_can_clear_forced_reply_when_completed(self):
+        category, needs_reply, meta, tags, applied = self.mod.apply_semantic_triage_result(
+            "needs_reply",
+            True,
+            {"signals": {}, "bucket_scores": {}},
+            ["rule:force_reply"],
+            {
+                "category": "archive",
+                "requires_user_action": False,
+                "requires_reply": False,
+                "confidence": 0.96,
+                "is_broadcast": False,
+                "is_auto_notice": False,
+                "reason": "The latest message confirms the requested input is complete.",
+            },
+            sender="高田彰 <takata@example.com>",
+            subject="Re: 兼清杯開催日程のご相談",
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(category, "needs_review")
+        self.assertFalse(needs_reply)
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(bucket, "review")
+        self.assertEqual(reason, "human_review_needed")
+
     def test_apply_semantic_triage_guards_archive_without_broadcast_evidence(self):
         category, needs_reply, meta, tags, applied = self.mod.apply_semantic_triage_result(
             "needs_review",
@@ -517,6 +543,12 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(category, "needs_review")
         self.assertFalse(needs_reply)
         self.assertTrue(meta["semantic_archive_guarded"])
+
+    def test_semantic_triage_skip_rules_allow_internal_review(self):
+        self.assertFalse(self.mod.should_skip_semantic_triage("internal_domain_review"))
+        self.assertFalse(self.mod.should_skip_semantic_triage("force_reply"))
+        self.assertTrue(self.mod.should_skip_semantic_triage("internal_instagram_recap_archive"))
+        self.assertTrue(self.mod.should_skip_semantic_triage("force_archive"))
 
     def test_known_replied_thread_promotes_archive_to_review(self):
         contact_index = {
