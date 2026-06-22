@@ -35,6 +35,42 @@ class TestRobyGmailTasks(TestCase):
 
         self.assertIn("契約書を準備する", [row["title"] for row in actions])
 
+    def test_extract_explicit_email_actions_splits_schedule_url_reply(self):
+        actions = self.mod.extract_explicit_email_actions(
+            "Re: 兼清杯開催日程のご相談",
+            (
+                "兼清杯の開催日程について、下記URLから候補日程の◯✕をご回答ください。\n"
+                "https://example.com/schedule\n"
+                "7月10日までにお願いします。回答後、高田まで返信ください。"
+            ),
+            raw_category="needs_reply",
+            meta={"signals": {"meeting_coordination": True}},
+            tags=[],
+            sender="高田彰 <takata@example.com>",
+        )
+
+        self.assertEqual([row["title"] for row in actions], [
+            "指定のURLから候補日程の◯✕を回答する",
+            "回答したら高田氏に返信する",
+        ])
+        self.assertEqual([row["due_date"] for row in actions], ["2026-07-10", "2026-07-10"])
+        self.assertEqual(actions[0]["task_kind"], "action")
+        self.assertEqual(actions[1]["task_kind"], "reply")
+
+    def test_normalize_extracted_actions_removes_generic_reply_when_specific_reply_exists(self):
+        rows = self.mod.normalize_extracted_actions(
+            [
+                {"title": "【返信】Re: 兼清杯開催日程のご相談", "task_kind": "reply"},
+                {"title": "回答したら高田氏に返信する", "task_kind": "reply", "due_date": "2026-07-10"},
+            ],
+            raw_category="needs_reply",
+            subject="Re: 兼清杯開催日程のご相談",
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "回答したら高田氏に返信する")
+        self.assertEqual(rows[0]["due_date"], "2026-07-10")
+
     def test_normalize_extracted_actions_adds_reply_for_needs_reply(self):
         rows = self.mod.normalize_extracted_actions(
             [{"title": "確認", "task_kind": "action"}],
@@ -110,8 +146,18 @@ class TestRobyGmailTasks(TestCase):
     def test_build_tasks_creates_parent_only_for_multiple_email_actions(self):
         tasks = self.mod.build_tasks(
             [
-                {"title": "【返信】Re: 兼清杯開催日程のご相談", "project": "email", "task_kind": "reply"},
-                {"title": "候補日を整理する", "project": "email", "task_kind": "action"},
+                {
+                    "title": "指定のURLから候補日程の◯✕を回答する",
+                    "project": "email",
+                    "task_kind": "action",
+                    "due_date": "2026-07-10",
+                },
+                {
+                    "title": "回答したら高田氏に返信する",
+                    "project": "email",
+                    "task_kind": "reply",
+                    "due_date": "2026-07-10",
+                },
             ],
             {
                 "id": "msg-2",
@@ -130,8 +176,10 @@ class TestRobyGmailTasks(TestCase):
         self.assertEqual(tasks[0]["title"], "【高田彰】メール対応: Re: 兼清杯開催日程のご相談")
         self.assertIsNone(tasks[0]["parent_origin_id"])
         self.assertEqual(tasks[1]["parent_origin_id"], tasks[0]["origin_id"])
-        self.assertEqual(tasks[1]["title"], "【高田彰】【返信】兼清杯開催日程のご相談")
-        self.assertEqual(tasks[2]["title"], "【高田彰】候補日を整理する")
+        self.assertEqual(tasks[1]["title"], "【高田彰】指定のURLから候補日程の◯✕を回答する")
+        self.assertEqual(tasks[1]["due_date"], "2026-07-10")
+        self.assertEqual(tasks[2]["title"], "【高田彰】回答したら高田氏に返信する")
+        self.assertEqual(tasks[2]["due_date"], "2026-07-10")
 
     def test_build_tasks_cleans_single_reply_subject_without_parent(self):
         tasks = self.mod.build_tasks(

@@ -1443,6 +1443,7 @@ def main() -> int:
                 raw_category=category,
                 meta=classify_meta,
                 tags=tags,
+                sender=sender,
             )
             if deterministic_actions:
                 extracted_titles = {str(item.get("title") or "").strip() for item in extracted}

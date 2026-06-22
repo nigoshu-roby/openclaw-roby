@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
+from datetime import datetime
 from email.utils import parseaddr
 from typing import Any, Dict, List, Tuple
 
@@ -74,12 +75,13 @@ def extract_explicit_email_actions(
     raw_category: str,
     meta: Dict[str, Any] | None = None,
     tags: List[str] | None = None,
+    sender: str = "",
 ) -> List[Dict[str, Any]]:
     text = f"{subject}\n{body}"
     actions: List[Dict[str, Any]] = []
     seen: set[str] = set()
 
-    def add_action(title: str, *, task_kind: str = "action", note: str = "") -> None:
+    def add_action(title: str, *, task_kind: str = "action", note: str = "", due_date: str = "") -> None:
         normalized = title.strip()
         if not normalized or normalized in seen:
             return
@@ -87,14 +89,55 @@ def extract_explicit_email_actions(
         actions.append(
             {
                 "title": normalized,
-                "due_date": "",
+                "due_date": due_date,
                 "project": "email",
                 "note": note,
                 "task_kind": task_kind,
             }
         )
 
-    if raw_category == "needs_reply":
+    def infer_due_date(source: str) -> str:
+        match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", source)
+        if not match:
+            return ""
+        month = int(match.group(1))
+        day = int(match.group(2))
+        year = datetime.now().year
+        try:
+            return datetime(year, month, day).strftime("%Y-%m-%d")
+        except ValueError:
+            return ""
+
+    def sender_short_label(raw_sender: str) -> str:
+        display, address = parseaddr((raw_sender or "").strip())
+        label = (display or address or "").strip().strip("\"'")
+        if not label:
+            return "送信者"
+        label = re.sub(r"\s+", " ", label)
+        label = re.sub(r"(さん|氏|様)$", "", label)
+        if re.fullmatch(r"[\u3400-\u9fff]{3,5}", label):
+            label = label[:2]
+        return f"{label}氏" if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", label) else label
+
+    has_url = bool(re.search(r"https?://\S+", text))
+    has_schedule_candidate = bool(re.search(r"(候補日程|候補日|候補日時|日程候補|開催日程)", text))
+    has_ox_answer = bool(re.search(r"(◯|○|〇|×|✕|可否|出欠|回答|入力)", text))
+    if has_url and has_schedule_candidate and has_ox_answer:
+        due = infer_due_date(text)
+        add_action(
+            "指定のURLから候補日程の◯✕を回答する",
+            task_kind="action",
+            due_date=due,
+            note="本文中の指定URLから候補日程の可否を回答する。",
+        )
+        add_action(
+            f"回答したら{sender_short_label(sender)}に返信する",
+            task_kind="reply",
+            due_date=due,
+            note="候補日程の回答完了後に、その旨を返信する。",
+        )
+
+    if raw_category == "needs_reply" and not actions:
         add_action(f"【返信】{subject}" if subject else "返信内容を確認して返信する", task_kind="reply")
 
     doc_patterns = [
@@ -217,6 +260,21 @@ def normalize_extracted_actions(
                 "task_kind": "reply",
             },
         )
+
+    reply_items = [item for item in normalized if item.get("task_kind") == "reply"]
+    if len(reply_items) > 1:
+        generic_reply_titles = {
+            "返信内容を確認して返信する",
+            "返信内容を確認する",
+            f"【返信】{subject}" if subject else "",
+        }
+        has_specific_reply = any(str(item.get("title") or "") not in generic_reply_titles for item in reply_items)
+        if has_specific_reply:
+            normalized = [
+                item
+                for item in normalized
+                if not (item.get("task_kind") == "reply" and str(item.get("title") or "") in generic_reply_titles)
+            ]
 
     return normalized
 
@@ -383,13 +441,15 @@ def _clean_email_subject(subject: str) -> str:
         text = cleaned
 
 
-def _display_email_action_title(title: str, raw_category: str, note: str, subject: str) -> str:
+def _display_email_action_title(title: str, raw_category: str, note: str, subject: str, task_kind: str = "") -> str:
     rewritten = _rewrite_email_action_title(title, raw_category, note)
-    if _looks_like_reply_task(rewritten, note):
+    if task_kind == "reply" or (task_kind != "action" and _looks_like_reply_task(rewritten, note)):
         reply_prefix = "【返信】"
         body = rewritten
         if body.startswith(reply_prefix):
             body = body[len(reply_prefix):].strip()
+        elif body and body not in {"返信内容を確認して返信する", "返信内容を確認する"}:
+            return body
         if not body or body in {"返信内容を確認して返信する", "返信内容を確認する"}:
             body = subject or "返信内容を確認する"
         body = _clean_email_subject(body)
@@ -474,7 +534,7 @@ def build_tasks(
         due = (item.get("due_date") or "").strip()
         note = str(item.get("note") or "").strip()
         task_type_tag = "task_type:reply" if task_kind == "reply" else "task_type:action"
-        display_title = _display_email_action_title(str(item.get("title") or ""), raw_category, note, msg_subject)
+        display_title = _display_email_action_title(str(item.get("title") or ""), raw_category, note, msg_subject, task_kind)
         task = {
             "title": _decorate_email_task_title(display_title, sender_label),
             "project": project,
@@ -547,7 +607,7 @@ def build_tasks(
         item_tags = _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", task_type_tag])
         task = {
             "title": _decorate_email_task_title(
-                _display_email_action_title(title, raw_category, note, msg_subject),
+                _display_email_action_title(title, raw_category, note, msg_subject, task_kind),
                 sender_label,
             ),
             "project": project,

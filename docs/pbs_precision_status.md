@@ -39,6 +39,7 @@
   - 単一の返信/対応タスクは親子化せず、フラットな1タスクとして Neuronic に投入する。
   - 複数の具体アクションがある場合だけ `メール対応: <件名>` を親にして子タスク化する。
   - 返信タスクのタイトルは `Re:` を落として、`【送信者】【返信】<件名>` の形に整える。
+  - `URL + 候補日程 + ◯✕/回答 + 期限` のメールは、`指定のURLから候補日程の◯✕を回答する` と `回答したら<相手>に返信する` に分解し、期限を task due date に入れる。
 
 ### ゴールから逆算した次の計画
 
@@ -56,8 +57,8 @@
 - `python3 -m unittest scripts.tests.test_roby_minutes_quality`: PASS `58 tests`
 - `python3 -m unittest scripts.tests.test_roby_precision_diagnostics`: PASS `8 tests`
 - `python3 -m unittest scripts.tests.test_roby_precision_repair_candidates`: PASS `2 tests`
-- `python3 -m unittest scripts.tests.test_roby_gmail_tasks`: PASS `8 tests`
-- `python3 -m unittest discover scripts/tests`: PASS `221 tests`
+- `python3 -m unittest scripts.tests.test_roby_gmail_tasks`: PASS `10 tests`
+- `python3 -m unittest discover scripts/tests`: PASS `223 tests`
 - `python3 -m unittest skills/roby-mail/scripts/test_gmail_triage_classify.py`: PASS `49 tests`
 
 ---
