@@ -179,6 +179,7 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": quality_model or fast_model,
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
             "GMAIL_TRIAGE_LLM_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or fast_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_QUALITY", "30"),
         }
     elif profile == "hybrid":
@@ -187,6 +188,7 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
             "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or fast_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_HYBRID", "10"),
         }
     else:  # fast
@@ -196,6 +198,7 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_ENABLE": "0",
             "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_TASK_LLM_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_FAST", "0"),
         }
     overrides["ROBY_ORCH_GMAIL_EFFECTIVE_PROFILE"] = profile

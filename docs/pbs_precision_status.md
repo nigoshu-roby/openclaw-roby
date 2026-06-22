@@ -40,6 +40,12 @@
   - 複数の具体アクションがある場合だけ `メール対応: <件名>` を親にして子タスク化する。
   - 返信タスクのタイトルは `Re:` を落として、`【送信者】【返信】<件名>` の形に整える。
   - `URL + 候補日程 + ◯✕/回答 + 期限` のメールは、`指定のURLから候補日程の◯✕を回答する` と `回答したら<相手>に返信する` に分解し、期限を task due date に入れる。
+- Gmail task extraction を deterministic pattern 主体から LLM task reader 主体へ変更。
+  - `summarize_tasks()` のプロンプトを、件名コピーではなく本文から実行手順・完了条件・期限を読む設計へ更新。
+  - LLM が具体 task を返した場合はそれを採用し、deterministic 抽出は LLM が task を返せなかった場合の fallback として使う。
+  - LLM 返却 JSON は `tasks/action_items/actions` を正規化し、`due_date` の `YYYY/MM/DD` や `7月10日` 形式を `YYYY-MM-DD` に揃える。
+  - 具体的な返信 task がある場合、`Re: <件名>` をそのままコピーした generic reply は削除する。
+  - Gmail profile から `GMAIL_TRIAGE_TASK_LLM_MODEL` を明示し、fast/hybrid/quality のどの運用でも task extraction は LLM を使う。
 
 ### ゴールから逆算した次の計画
 
@@ -57,9 +63,10 @@
 - `python3 -m unittest scripts.tests.test_roby_minutes_quality`: PASS `58 tests`
 - `python3 -m unittest scripts.tests.test_roby_precision_diagnostics`: PASS `8 tests`
 - `python3 -m unittest scripts.tests.test_roby_precision_repair_candidates`: PASS `2 tests`
-- `python3 -m unittest scripts.tests.test_roby_gmail_tasks`: PASS `10 tests`
-- `python3 -m unittest discover scripts/tests`: PASS `223 tests`
-- `python3 -m unittest skills/roby-mail/scripts/test_gmail_triage_classify.py`: PASS `49 tests`
+- `python3 -m unittest scripts.tests.test_roby_gmail_tasks`: PASS `12 tests`
+- `python3 -m unittest scripts.tests.test_roby_orch_profiles`: PASS `4 tests`
+- `python3 -m unittest discover scripts/tests`: PASS `225 tests`
+- `python3 -m unittest skills/roby-mail/scripts/test_gmail_triage_classify.py skills/roby-mail/scripts/test_gmail_triage_neuronic.py`: PASS `56 tests`
 
 ---
 

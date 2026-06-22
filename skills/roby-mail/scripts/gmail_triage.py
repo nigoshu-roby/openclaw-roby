@@ -1427,6 +1427,7 @@ def main() -> int:
         # Task extraction
         tasks = []
         if (not skip_tasks) and work_bucket == "task":
+            llm_task_extracted = False
             try:
                 extracted = summarize_tasks(
                     f"Subject: {subject}\n"
@@ -1435,6 +1436,7 @@ def main() -> int:
                     f"{body}",
                     env,
                 )
+                llm_task_extracted = bool(extracted)
             except Exception:
                 extracted = []
             deterministic_actions = extract_explicit_email_actions(
@@ -1445,11 +1447,15 @@ def main() -> int:
                 tags=tags,
                 sender=sender,
             )
-            if deterministic_actions:
+            if deterministic_actions and not llm_task_extracted:
                 extracted_titles = {str(item.get("title") or "").strip() for item in extracted}
                 for item in deterministic_actions:
                     if item["title"] not in extracted_titles:
                         extracted.append(item)
+                if extracted:
+                    summary["task_deterministic_fallback"] = int(summary.get("task_deterministic_fallback", 0)) + 1
+            if llm_task_extracted:
+                summary["task_llm_extracted"] = int(summary.get("task_llm_extracted", 0)) + 1
             if not extracted:
                 if category == "needs_reply":
                     fallback_title = f"【返信】{subject}" if subject else "返信内容を確認して返信する"

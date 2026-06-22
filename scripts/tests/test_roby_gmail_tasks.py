@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
 
 
 def _load_module():
@@ -57,6 +59,45 @@ class TestRobyGmailTasks(TestCase):
         self.assertEqual(actions[0]["task_kind"], "action")
         self.assertEqual(actions[1]["task_kind"], "reply")
 
+    def test_summarize_tasks_accepts_semantic_llm_action_plan(self):
+        payload = {
+            "summary": json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "title": "指定のURLから候補日程の◯✕を回答する",
+                            "due_date": "2026-07-10",
+                            "project": "email",
+                            "note": "本文でURLから候補日程の可否回答を依頼している。",
+                            "task_kind": "action",
+                        },
+                        {
+                            "title": "回答したら高田氏に返信する",
+                            "due_date": "7月10日",
+                            "project": "email",
+                            "note": "回答後に返信する必要がある。",
+                            "task_kind": "reply",
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        }
+
+        with patch.object(self.mod.subprocess, "check_output", return_value=json.dumps(payload).encode("utf-8")) as mock_check:
+            actions = self.mod.summarize_tasks(
+                "Subject: Re: 兼清杯開催日程のご相談\n\nURLから候補日程の◯✕を7月10日までに回答し、回答後に返信ください。",
+                {"GMAIL_TRIAGE_TASK_LLM_MODEL": "ollama/qwen2.5:7b"},
+            )
+
+        self.assertEqual([row["title"] for row in actions], [
+            "指定のURLから候補日程の◯✕を回答する",
+            "回答したら高田氏に返信する",
+        ])
+        self.assertEqual([row["due_date"] for row in actions], ["2026-07-10", "2026-07-10"])
+        self.assertEqual(actions[0]["task_kind"], "action")
+        self.assertIn("--model", mock_check.call_args.args[0])
+
     def test_normalize_extracted_actions_removes_generic_reply_when_specific_reply_exists(self):
         rows = self.mod.normalize_extracted_actions(
             [
@@ -70,6 +111,19 @@ class TestRobyGmailTasks(TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["title"], "回答したら高田氏に返信する")
         self.assertEqual(rows[0]["due_date"], "2026-07-10")
+
+    def test_normalize_extracted_actions_removes_subject_copy_reply_when_specific_reply_exists(self):
+        rows = self.mod.normalize_extracted_actions(
+            [
+                {"title": "Re: 兼清杯開催日程のご相談", "task_kind": "reply"},
+                {"title": "回答したら高田氏に返信する", "task_kind": "reply", "due_date": "2026-07-10"},
+            ],
+            raw_category="needs_reply",
+            subject="Re: 兼清杯開催日程のご相談",
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "回答したら高田氏に返信する")
 
     def test_normalize_extracted_actions_adds_reply_for_needs_reply(self):
         rows = self.mod.normalize_extracted_actions(

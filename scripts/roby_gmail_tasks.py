@@ -10,6 +10,99 @@ from email.utils import parseaddr
 from typing import Any, Dict, List, Tuple
 
 
+def _int_from_env(env: Dict[str, str], key: str, default: int) -> int:
+    value = env.get(key)
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _parse_jsonish_text(raw: str) -> Any:
+    if not raw:
+        return None
+    s = raw.strip()
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s)
+    try:
+        return json.loads(s)
+    except Exception:
+        m = re.search(r"(\{.*\}|\[.*\])", s, re.DOTALL)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            return None
+
+
+def _extract_summary_text(data: Dict[str, Any]) -> str:
+    for k in ("summary", "output", "text", "result"):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
+
+
+def _normalize_due_date(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    match = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", text)
+    if match:
+        try:
+            return datetime(int(match.group(1)), int(match.group(2)), int(match.group(3))).strftime("%Y-%m-%d")
+        except ValueError:
+            return ""
+    match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", text)
+    if match:
+        try:
+            return datetime(datetime.now().year, int(match.group(1)), int(match.group(2))).strftime("%Y-%m-%d")
+        except ValueError:
+            return ""
+    return ""
+
+
+def _normalize_llm_task_items(parsed: Any) -> List[Dict[str, Any]]:
+    if isinstance(parsed, dict):
+        for key in ("tasks", "action_items", "actions"):
+            if isinstance(parsed.get(key), list):
+                parsed = parsed[key]
+                break
+    if not isinstance(parsed, list):
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("task") or item.get("action") or "").strip()
+        title = re.sub(r"^(?:タスク|アクション|対応)\s*[:：-]\s*", "", title).strip()
+        if not title:
+            continue
+        task_kind = str(item.get("task_kind") or item.get("kind") or "").strip().lower()
+        if task_kind not in {"reply", "action"}:
+            task_kind = "reply" if _looks_like_reply_task(title, str(item.get("note") or "")) else "action"
+        due_date = _normalize_due_date(item.get("due_date") or item.get("deadline") or "")
+        key = (task_kind, title)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "title": title,
+                "due_date": due_date,
+                "project": str(item.get("project") or "").strip() or "email",
+                "note": str(item.get("note") or item.get("evidence") or "").strip(),
+                "task_kind": task_kind,
+            }
+        )
+    return rows
+
+
 def _dedupe_tags(tags: List[str]) -> List[str]:
     seen = set()
     out = []
@@ -24,17 +117,28 @@ def _dedupe_tags(tags: List[str]) -> List[str]:
 
 
 def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
+    max_input_chars = _int_from_env(env, "GMAIL_TRIAGE_TASK_LLM_MAX_INPUT_CHARS", 7000)
+    timeout_sec = _int_from_env(env, "GMAIL_TRIAGE_TASK_LLM_TIMEOUT_SEC", 60)
+    max_output_tokens = str(_int_from_env(env, "GMAIL_TRIAGE_TASK_LLM_MAX_OUTPUT_TOKENS", 1400))
+    length = (env.get("GMAIL_TRIAGE_TASK_LLM_LENGTH", env.get("GMAIL_TRIAGE_LLM_LENGTH", "m")) or "m").strip()
+    model = (
+        env.get("GMAIL_TRIAGE_TASK_LLM_MODEL")
+        or env.get("GMAIL_TRIAGE_LLM_MODEL")
+        or ""
+    ).strip()
     prompt = (
-        "Extract actionable tasks from the message. "
-        "Return ONLY a JSON array of objects with keys: title, due_date, project, note, task_kind. "
-        "task_kind must be one of reply or action. "
-        "due_date must be YYYY-MM-DD or empty string. "
-        "Use concise, executable Japanese titles. "
-        "A task must have a clear next action, an owner, a cost if ignored, and a checkable notion of done. "
-        "Do not output generic titles like '対応' or '確認'. "
-        "Do not output pure status reports, completed work, or commentary as tasks. "
-        "If the mail asks for a concrete deliverable, include that deliverable in title. "
-        "Split sequential actions into multiple tasks when useful. "
+        "You are the task-reading layer for Japanese business email. "
+        "Read the message semantically; do not rely on fixed keywords. "
+        "Return ONLY JSON: {\"tasks\":[{\"title\":\"...\",\"due_date\":\"YYYY-MM-DD or empty\",\"project\":\"email\",\"note\":\"short evidence\",\"task_kind\":\"action|reply\"}]}. "
+        "Create tasks only for future actions the recipient should do. "
+        "Titles must be concrete, executable, and checkable in Japanese. "
+        "Infer the real execution step from the body instead of copying the subject. "
+        "If the body asks the recipient to answer a form, URL, poll, schedule table, or candidate dates, make that form/URL answer the action task. "
+        "If the body then asks for a reply after completing that action, add a separate reply task. "
+        "Split sequential actions when the done condition differs; keep one task when it is a single action. "
+        "Use due_date only when the message gives a clear deadline; convert Japanese dates to YYYY-MM-DD using the current year when the year is omitted. "
+        "Do not output generic tasks like '確認する', '対応する', or a reply task that only repeats the subject when a concrete task exists. "
+        "Do not output pure status reports, completed work, newsletters, or FYI commentary as tasks. "
         "If no tasks, return []."
     )
     cmd = [
@@ -46,26 +150,18 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
         "off",
         "--prompt",
         prompt,
+        "--length",
+        length,
         "--max-output-tokens",
-        "1200",
+        max_output_tokens,
     ]
-    out = subprocess.check_output(cmd, input=text.encode("utf-8"), env=env, timeout=60)
+    if model:
+        cmd.extend(["--model", model])
+    source_text = (text or "")[:max_input_chars]
+    out = subprocess.check_output(cmd, input=source_text.encode("utf-8"), env=env, timeout=timeout_sec)
     data = json.loads(out)
-    summary = data.get("summary", "")
-    if not summary:
-        return []
-    try:
-        parsed = json.loads(summary)
-        return parsed if isinstance(parsed, list) else []
-    except Exception:
-        m = re.search(r"\[.*\]", summary, re.DOTALL)
-        if m:
-            try:
-                parsed = json.loads(m.group(0))
-                return parsed if isinstance(parsed, list) else []
-            except Exception:
-                return []
-        return []
+    parsed = _parse_jsonish_text(_extract_summary_text(data))
+    return _normalize_llm_task_items(parsed)
 
 
 def extract_explicit_email_actions(
@@ -216,6 +312,33 @@ def _rewrite_email_action_title(title: str, raw_category: str, note: str = "") -
     return text
 
 
+def _clean_email_subject(subject: str) -> str:
+    text = (subject or "").strip()
+    while True:
+        cleaned = re.sub(r"^(?:re|fw|fwd)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
+        if cleaned == text:
+            return cleaned or text
+        text = cleaned
+
+
+def _canonical_email_subjectish(text: str) -> str:
+    raw = (text or "").strip()
+    raw = re.sub(r"^【返信】\s*", "", raw)
+    raw = _clean_email_subject(raw)
+    raw = re.sub(r"[「」『』【】\[\]\(\)（）:：\-_\s]", "", raw)
+    return raw.lower()
+
+
+def _is_generic_subject_reply(title: str, subject: str) -> bool:
+    if not subject:
+        return False
+    title_key = _canonical_email_subjectish(title)
+    subject_key = _canonical_email_subjectish(subject)
+    if not title_key or not subject_key:
+        return False
+    return title_key == subject_key or title_key == f"返信{subject_key}"
+
+
 def normalize_extracted_actions(
     extracted: List[Dict[str, Any]],
     *,
@@ -268,12 +391,22 @@ def normalize_extracted_actions(
             "返信内容を確認する",
             f"【返信】{subject}" if subject else "",
         }
-        has_specific_reply = any(str(item.get("title") or "") not in generic_reply_titles for item in reply_items)
+        has_specific_reply = any(
+            str(item.get("title") or "") not in generic_reply_titles
+            and not _is_generic_subject_reply(str(item.get("title") or ""), subject)
+            for item in reply_items
+        )
         if has_specific_reply:
             normalized = [
                 item
                 for item in normalized
-                if not (item.get("task_kind") == "reply" and str(item.get("title") or "") in generic_reply_titles)
+                if not (
+                    item.get("task_kind") == "reply"
+                    and (
+                        str(item.get("title") or "") in generic_reply_titles
+                        or _is_generic_subject_reply(str(item.get("title") or ""), subject)
+                    )
+                )
             ]
 
     return normalized
@@ -430,15 +563,6 @@ def _sender_label(raw_from: str) -> str:
 def _decorate_email_task_title(title: str, sender_label: str) -> str:
     base = (title or "").strip() or "メール確認タスク"
     return f"【{sender_label}】{base}"
-
-
-def _clean_email_subject(subject: str) -> str:
-    text = (subject or "").strip()
-    while True:
-        cleaned = re.sub(r"^(?:re|fw|fwd)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
-        if cleaned == text:
-            return cleaned or text
-        text = cleaned
 
 
 def _display_email_action_title(title: str, raw_category: str, note: str, subject: str, task_kind: str = "") -> str:

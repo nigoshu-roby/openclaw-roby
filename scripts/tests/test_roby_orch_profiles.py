@@ -76,6 +76,7 @@ class TestRobyOrchProfiles(TestCase):
 
         self.assertEqual(profile, "fast")
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_ENABLE"], "0")
+        self.assertEqual(overrides["GMAIL_TRIAGE_TASK_LLM_MODEL"], "ollama/llama3.2:3b")
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_MAX_REVIEWS"], "0")
 
     def test_gmail_quality_profile_enables_limited_llm_review(self):
@@ -91,6 +92,7 @@ class TestRobyOrchProfiles(TestCase):
         self.assertEqual(profile, "quality")
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_ENABLE"], "1")
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_MODEL"], "ollama/qwen2.5:7b")
+        self.assertEqual(overrides["GMAIL_TRIAGE_TASK_LLM_MODEL"], "ollama/qwen2.5:7b")
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_MAX_REVIEWS"], "7")
 
 
