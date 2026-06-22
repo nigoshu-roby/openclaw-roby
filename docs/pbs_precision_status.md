@@ -52,6 +52,10 @@
   - semantic triage の `requires_user_action` は `explicit_action_request` signal として既存 gate に接続し、`requires_reply` は `needs_reply` として task bucket に接続する。
   - archive 判定だけは安全弁を残し、broadcast / auto notice / promo 根拠がない archive は review 側に guarded する。
   - ChatGPT Plus/Business の通常サブスクは API 利用とは別請求のため、常時判定はローカル/低コストモデル、曖昧・重要ケースは Gemini/GPT API へ昇格できる構成を維持する。
+- Gmail の文章理解から task extraction までは Gemini API を標準に変更。
+  - `GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL` と `GMAIL_TRIAGE_TASK_LLM_MODEL` の既定を `google/gemini-3-flash-preview` に設定。
+  - `ROBY_ORCH_GMAIL_CLOUD_MODEL` または `GMAIL_TRIAGE_GEMINI_MODEL` で Gemini model を差し替え可能。
+  - ローカル preclassify は補助として残すが、task 必要性判断と本文からの task 抽出は Gemini を主系にする。
 
 ### ゴールから逆算した次の計画
 

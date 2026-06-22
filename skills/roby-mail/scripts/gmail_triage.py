@@ -993,7 +993,7 @@ def semantic_triage_decision(subject: str, sender: str, cc: str, body: str, env:
         env.get("GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL")
         or env.get("GMAIL_TRIAGE_LLM_MODEL")
         or env.get("GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL")
-        or "ollama/llama3.2:3b"
+        or "google/gemini-3-flash-preview"
     ).strip()
     if not model:
         return {}

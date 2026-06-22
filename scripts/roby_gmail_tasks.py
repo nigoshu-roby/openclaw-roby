@@ -124,7 +124,7 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     model = (
         env.get("GMAIL_TRIAGE_TASK_LLM_MODEL")
         or env.get("GMAIL_TRIAGE_LLM_MODEL")
-        or ""
+        or "google/gemini-3-flash-preview"
     ).strip()
     prompt = (
         "You are the task-reading layer for Japanese business email. "

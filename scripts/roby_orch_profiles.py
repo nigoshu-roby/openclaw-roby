@@ -171,18 +171,23 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
     )
     profile = str(schedule["effective_profile"])
     fast_model = (env.get("ROBY_ORCH_GMAIL_LLM_FAST_MODEL", "ollama/llama3.2:3b") or "").strip()
-    quality_model = (env.get("ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL", "ollama/qwen2.5:7b") or "").strip()
+    cloud_model = (
+        env.get("ROBY_ORCH_GMAIL_CLOUD_MODEL")
+        or env.get("GMAIL_TRIAGE_GEMINI_MODEL")
+        or "google/gemini-3-flash-preview"
+    ).strip()
+    quality_model = (env.get("ROBY_ORCH_GMAIL_LLM_QUALITY_MODEL", cloud_model) or "").strip()
     overrides: Dict[str, str] = {}
     if profile == "quality":
         overrides = {
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
-            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE": "1",
-            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": quality_model or cloud_model or fast_model,
             "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN": env.get("ROBY_ORCH_GMAIL_SEMANTIC_MAX_QUALITY", "50"),
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
-            "GMAIL_TRIAGE_LLM_MODEL": quality_model or fast_model,
-            "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_LLM_MODEL": quality_model or cloud_model or fast_model,
+            "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or cloud_model or fast_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_QUALITY", "30"),
         }
     elif profile == "hybrid":
@@ -190,11 +195,11 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": "1",
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE": "1",
-            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": quality_model or cloud_model or fast_model,
             "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN": env.get("ROBY_ORCH_GMAIL_SEMANTIC_MAX_HYBRID", "40"),
             "GMAIL_TRIAGE_LLM_ENABLE": "1",
-            "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
-            "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or fast_model,
+            "GMAIL_TRIAGE_LLM_MODEL": quality_model or cloud_model or fast_model,
+            "GMAIL_TRIAGE_TASK_LLM_MODEL": quality_model or cloud_model or fast_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_HYBRID", "10"),
         }
     else:  # fast
@@ -203,11 +208,11 @@ def apply_gmail_profile(env: Dict[str, str], now: Optional[datetime] = None) -> 
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_ENABLE": env.get("ROBY_ORCH_GMAIL_LOCAL_PRECLASSIFY_FAST", "1"),
             "GMAIL_TRIAGE_LOCAL_PRECLASSIFY_MODEL": fast_model or quality_model,
             "GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE": env.get("ROBY_ORCH_GMAIL_SEMANTIC_FAST", "1"),
-            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL": cloud_model or quality_model or fast_model,
             "GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN": env.get("ROBY_ORCH_GMAIL_SEMANTIC_MAX_FAST", "50"),
             "GMAIL_TRIAGE_LLM_ENABLE": "0",
-            "GMAIL_TRIAGE_LLM_MODEL": fast_model or quality_model,
-            "GMAIL_TRIAGE_TASK_LLM_MODEL": fast_model or quality_model,
+            "GMAIL_TRIAGE_LLM_MODEL": cloud_model or quality_model or fast_model,
+            "GMAIL_TRIAGE_TASK_LLM_MODEL": cloud_model or quality_model or fast_model,
             "GMAIL_TRIAGE_LLM_MAX_REVIEWS": env.get("ROBY_ORCH_GMAIL_LLM_MAX_REVIEWS_FAST", "0"),
         }
     overrides["ROBY_ORCH_GMAIL_EFFECTIVE_PROFILE"] = profile
