@@ -127,6 +127,20 @@ class TestRobyGmailClassify(TestCase):
         self.assertEqual(bucket, "review")
         self.assertEqual(reason, "review_only_notice")
 
+    def test_waiting_followup_promotes_review_to_task(self):
+        meta = {
+            "signals": {
+                "waiting_followup": True,
+                "business_review": False,
+                "actionable_notice": False,
+                "alert": False,
+            }
+        }
+        bucket, reason = self.mod.decide_work_bucket("needs_review", False, meta, [])
+
+        self.assertEqual(bucket, "task")
+        self.assertEqual(reason, "coordination_requires_followup")
+
     def test_detect_early_archive_rule_marks_calendar_response(self):
         rule, suppress = self.mod.detect_early_archive_rule(
             "承諾: 定例ミーティング",

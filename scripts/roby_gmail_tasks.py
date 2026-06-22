@@ -130,13 +130,18 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     ).strip()
     prompt = (
         "You are the task-reading layer for Japanese business email. "
+        "Extract tasks for the mailbox owner/local operator, not for every sender or recipient in the thread. "
+        "The mailbox owner is usually 新後周平 / 新後 / TOKIWAGI. If the latest top message is from the owner, extract the owner's follow-up/waiting tasks, not tasks for the recipient. "
         "Read the message semantically; do not rely on fixed keywords. "
         "Return ONLY JSON: {\"tasks\":[{\"title\":\"...\",\"due_date\":\"YYYY-MM-DD or empty\",\"project\":\"email\",\"note\":\"short evidence\",\"task_kind\":\"action|reply\"}]}. "
-        "Create tasks only for future actions the recipient should do. "
+        "Create tasks only for future actions the mailbox owner should do. "
+        "Waiting and conditional follow-ups are valid tasks when they prevent work from being forgotten. "
         "Titles must be concrete, executable, and checkable in Japanese. "
         "Infer the real execution step from the body instead of copying the subject. "
         "If the body asks the recipient to answer a form, URL, poll, schedule table, or candidate dates, make that form/URL answer the action task. "
         "If the body then asks for a reply after completing that action, add a separate reply task. "
+        "If the mailbox owner replied '再度ご依頼をお待ちしております' or similar, create follow-up tasks such as '再依頼が来たらベンダーに依頼内容を共有する' and, when a deadline like '本日中' exists, '期日までに依頼がなければクライアントに確認する'. "
+        "If the mailbox owner asked another company to confirm facts, create a task to check that company's status and a conditional task to consult the vendor depending on the answer. "
         "Split sequential actions when the done condition differs; keep one task when it is a single action. "
         "Use due_date only when the message gives a clear deadline; convert Japanese dates to YYYY-MM-DD using the current year when the year is omitted. "
         "Do not output generic tasks like '確認する', '対応する', or a reply task that only repeats the subject when a concrete task exists. "
@@ -159,7 +164,12 @@ def summarize_tasks(text: str, env: Dict[str, str]) -> List[Dict[str, Any]]:
     ]
     if model:
         cmd.extend(["--model", model])
-    source_text = (text or "")[:max_input_chars]
+    mailbox_owner = env.get("ROBY_GMAIL_ACCOUNT") or env.get("GOG_ACCOUNT") or "the local mailbox owner"
+    source_text = (
+        f"Mailbox owner account: {mailbox_owner}\n"
+        "Treat messages from this account, or from the local operator's signature/name, as the mailbox owner's own messages.\n\n"
+        f"{text or ''}"
+    )[:max_input_chars]
     if is_gemini_model(model):
         parsed, _raw = run_gemini_json_prompt(
             prompt=prompt,
@@ -208,6 +218,8 @@ def extract_explicit_email_actions(
     def infer_due_date(source: str) -> str:
         match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", source)
         if not match:
+            if "本日中" in source or "今日中" in source:
+                return datetime.now().strftime("%Y-%m-%d")
             return ""
         month = int(match.group(1))
         day = int(match.group(2))
@@ -244,6 +256,33 @@ def extract_explicit_email_actions(
             task_kind="reply",
             due_date=due,
             note="候補日程の回答完了後に、その旨を返信する。",
+        )
+
+    if re.search(r"(再度ご依頼をお待ち|改めて.*(?:ご相談|依頼).*本日中)", text):
+        due = infer_due_date(text)
+        add_action(
+            "再依頼が来たらベンダーに依頼内容を共有する",
+            task_kind="action",
+            note="クライアントから再依頼が届いたら、ベンダーへ依頼内容を共有する。",
+        )
+        add_action(
+            "本日中に再依頼がなければクライアントに確認する" if due else "期日までに再依頼がなければクライアントに確認する",
+            task_kind="action",
+            due_date=due,
+            note="予定された期日までに再依頼が届かない場合、クライアントへ状況確認する。",
+        )
+
+    if re.search(r"(確認を進めてまいります|ご確認につきまして.*お願)", text) and "プロバイダ" in text:
+        company = "ダブルスタンダード社" if "ダブルスタンダード" in text else "相手先"
+        add_action(
+            f"{company}のプロバイダID確認状況を確認する",
+            task_kind="action",
+            note="相手先が進めているプロバイダID確認の状況を確認する。",
+        )
+        add_action(
+            "確認結果に応じてベンダーへ相談する",
+            task_kind="action",
+            note="確認結果に応じて、必要な対応をベンダーへ相談する。",
         )
 
     if raw_category == "needs_reply" and not actions:

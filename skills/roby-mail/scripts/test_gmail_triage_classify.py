@@ -495,6 +495,35 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(bucket, "task")
         self.assertEqual(reason, "explicit_reply_or_action")
 
+    def test_apply_semantic_triage_promotes_waiting_followup_to_task(self):
+        category, needs_reply, meta, tags, applied = self.mod.apply_semantic_triage_result(
+            "needs_review",
+            False,
+            {"signals": {}, "bucket_scores": {}},
+            [],
+            {
+                "category": "needs_review",
+                "requires_user_action": True,
+                "requires_reply": False,
+                "deadline": "2026-06-22",
+                "confidence": 0.88,
+                "is_broadcast": False,
+                "is_auto_notice": False,
+                "action_type": "follow_up_if_no_request",
+            },
+            sender="片岡由賀 <y-kataoka@bornelund.co.jp>",
+            subject="Re: 【ボーネルンド】夏のあそび場販促準備に伴う確認のご依頼",
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(category, "needs_review")
+        self.assertFalse(needs_reply)
+        self.assertTrue(meta["signals"]["explicit_action_request"])
+        self.assertEqual(meta["signals"]["semantic_deadline"], "2026-06-22")
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(bucket, "task")
+        self.assertEqual(reason, "coordination_requires_followup")
+
     def test_apply_semantic_triage_can_clear_forced_reply_when_completed(self):
         category, needs_reply, meta, tags, applied = self.mod.apply_semantic_triage_result(
             "needs_reply",

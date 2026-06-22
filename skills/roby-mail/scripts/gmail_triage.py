@@ -1005,20 +1005,28 @@ def semantic_triage_decision(subject: str, sender: str, cc: str, body: str, env:
 
     prompt = (
         "You are the semantic triage layer for Japanese business email. "
+        "You triage for the mailbox owner/local operator, not for every person mentioned in the thread. "
+        "The mailbox owner is usually 新後周平 / 新後 / TOKIWAGI. If the From header or signature matches the mailbox owner, the latest top message is the owner's own reply and may create a waiting-state follow-up task. "
         "Read the body, not just keywords. Return ONLY JSON with keys: "
         "category, requires_user_action, requires_reply, deadline, is_broadcast, is_auto_notice, confidence, action_type, risk_flags, reason. "
         "category must be one of archive, later_check, needs_review, needs_reply. "
-        "requires_user_action means the recipient should do a future checkable action, not merely read an FYI. "
-        "requires_reply means a human reply/response/report back is expected. "
-        "Use needs_reply when the sender expects a reply or the recipient must complete an action and report back. "
+        "requires_user_action means the mailbox owner should do a future checkable action, not merely read an FYI. "
+        "A waiting-state follow-up is also a user action: if the latest mail says the mailbox owner is waiting for a client/vendor to send requirements, confirm something, or reply by a stated/implicit time, set requires_user_action=true. "
+        "requires_reply means the mailbox owner is expected to reply/report back. "
+        "Use needs_reply when the mailbox owner is expected to reply, complete an action and report back, or follow up with another party. "
         "Use needs_review for important decisions, billing, contracts, failures, client coordination, or ambiguous action-worthy mail. "
         "Use later_check for platform/tool notices worth seeing later but not requiring action. "
         "Use archive only for clear newsletters, marketing, calendar response receipts, or low-value automated notices. "
         "If a URL/form/schedule table must be answered, requires_user_action=true and action_type should describe that concrete action. "
+        "If the latest message from the mailbox owner says 'we are waiting for your revised request', '再度ご依頼をお待ちしております', or asks another party to confirm something, classify it as needs_review or needs_reply with requires_user_action=true unless the thread is clearly closed. "
+        "Use action_type values such as waiting_for_client_request, follow_up_if_no_request, check_vendor_status, consult_vendor_after_client_confirmation when appropriate. "
         "Be generous about sending real business mail to AI review, but conservative about deleting/archive decisions."
     )
     body_trim = (body or "")[:max_input_chars]
+    mailbox_owner = env.get("ROBY_GMAIL_ACCOUNT") or env.get("GOG_ACCOUNT") or "the local mailbox owner"
     source_text = (
+        f"Mailbox owner account: {mailbox_owner}\n"
+        "Treat messages from this account, or from the local operator's signature/name, as the mailbox owner's own messages.\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
         f"CC: {cc}\n\n"
@@ -1210,7 +1218,7 @@ def apply_semantic_triage_result(
     elif semantic_category in {"archive", "later_check", "needs_review", "needs_reply"} and confidence >= 0.35:
         category = semantic_category
 
-    applied = category != current_category or needs_reply != current_needs_reply
+    applied = category != current_category or needs_reply != current_needs_reply or requires_user_action or bool(decision.get("deadline"))
     if applied:
         tags = _dedupe_tags(tags + ["semantic:triage"])
     return category, needs_reply, meta, tags, applied
@@ -1255,6 +1263,21 @@ def classify_message(
     cc_lower = (cc or "").lower()
     subject_lower = (subject or "").lower()
     is_noreply = "no-reply" in sender_lower or "noreply" in sender_lower
+
+    def _attach_waiting_followup_signal() -> None:
+        if not (
+            ("再度ご依頼をお待ち" in text)
+            or ("改めて" in text and ("ご相談" in text or "依頼" in text) and "本日中" in text)
+            or ("確認を進めてまいります" in text)
+            or ("ご確認につきまして" in text and "お願" in text)
+        ):
+            return
+        signals = meta.get("signals")
+        if not isinstance(signals, dict):
+            signals = {}
+            meta["signals"] = signals
+        signals["waiting_followup"] = True
+        signals["explicit_action_request"] = True
     contact_meta = contact_importance(
         thread_id,
         sender,
@@ -1303,10 +1326,13 @@ def classify_message(
         override_category = None
         override_rule = None
     if override_category:
+        if override_category == "needs_review":
+            _attach_waiting_followup_signal()
         return override_category, _dedupe_tags(tags + [f"rule:{override_rule}"]), (override_category == "needs_reply"), override_rule, meta
 
     # Internal company domain in sender/CC should always be reviewed.
     if "tokiwa-gi.com" in sender_lower or "tokiwa-gi.com" in cc_lower:
+        _attach_waiting_followup_signal()
         return "needs_review", _dedupe_tags(tags + ["rule:internal_domain_review"]), needs_reply, "internal_domain_review", meta
 
     signals = build_email_signals(

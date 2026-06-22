@@ -114,6 +114,12 @@ def build_email_signals(
     )
     meeting_coordination = any(keyword in (subject or "") for keyword in ["定例ミーティング", "ミーティングの件", "打ち合わせ", "日程"])
     review_only_notice = subject_lower.startswith(("招待:", "invitation:", "updated invitation:")) or "事前review" in subject_lower
+    waiting_followup = bool(
+        ("再度ご依頼をお待ち" in text)
+        or ("改めて" in text and ("ご相談" in text or "依頼" in text) and "本日中" in text)
+        or ("確認を進めてまいります" in text)
+        or ("ご確認につきまして" in text and "お願" in text)
+    )
     is_noreply = "no-reply" in sender_lower or "noreply" in sender_lower
     is_marketing_sender = any(hint in sender_lower for hint in MARKETING_SENDER_HINTS)
     is_promo_sender_domain = any(domain in sender_lower for domain in promo_sender_domains)
@@ -138,6 +144,7 @@ def build_email_signals(
         "broadcast_like": is_broadcast_like,
         "broadcast_business_review": bool(is_broadcast_like and has_business_review_signal),
         "meeting_coordination": meeting_coordination,
+        "waiting_followup": waiting_followup,
         "review_only_notice": review_only_notice,
         "is_noreply": is_noreply,
         "context_project_match": bool(projects),
@@ -308,6 +315,7 @@ def decide_work_bucket(
     explicit_task_signal = bool(
         needs_reply
         or signals.get("explicit_action_request")
+        or signals.get("waiting_followup")
         or signals.get("contract_followup_subject")
         or (has_tool_tag and signals.get("actionable_notice") and signals.get("alert"))
     )
@@ -355,6 +363,8 @@ def decide_work_bucket(
         task_score += 4
     if signals.get("meeting_coordination"):
         task_score += 3
+    if signals.get("waiting_followup"):
+        task_score += 4
     if signals.get("urgent"):
         task_score += 1
     if signals.get("actionable_notice"):

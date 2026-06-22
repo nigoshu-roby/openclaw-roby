@@ -98,6 +98,65 @@ class TestRobyGmailTasks(TestCase):
         self.assertEqual(actions[0]["task_kind"], "action")
         self.assertIn("--model", mock_check.call_args.args[0])
 
+    def test_summarize_tasks_accepts_waiting_followup_action_plan(self):
+        payload = {
+            "tasks": [
+                {
+                    "title": "再依頼が来たらベンダーに依頼内容を共有する",
+                    "due_date": "",
+                    "project": "email",
+                    "task_kind": "action",
+                },
+                {
+                    "title": "本日中に再依頼がなければクライアントに確認する",
+                    "due_date": "2026-06-22",
+                    "project": "email",
+                    "task_kind": "action",
+                },
+            ]
+        }
+
+        with patch.object(self.mod, "run_gemini_json_prompt", return_value=(payload, json.dumps(payload, ensure_ascii=False))):
+            actions = self.mod.summarize_tasks(
+                "Subject: 夏のあそび場販促準備に伴う確認のご依頼\n\n本日中に改めてタグの埋め込みに関するご相談をお送りします。再度ご依頼をお待ちしております。",
+                {"GMAIL_TRIAGE_TASK_LLM_MODEL": "google/gemini-3-flash-preview"},
+            )
+
+        self.assertEqual([row["title"] for row in actions], [
+            "再依頼が来たらベンダーに依頼内容を共有する",
+            "本日中に再依頼がなければクライアントに確認する",
+        ])
+        self.assertEqual(actions[1]["due_date"], "2026-06-22")
+
+    def test_summarize_tasks_accepts_vendor_status_followup_action_plan(self):
+        payload = {
+            "tasks": [
+                {
+                    "title": "ダブルスタンダード社のプロバイダID確認状況を確認する",
+                    "due_date": "",
+                    "project": "email",
+                    "task_kind": "action",
+                },
+                {
+                    "title": "確認結果に応じてベンダーへ相談する",
+                    "due_date": "",
+                    "project": "email",
+                    "task_kind": "action",
+                },
+            ]
+        }
+
+        with patch.object(self.mod, "run_gemini_json_prompt", return_value=(payload, json.dumps(payload, ensure_ascii=False))):
+            actions = self.mod.summarize_tasks(
+                "Subject: 予約システムのヒアリングについて\n\nまずは同一プロバイダかどうかの確認を進めてまいります。プロバイダIDのご確認につきましてお願いいたします。",
+                {"GMAIL_TRIAGE_TASK_LLM_MODEL": "google/gemini-3-flash-preview"},
+            )
+
+        self.assertEqual([row["title"] for row in actions], [
+            "ダブルスタンダード社のプロバイダID確認状況を確認する",
+            "確認結果に応じてベンダーへ相談する",
+        ])
+
     def test_normalize_extracted_actions_removes_generic_reply_when_specific_reply_exists(self):
         rows = self.mod.normalize_extracted_actions(
             [
