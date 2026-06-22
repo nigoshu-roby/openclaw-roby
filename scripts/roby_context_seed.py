@@ -53,6 +53,19 @@ def _split_phrase_values(raw: str) -> List[str]:
     return values
 
 
+def _looks_related_entity_description(text: str) -> bool:
+    value = (text or "").strip()
+    if not value:
+        return True
+    if value.endswith("。"):
+        return True
+    if any(marker in value for marker in ["ではなく", "の話", "が主", "が中心", "について", "向け施設ブランド", "屋内あそび場"]):
+        return True
+    if len(value) >= 14 and re.search(r"[ぁ-ん]", value):
+        return True
+    return False
+
+
 def _extract_related_entity_names(raw: str) -> List[str]:
     text = (raw or "").strip()
     if not text:
@@ -65,6 +78,8 @@ def _extract_related_entity_names(raw: str) -> List[str]:
         head = re.split(r"[=＝:：]", item, maxsplit=1)[0].strip()
         if not head:
             continue
+        if _looks_related_entity_description(head):
+            continue
         if "（" in head and "）" in head:
             left, _, tail = head.partition("（")
             inside, _, _rest = tail.partition("）")
@@ -72,7 +87,7 @@ def _extract_related_entity_names(raw: str) -> List[str]:
             inside = inside.strip()
             if left:
                 names.append(left)
-            if inside:
+            if inside and not _looks_related_entity_description(inside):
                 names.append(inside)
             continue
         if "(" in head and ")" in head:
@@ -82,7 +97,7 @@ def _extract_related_entity_names(raw: str) -> List[str]:
             inside = inside.strip()
             if left:
                 names.append(left)
-            if inside:
+            if inside and not _looks_related_entity_description(inside):
                 names.append(inside)
             continue
         names.append(head)

@@ -9,7 +9,9 @@ Quality regression tests for minutes extraction:
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 from pathlib import Path
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -34,6 +36,7 @@ class TestRobyMinutesQuality(TestCase):
         cls.mod = _load_minutes_module()
 
     def setUp(self):
+        self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.clear()
         self.mod.PROJECT_TASK_POSITIVE_HINTS_REGISTRY.clear()
         self.mod.PROJECT_TASK_NEGATIVE_HINTS_REGISTRY.clear()
         self.mod.PROJECT_LOW_SELF_INVOLVEMENT.clear()
@@ -143,6 +146,117 @@ class TestRobyMinutesQuality(TestCase):
         self.assertEqual(child_projects.count("BT振興会-Mooovi"), 2)
         self.assertEqual(child_projects.count("ボーネルンド"), 1)
 
+    def test_minutes_parent_and_children_share_send_group_key(self):
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=[
+                {"title": "リンク挿入の抜け漏れがないか確認する", "project": "BT振興会-Mooovi", "assignee": "私"},
+                {"title": "ログイン情報を共有する", "project": "BT振興会-Mooovi", "assignee": "私"},
+            ],
+            source="gdocs",
+            source_title="2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "BT振興会-Mooovi"],
+        )
+        self.assertEqual(len(tasks), 3)
+        group_keys = {self.mod._task_group_key(task) for task in tasks}
+        self.assertEqual(len(group_keys), 1)
+
+    def test_cap_tasks_preserving_groups_never_splits_parent_children(self):
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=[
+                {"title": "リンク挿入の抜け漏れがないか確認する", "project": "BT振興会-Mooovi", "assignee": "私"},
+                {"title": "ログイン情報を共有する", "project": "BT振興会-Mooovi", "assignee": "私"},
+                {"title": "ボーネルンドの見積項目を整理する", "project": "ボーネルンド", "assignee": "私"},
+            ],
+            source="gdocs",
+            source_title="2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "BT振興会-Mooovi", "ボーネルンド"],
+        )
+        capped, dropped, reached = self.mod._cap_tasks_preserving_groups(tasks, 2)
+        self.assertEqual(capped, [])
+        self.assertEqual(dropped, len(tasks))
+        self.assertTrue(reached)
+
+        capped, dropped, reached = self.mod._cap_tasks_preserving_groups(tasks, 3)
+        self.assertEqual(len(capped), 3)
+        self.assertTrue(all(task["project"] == "BT振興会-Mooovi" for task in capped))
+        self.assertEqual(dropped, len(tasks) - 3)
+        self.assertTrue(reached)
+
+    def test_minutes_origin_ids_stay_stable_when_group_order_changes(self):
+        first = self.mod.build_neuronic_tasks(
+            extracted=[
+                {"title": "リンク挿入の抜け漏れがないか確認する", "project": "BT振興会-Mooovi", "assignee": "私"},
+                {"title": "ボーネルンドの見積項目を整理する", "project": "ボーネルンド", "assignee": "私"},
+            ],
+            source="gdocs",
+            source_title="2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test1",
+            known_projects=["TOKIWAGI_MASTER", "BT振興会-Mooovi", "ボーネルンド"],
+        )
+        second = self.mod.build_neuronic_tasks(
+            extracted=[
+                {"title": "ボーネルンドの見積項目を整理する", "project": "ボーネルンド", "assignee": "私"},
+                {"title": "リンク挿入の抜け漏れがないか確認する", "project": "BT振興会-Mooovi", "assignee": "私"},
+            ],
+            source="gdocs",
+            source_title="2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test2",
+            known_projects=["TOKIWAGI_MASTER", "BT振興会-Mooovi", "ボーネルンド"],
+        )
+        first_by_title = {task["title"]: task["origin_id"] for task in first}
+        second_by_title = {task["title"]: task["origin_id"] for task in second}
+        self.assertEqual(
+            first_by_title["BT振興会-Mooovi / 2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ"],
+            second_by_title["BT振興会-Mooovi / 2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ"],
+        )
+        self.assertEqual(
+            first_by_title["リンク挿入の抜け漏れがないか確認する"],
+            second_by_title["リンク挿入の抜け漏れがないか確認する"],
+        )
+
+    def test_hierarchy_create_only_keeps_parent_link_for_existing_child_repair(self):
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=[
+                {"title": "リンク挿入の抜け漏れがないか確認する", "project": "BT振興会-Mooovi", "assignee": "私"},
+            ],
+            source="gdocs",
+            source_title="2026/03/10 15:06 JST に開始した会議 - Gemini によるメモ",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "BT振興会-Mooovi"],
+        )
+        child = next(task for task in tasks if task.get("parent_origin_id"))
+        with tempfile.TemporaryDirectory() as td:
+            state_path = Path(td) / "hierarchy.json"
+            state_path.write_text(
+                json.dumps({"known_origin_ids": [child["origin_id"]]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            send_tasks, _known, _mode, suppressed = self.mod._apply_hierarchy_send_policy(
+                tasks,
+                {"ROBY_NEURONIC_HIERARCHY_STATE_PATH": str(state_path)},
+            )
+        sent_child = next(task for task in send_tasks if task.get("origin_id") == child["origin_id"])
+        self.assertEqual(sent_child.get("parent_origin_id"), child.get("parent_origin_id"))
+        self.assertNotIn("sibling_order", sent_child)
+        self.assertEqual(suppressed, 1)
+
     def test_group_leaf_minutes_tasks_skips_auto_parent_when_explicit_parent_covers_same_children(self):
         extracted = [
             {
@@ -163,6 +277,21 @@ class TestRobyMinutesQuality(TestCase):
         )
         self.assertEqual(len(grouped), 1)
         self.assertEqual(grouped[0]["title"], "ボーネルンド / スマレジ導入に関する課題の確認と方針決定")
+
+    def test_group_leaf_minutes_tasks_dedupes_similar_flat_children_within_project(self):
+        extracted = [
+            {"title": "ボーネルンド / スマレジ打ち合わせを調整する", "project": "ボーネルンド", "assignee": "私"},
+            {"title": "スマレジ打ち合わせを調整してください", "project": "ボーネルンド", "assignee": "私"},
+            {"title": "スマレジ打ち合わせを調整する", "project": "ミッド・ガーデン・ジャパン", "assignee": "私"},
+        ]
+        grouped = self.mod._group_leaf_minutes_tasks_by_project(
+            extracted,
+            default_project="TOKIWAGI_MASTER",
+            source_title="2026/03/16 スマレジ画面の共有画面",
+        )
+        by_project = {row["project"]: row for row in grouped}
+        self.assertEqual(len(by_project["ボーネルンド"]["subtasks"]), 1)
+        self.assertEqual(len(by_project["ミッド・ガーデン・ジャパン"]["subtasks"]), 1)
 
     def test_build_neuronic_tasks_prefers_descriptive_parent_over_generic_source_parent(self):
         extracted = [
@@ -935,6 +1064,7 @@ class TestRobyMinutesQuality(TestCase):
     def test_apply_context_seed_data_merges_project_alias_owner_and_self_aliases(self):
         self.mod.PROJECT_ALIAS_REGISTRY.clear()
         self.mod.PROJECT_EXTRA_ALIASES.clear()
+        self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.clear()
         self.mod.PROJECT_OWNER_HINTS_REGISTRY.clear()
         self.mod.PROJECT_ACTION_HINTS_REGISTRY.clear()
         self.mod.CONTEXT_SELF_OWNER_ALIASES = []
@@ -958,6 +1088,255 @@ class TestRobyMinutesQuality(TestCase):
         aliases = self.mod._get_self_owner_aliases({"ROBY_MINUTES_SELF_ALIASES": ""})
         self.assertIn("にーご", aliases)
         self.assertIn("新後", aliases)
+
+    def test_context_seed_keywords_are_strong_hints_not_generic_aliases(self):
+        self.mod.PROJECT_ALIAS_REGISTRY.clear()
+        self.mod.PROJECT_EXTRA_ALIASES.clear()
+        self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.clear()
+        self.mod.apply_context_seed_data(
+            {
+                "projects": [
+                    {
+                        "project": "SNW様-777BEACON",
+                        "aliases": ["777BEACON"],
+                        "keywords": ["ビーコン", "IDFA", "設定", "配信"],
+                    },
+                    {
+                        "project": "SNW様-第三者広告配信",
+                        "aliases": ["第三者広告配信"],
+                    },
+                ]
+            }
+        )
+        self.assertIn("ビーコン", self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.get("SNW様-777BEACON", []))
+        self.assertNotIn("設定", self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.get("SNW様-777BEACON", []))
+        resolved = self.mod._resolve_project_name(
+            "SNW様-第三者広告配信",
+            "ビーコンIDFAの設定を確認する",
+            "",
+            "社内定例MTG",
+            "TOKIWAGI_MASTER",
+            ["TOKIWAGI_MASTER", "SNW様-777BEACON", "SNW様-第三者広告配信"],
+        )
+        self.assertEqual(resolved, "SNW様-777BEACON")
+
+    def test_confident_minutes_project_rejects_keyword_conflict(self):
+        self.mod.PROJECT_KEYWORD_HINTS_REGISTRY["SNW様-777BEACON"] = ["ビーコン", "IDFA"]
+        ok = self.mod._has_confident_minutes_project(
+            "SNW様-第三者広告配信",
+            "ビーコンIDFAの設定を確認する",
+            "",
+            "社内定例MTG",
+            "SNW様-第三者広告配信",
+            ["TOKIWAGI_MASTER", "SNW様-777BEACON", "SNW様-第三者広告配信"],
+            doc_project_hints=["SNW様-第三者広告配信"],
+            registry={},
+        )
+        self.assertFalse(ok)
+
+    def test_confident_minutes_project_rejects_explicit_label_without_doc_support(self):
+        ok = self.mod._has_confident_minutes_project(
+            "ボーネルンド",
+            "販売ルートの整理を進める",
+            "",
+            "2026/06/02社内定例MTG",
+            "TOKIWAGI_MASTER",
+            ["TOKIWAGI_MASTER", "ボーネルンド", "LINE広告配信"],
+            doc_project_hints=["LINE広告配信"],
+            registry={},
+        )
+        self.assertFalse(ok)
+
+    def test_line_ad_keyword_hints_prevent_bonelund_parent_misnesting(self):
+        self.mod.PROJECT_ALIAS_REGISTRY.clear()
+        self.mod.PROJECT_EXTRA_ALIASES.clear()
+        self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.clear()
+        self.mod.apply_context_seed_data(
+            {
+                "projects": [
+                    {
+                        "project": "ボーネルンド",
+                        "aliases": ["ボーネルンド"],
+                        "keywords": ["スマレジ", "OBIC"],
+                    },
+                    {
+                        "project": "LINE広告配信",
+                        "aliases": ["LINE広告"],
+                        "keywords": ["一広", "運営会社一覧", "販売ルート", "広告商品"],
+                    },
+                ]
+            }
+        )
+        sanitized = self.mod.sanitize_extracted_tasks(
+            extracted=[
+                {
+                    "title": "運営会社一覧の情報提供依頼",
+                    "project": "ボーネルンド",
+                    "assignee": "私",
+                }
+            ],
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "LINE広告配信"],
+            source_title="2026/06/02社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        self.assertEqual(sanitized[0]["project"], "LINE広告配信")
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=sanitized,
+            source="gdocs",
+            source_title="2026/06/02社内定例MTG",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "LINE広告配信"],
+            doc_project_hints=["ボーネルンド", "LINE広告配信"],
+            registry={},
+        )
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[0]["project"], "LINE広告配信")
+        self.assertTrue(tasks[0]["title"].startswith("LINE広告配信 / "))
+        self.assertEqual(tasks[1]["project"], "LINE広告配信")
+        self.assertEqual(tasks[1]["parent_origin_id"], tasks[0]["origin_id"])
+
+    def test_child_keyword_hints_repair_parent_project_before_nesting(self):
+        self.mod.PROJECT_ALIAS_REGISTRY.clear()
+        self.mod.PROJECT_EXTRA_ALIASES.clear()
+        self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.clear()
+        self.mod.apply_context_seed_data(
+            {
+                "projects": [
+                    {
+                        "project": "ボーネルンド",
+                        "aliases": ["ボーネルンド"],
+                        "keywords": ["スマレジ", "OBIC"],
+                    },
+                    {
+                        "project": "LINE広告配信",
+                        "aliases": ["LINE広告"],
+                        "keywords": ["一広", "運営会社一覧", "販売ルート", "広告商品"],
+                    },
+                ]
+            }
+        )
+        sanitized = self.mod.sanitize_extracted_tasks(
+            extracted=[
+                {
+                    "title": "ボーネルンド / 2026/06/02社内定例MTG",
+                    "project": "ボーネルンド",
+                    "assignee": "私",
+                    "subtasks": [
+                        {
+                            "title": "運営会社一覧の情報提供依頼",
+                            "project": "ボーネルンド",
+                            "assignee": "私",
+                        }
+                    ],
+                }
+            ],
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "LINE広告配信"],
+            source_title="2026/06/02社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        self.assertEqual(sanitized[0]["project"], "LINE広告配信")
+        self.assertEqual(sanitized[0]["subtasks"][0]["project"], "LINE広告配信")
+        tasks = self.mod.build_neuronic_tasks(
+            extracted=sanitized,
+            source="gdocs",
+            source_title="2026/06/02社内定例MTG",
+            source_url="https://docs.google.com/document/d/example",
+            default_project="TOKIWAGI_MASTER",
+            source_id="doc-example",
+            run_id="roby:minutes:test",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "LINE広告配信"],
+            doc_project_hints=["ボーネルンド", "LINE広告配信"],
+            registry={},
+        )
+        self.assertEqual(tasks[0]["project"], "LINE広告配信")
+        self.assertEqual(tasks[1]["project"], "LINE広告配信")
+        self.assertEqual(tasks[1]["parent_origin_id"], tasks[0]["origin_id"])
+
+    def test_bw_beacon_management_now_belongs_to_line_ad_project(self):
+        self.mod.PROJECT_ALIAS_REGISTRY.clear()
+        self.mod.PROJECT_EXTRA_ALIASES.clear()
+        self.mod.PROJECT_KEYWORD_HINTS_REGISTRY.clear()
+        self.mod.apply_context_seed_data(
+            {
+                "projects": [
+                    {
+                        "project": "SNW様-777BEACON",
+                        "aliases": ["777BEACON"],
+                        "keywords": ["SSBP", "スイッチスマイル", "ピナブル", "サミネ"],
+                    },
+                    {
+                        "project": "LINE広告配信",
+                        "aliases": ["LINE広告"],
+                        "keywords": ["BW", "ブログウォッチャー", "ビーコン管理システム", "広告識別子", "GAS", "本番移行"],
+                    },
+                ]
+            }
+        )
+        sanitized = self.mod.sanitize_extracted_tasks(
+            extracted=[
+                {
+                    "title": "BWのビーコン管理システムについて、提供目安を明確にして構築作業を進める",
+                    "project": "ボーネルンド",
+                    "assignee": "私",
+                }
+            ],
+            default_project="TOKIWAGI_MASTER",
+            known_projects=["TOKIWAGI_MASTER", "ボーネルンド", "SNW様-777BEACON", "LINE広告配信"],
+            source_title="2026/06/02社内定例MTG",
+            max_tasks_per_doc=20,
+            max_subtasks_per_parent=8,
+        )
+        self.assertEqual(sanitized[0]["project"], "LINE広告配信")
+
+    def test_apply_context_seed_data_registers_client_and_related_entity_aliases(self):
+        self.mod.PROJECT_ALIAS_REGISTRY.clear()
+        self.mod.PROJECT_EXTRA_ALIASES.clear()
+        self.mod.apply_context_seed_data(
+            {
+                "projects": [
+                    {
+                        "project": "ボーネルンド",
+                        "client_name": "株式会社ボーネルンド",
+                        "related_entities": ["KIDKID", "キドキド"],
+                    }
+                ]
+            }
+        )
+        inferred = self.mod._infer_project_from_text(
+            "キドキドの導線改善について整理する",
+            ["TOKIWAGI_MASTER", "ボーネルンド"],
+        )
+        self.assertEqual(inferred, "ボーネルンド")
+
+    def test_infer_registry_project_hints_uses_client_and_related_entities(self):
+        registry = {
+            "project_registry": [
+                {
+                    "project": "ボーネルンド",
+                    "client_name": "株式会社ボーネルンド",
+                    "related_entities": ["KIDKID", "キドキド"],
+                },
+                {
+                    "project": "BRODO",
+                    "aliases": ["BRODO"],
+                },
+            ]
+        }
+        self.mod.apply_tokiwagi_master_registry(registry)
+        hints = self.mod.infer_registry_project_hints(
+            "株式会社ボーネルンドの件。キドキドの導線改善を詰める。",
+            "2026/03/10 定例MTG",
+            registry,
+        )
+        self.assertGreaterEqual(len(hints), 1)
+        self.assertEqual(hints[0], "ボーネルンド")
 
     def test_run_with_doc_timeout_returns_function_result_when_alarm_is_stubbed(self):
         with patch.object(self.mod.signal, "signal"), patch.object(self.mod.signal, "setitimer"):

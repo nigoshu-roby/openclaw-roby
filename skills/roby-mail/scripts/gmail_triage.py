@@ -176,6 +176,7 @@ PROMO_SUBJECT_HINTS = [
     "ウェビナー",
     "webinar",
     "メルマガ",
+    "アンバサダー通信",
     "新着情報",
     "ads update",
     "not sure where to start",

@@ -15,6 +15,30 @@ MARKETING_SENDER_HINTS = [
     "運営事務局",
 ]
 
+BROADCAST_SUBJECT_HINTS = [
+    "newsletter",
+    "ニュースレター",
+    "メルマガ",
+    "通信",
+    "vol.",
+    "vol ",
+    "ご案内",
+    "お知らせ",
+    "セミナー",
+    "ウェビナー",
+    "キャンペーン",
+    "リリース予定",
+]
+
+BROADCAST_BODY_HINTS = [
+    "unsubscribe",
+    "配信停止",
+    "メールマガジン",
+    "本メールは",
+    "このメールは",
+    "配信専用",
+]
+
 
 def _dedupe_tags(tags: List[str]) -> List[str]:
     seen = set()
@@ -93,6 +117,13 @@ def build_email_signals(
     is_noreply = "no-reply" in sender_lower or "noreply" in sender_lower
     is_marketing_sender = any(hint in sender_lower for hint in MARKETING_SENDER_HINTS)
     is_promo_sender_domain = any(domain in sender_lower for domain in promo_sender_domains)
+    is_broadcast_like = bool(
+        is_promo_subject
+        or is_marketing_sender
+        or is_promo_sender_domain
+        or any(hint.lower() in subject_lower for hint in BROADCAST_SUBJECT_HINTS)
+        or any(hint.lower() in text for hint in BROADCAST_BODY_HINTS)
+    )
 
     return {
         "urgent": urgent,
@@ -104,6 +135,8 @@ def build_email_signals(
         "contract_followup_subject": is_contract_followup_subject,
         "marketing_sender": is_marketing_sender,
         "promo_sender_domain": is_promo_sender_domain,
+        "broadcast_like": is_broadcast_like,
+        "broadcast_business_review": bool(is_broadcast_like and has_business_review_signal),
         "meeting_coordination": meeting_coordination,
         "review_only_notice": review_only_notice,
         "is_noreply": is_noreply,
@@ -152,6 +185,8 @@ def detect_early_archive_rule(
         return "chatwork_non_mention_archive", False
     if "asobi-yoyaku@bornelund.co.jp" in sender_lower:
         return "bornelund_asobi_promo_archive", True
+    if "アンバサダー通信" in subject_lower:
+        return "ambassador_newsletter_archive", False
     if any(re.search(pattern, subject_lower) for pattern in non_actionable_subject_patterns):
         return "non_actionable_subject_archive", False
     return None, False
@@ -263,6 +298,8 @@ def decide_work_bucket(
         newsletter_score += 2
     if signals.get("promo_sender_domain"):
         newsletter_score += 3
+    if signals.get("broadcast_like"):
+        newsletter_score += 2
     if signals.get("ad_hint"):
         newsletter_score += 1
     if signals.get("is_noreply"):
@@ -271,6 +308,11 @@ def decide_work_bucket(
     explicit_task_signal = bool(
         needs_reply
         or signals.get("explicit_action_request")
+        or signals.get("contract_followup_subject")
+        or (has_tool_tag and signals.get("actionable_notice") and signals.get("alert"))
+    )
+    direct_task_signal = bool(
+        signals.get("explicit_action_request")
         or signals.get("contract_followup_subject")
         or (has_tool_tag and signals.get("actionable_notice") and signals.get("alert"))
     )
@@ -333,6 +375,8 @@ def decide_work_bucket(
         "has_tool_tag": has_tool_tag,
         "newsletter_low_value": newsletter_low_value,
         "review_only_notice": review_only_notice,
+        "broadcast_business_review": bool(signals.get("broadcast_business_review")),
+        "direct_task_signal": direct_task_signal,
     }
 
     if category == "archive":
@@ -354,9 +398,13 @@ def decide_work_bucket(
             return "archive", "newsletter_low_value"
         return "digest", "tool_notice_or_digest"
     if category == "needs_reply" or needs_reply:
+        if signals.get("broadcast_business_review") and not direct_task_signal and not contact_meta.get("known"):
+            return "review", "broadcast_business_review"
         return "task", "explicit_reply_or_action"
 
     if category == "needs_review":
+        if signals.get("broadcast_business_review") and not direct_task_signal and not contact_meta.get("thread_replied"):
+            return "review", "broadcast_business_review"
         if newsletter_low_value and not contact_meta.get("thread_replied"):
             return "digest", "newsletter_review_downgraded"
         if review_only_notice and not explicit_task_signal:

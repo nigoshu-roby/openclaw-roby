@@ -161,13 +161,29 @@ class TestGmailTriageClassify(TestCase):
         self.assertIn("契約書を準備する", titles)
 
     def test_marketing_like_subject_with_estimate_signal_stays_reviewable(self):
-        category, _, _, _, _meta = self.mod.classify_message(
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
             subject="【無料で試せる】見積書をご確認ください",
             sender="Sales Team <info@example.com>",
             body="見積書を送付します。内容をご確認ください。",
             rules={},
         )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
         self.assertEqual(category, "needs_review")
+        self.assertEqual(bucket, "review")
+        self.assertEqual(reason, "broadcast_business_review")
+
+    def test_broadcast_business_words_do_not_become_reply_task(self):
+        category, tags, needs_reply, _, meta = self.mod.classify_message(
+            subject="【業務改善通信 Vol.12】契約更新と請求確認のポイント",
+            sender="Marketing Team <news@example.com>",
+            body="本メールはメールマガジンです。契約更新や請求確認の事例をご紹介します。ご確認ください。",
+            rules={},
+        )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "needs_review")
+        self.assertFalse(needs_reply)
+        self.assertEqual(bucket, "review")
+        self.assertEqual(reason, "broadcast_business_review")
 
     def test_coupon_promo_does_not_become_reply_task(self):
         category, tags, needs_reply, _, meta = self.mod.classify_message(
@@ -308,7 +324,7 @@ class TestGmailTriageClassify(TestCase):
                 ]
             }
         )
-        category, tags, needs_reply, _rule, meta = self.mod.classify_message(
+        category, tags, needs_reply, rule, meta = self.mod.classify_message(
             subject="キャンペーンの予算が消化されました",
             sender="LINE Ads Platform <no-reply@line.me>",
             body="株式会社TOKIWAGI の広告キャンペーンの予算が消化されました。",
@@ -611,6 +627,20 @@ class TestGmailTriageClassify(TestCase):
         self.assertEqual(category, "archive")
         self.assertEqual(bucket, "archive")
         self.assertEqual(reason, "newsletter_low_value")
+        self.assertFalse(needs_reply)
+
+    def test_ambassador_newsletter_stays_archive(self):
+        category, tags, needs_reply, rule, meta = self.mod.classify_message(
+            subject="【サクミルアンバサダー通信 Vol.11】発注・仕入・支払管理機能リリース予定のご共有",
+            sender="根本 直樹 <info@example.com>",
+            body="アンバサダー向けに新機能をご紹介します。",
+            rules={},
+        )
+        bucket, reason = self.mod.decide_work_bucket(category, needs_reply, meta, tags)
+        self.assertEqual(category, "archive")
+        self.assertEqual(rule, "ambassador_newsletter_archive")
+        self.assertEqual(bucket, "archive")
+        self.assertEqual(reason, "promo_or_low_value")
         self.assertFalse(needs_reply)
 
     def test_calendar_invite_notice_stays_review_not_task(self):

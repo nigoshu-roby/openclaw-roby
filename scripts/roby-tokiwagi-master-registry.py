@@ -273,6 +273,34 @@ def _summarize_project_with_ollama(mod: Any, env: Dict[str, str], project: Dict[
     }
 
 
+def _build_context_project_map(mod: Any) -> Dict[str, Dict[str, Any]]:
+    try:
+        seed = mod.load_context_seed()
+    except Exception:
+        return {}
+    projects = seed.get("projects") if isinstance(seed, dict) else None
+    if not isinstance(projects, list):
+        return {}
+
+    context_map: Dict[str, Dict[str, Any]] = {}
+    for entry in projects:
+        if not isinstance(entry, dict):
+            continue
+        canonical = mod._canonical_project_display_name(str(entry.get("project") or ""))
+        if not canonical:
+            continue
+        related_entities = [
+            str(x).strip()
+            for x in (entry.get("related_entities") or [])
+            if str(x).strip()
+        ]
+        context_map[canonical] = {
+            "client_name": str(entry.get("client_name") or "").strip(),
+            "related_entities": _unique_keep_order(related_entities),
+        }
+    return context_map
+
+
 def build_registry(
     *,
     env: Dict[str, str],
@@ -290,6 +318,7 @@ def build_registry(
     if not selected_databases:
         raise RuntimeError("TOKIWAGI_MASTER target databases not found in cached structure.")
 
+    context_project_map = _build_context_project_map(mod)
     known_projects = [db.get("project") for db in structure.get("databases", [])]
     version = env.get("NOTION_VERSION", "2025-09-03")
     page_cache = _load_cached_pages()
@@ -421,11 +450,20 @@ def build_registry(
         project_registry_map.items(),
         key=lambda item: (-int(item[1]["doc_count"]), item[0]),
     ):
+        context_meta = context_project_map.get(project_name) or {}
+        aliases = list(entry["aliases"])
+        client_name = str(context_meta.get("client_name") or "").strip()
+        related_entities = _unique_keep_order(context_meta.get("related_entities") or [])
+        if client_name:
+            aliases.append(client_name)
+        aliases.extend(related_entities)
         row = {
             "project": project_name,
             "doc_count": int(entry["doc_count"]),
             "db_titles": sorted([x for x in entry["db_titles"] if x]),
-            "aliases": _unique_keep_order(entry["aliases"]),
+            "aliases": _unique_keep_order(aliases),
+            "client_name": client_name or None,
+            "related_entities": related_entities or None,
             "sample_doc_titles": _unique_keep_order(entry["sample_doc_titles"])[:8],
             "sample_lines": entry["sample_lines"][:16],
             "top_owners": _top_counter(dict(entry["owner_counts"]), limit=5),
@@ -537,10 +575,13 @@ def main() -> int:
     append_jsonl(RUN_LOG_PATH, summary)
     append_audit_event(
         "precision.registry_build",
-        "info",
-        "TOKIWAGI_MASTER registry build completed",
-        counts=registry["counts"],
-        elapsed_ms=elapsed_ms,
+        {
+            "message": "TOKIWAGI_MASTER registry build completed",
+            "counts": registry["counts"],
+            "database_titles": registry["database_titles"],
+            "elapsed_ms": elapsed_ms,
+        },
+        source="roby-tokiwagi-master-registry",
     )
     if args.json:
         print(json.dumps(summary, ensure_ascii=False))

@@ -9,6 +9,7 @@ Append-only JSONL events with hash chaining:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import time
@@ -45,7 +46,8 @@ def _tail_last_line(path: Path) -> Optional[str]:
             f.seek(pos)
             data = f.read(step)
             chunk = data + chunk
-            if b"\n" in data and len(chunk) > 1:
+            lines = [ln for ln in chunk.splitlines() if ln.strip()]
+            if len(lines) >= 2 or pos == 0:
                 break
         lines = [ln for ln in chunk.splitlines() if ln.strip()]
         if not lines:
@@ -61,9 +63,9 @@ def _read_last_event(path: Path) -> Dict[str, Any]:
         obj = json.loads(raw)
         if isinstance(obj, dict):
             return obj
-    except Exception:
-        return {}
-    return {}
+    except Exception as exc:
+        raise RuntimeError(f"invalid last audit event in {path}") from exc
+    raise RuntimeError(f"invalid last audit event in {path}")
 
 
 def append_audit_event(
@@ -79,28 +81,30 @@ def append_audit_event(
     audit_path = path or DEFAULT_AUDIT_PATH
     audit_path.parent.mkdir(parents=True, exist_ok=True)
 
-    last = _read_last_event(audit_path)
-    prev_hash = str(last.get("hash") or GENESIS_HASH)
-    prev_seq = int(last.get("seq") or 0) if isinstance(last.get("seq"), int) else int(last.get("seq") or 0)
-    seq = prev_seq + 1
+    with audit_path.open("a+", encoding="utf-8") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        last = _read_last_event(audit_path)
+        prev_hash = str(last.get("hash") or GENESIS_HASH)
+        prev_seq = int(last.get("seq") or 0)
+        seq = prev_seq + 1
 
-    core = {
-        "ts": datetime.now(JST).isoformat(),
-        "epoch": int(time.time()),
-        "seq": seq,
-        "event_type": event_type,
-        "source": source,
-        "severity": severity,
-        "run_id": run_id,
-        "prev_hash": prev_hash,
-        "payload": payload,
-    }
-    digest = _calc_hash(core)
-    row = dict(core)
-    row["hash"] = digest
-
-    with audit_path.open("a", encoding="utf-8") as f:
+        core = {
+            "ts": datetime.now(JST).isoformat(),
+            "epoch": int(time.time()),
+            "seq": seq,
+            "event_type": event_type,
+            "source": source,
+            "severity": severity,
+            "run_id": run_id,
+            "prev_hash": prev_hash,
+            "payload": payload,
+        }
+        digest = _calc_hash(core)
+        row = dict(core)
+        row["hash"] = digest
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.flush()
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     return row
 
 

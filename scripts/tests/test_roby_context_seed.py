@@ -79,6 +79,14 @@ class TestRobyContextSeed(TestCase):
         self.assertEqual(parsed["projects"][0]["non_self_scope"], "最終意思決定")
         self.assertEqual(parsed["email"]["important_senders"][0]["emails"], ["t-iino@bornelund.co.jp"])
 
+    def test_extract_related_entities_skips_descriptive_phrases(self):
+        values = self.mod._extract_related_entity_names(
+            "KIDKID（キドキド）＝屋内あそび場, Moooviではなく予約システムの話が主。"
+        )
+        self.assertIn("KIDKID", values)
+        self.assertIn("キドキド", values)
+        self.assertNotIn("Moooviではなく予約システムの話が主。", values)
+
 
 if __name__ == "__main__":
     main()

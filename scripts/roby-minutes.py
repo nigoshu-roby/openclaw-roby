@@ -33,6 +33,7 @@ DEFAULT_MAX = 200
 JST = timezone(timedelta(hours=9))
 PROJECT_ALIAS_REGISTRY: Dict[str, str] = {}
 PROJECT_EXTRA_ALIASES: Dict[str, List[str]] = {}
+PROJECT_KEYWORD_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_OWNER_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_ACTION_HINTS_REGISTRY: Dict[str, List[str]] = {}
 PROJECT_TASK_POSITIVE_HINTS_REGISTRY: Dict[str, List[str]] = {}
@@ -167,6 +168,7 @@ def load_tokiwagi_master_registry(path: Optional[Path] = None) -> Dict[str, Any]
 def apply_tokiwagi_master_registry(registry: Dict[str, Any]) -> None:
     PROJECT_ALIAS_REGISTRY.clear()
     PROJECT_EXTRA_ALIASES.clear()
+    PROJECT_KEYWORD_HINTS_REGISTRY.clear()
     PROJECT_OWNER_HINTS_REGISTRY.clear()
     PROJECT_ACTION_HINTS_REGISTRY.clear()
     PROJECT_TASK_POSITIVE_HINTS_REGISTRY.clear()
@@ -220,6 +222,45 @@ def apply_tokiwagi_master_registry(registry: Dict[str, Any]) -> None:
         PROJECT_ACTION_HINTS_REGISTRY[canonical] = list(dict.fromkeys(actions))[:8]
 
 
+GENERIC_PROJECT_KEYWORD_HINTS = {
+    "確認",
+    "対応",
+    "資料",
+    "作成",
+    "共有",
+    "連携",
+    "導入",
+    "設定",
+    "配信",
+    "運用",
+    "予約",
+    "店舗",
+    "案件",
+    "会議",
+    "議事録",
+    "データ",
+    "分析",
+    "db",
+}
+
+
+def _normalize_project_keyword_hint(raw: str) -> str:
+    text = str(raw or "").strip().strip("、,，.。")
+    if not text:
+        return ""
+    lowered = text.lower()
+    normalized = _normalize_project_token(text)
+    if not normalized or normalized in GENERIC_PROJECT_KEYWORD_HINTS or lowered in GENERIC_PROJECT_KEYWORD_HINTS:
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,}", text):
+        return text
+    if re.search(r"[A-Za-z0-9]", text) and len(normalized) >= 2:
+        return text
+    if len(text) >= 3 and not _has_action_signal(text):
+        return text
+    return ""
+
+
 def apply_context_seed_data(seed: Dict[str, Any]) -> None:
     global CONTEXT_SELF_OWNER_ALIASES
     if not isinstance(seed, dict):
@@ -247,7 +288,13 @@ def apply_context_seed_data(seed: Dict[str, Any]) -> None:
         if canonical not in CONTEXT_PROJECTS:
             CONTEXT_PROJECTS.append(canonical)
 
-        for raw in (project_entry.get("aliases") or []):
+        alias_values: List[str] = []
+        alias_values.extend(project_entry.get("aliases") or [])
+        client_name = str(project_entry.get("client_name") or "").strip()
+        if client_name:
+            alias_values.append(client_name)
+        alias_values.extend(project_entry.get("related_entities") or [])
+        for raw in alias_values:
             alias = str(raw or "").strip()
             if not alias:
                 continue
@@ -257,6 +304,14 @@ def apply_context_seed_data(seed: Dict[str, Any]) -> None:
             alias_norm = _normalize_project_token(alias)
             if alias_norm:
                 PROJECT_ALIAS_REGISTRY[alias_norm] = canonical
+
+        keyword_hints = PROJECT_KEYWORD_HINTS_REGISTRY.get(canonical, [])
+        for raw in (project_entry.get("keywords") or []):
+            hint = _normalize_project_keyword_hint(str(raw or ""))
+            if hint:
+                keyword_hints.append(hint)
+        if keyword_hints:
+            PROJECT_KEYWORD_HINTS_REGISTRY[canonical] = list(dict.fromkeys(keyword_hints))[:16]
 
         owners = PROJECT_OWNER_HINTS_REGISTRY.get(canonical, [])
         for raw in (project_entry.get("owner_hints") or []):
@@ -1229,6 +1284,7 @@ def _resolve_project_name(
     matched = _match_known_project_name(p, known_projects)
     content_blob = " ".join([title or "", note_text]).strip()
     inferred_from_content = _infer_project_from_text(content_blob, known_projects) if content_blob else None
+    keyword_project, keyword_score = _infer_project_from_keyword_hints(content_blob, known_projects) if content_blob else ("", 0)
     if matched:
         matched_canonical = _canonical_project_display_name(matched)
         inferred_canonical = _canonical_project_display_name(inferred_from_content or "")
@@ -1239,10 +1295,20 @@ def _resolve_project_name(
             and _project_alias_hit_count(matched_canonical, content_blob) == 0
         ):
             return inferred_canonical
+        if (
+            keyword_project
+            and keyword_project != matched_canonical
+            and keyword_score >= 3
+            and _project_keyword_hit_count(matched_canonical, content_blob) == 0
+            and _project_alias_hit_count(matched_canonical, content_blob) == 0
+        ):
+            return keyword_project
         return matched_canonical
     inferred = _infer_project_from_text(" ".join([p or "", title or "", note or "", source_title or ""]), known_projects)
     if inferred:
         return _canonical_project_display_name(inferred)
+    if keyword_project and keyword_score >= 2:
+        return keyword_project
     if p and _looks_plausible_project_label(p):
         return _canonical_project_display_name(p)
     if default_project and default_project not in GENERIC_PROJECT_NAMES:
@@ -1273,6 +1339,50 @@ def _project_aliases(name: str) -> List[str]:
     for alias in PROJECT_EXTRA_ALIASES.get(_canonical_project_display_name(base), []):
         aliases.add(alias)
     return [a for a in aliases if a and len(a) >= 2]
+
+
+def _project_keyword_hints(name: str) -> List[str]:
+    canonical = _canonical_project_display_name(name or "")
+    return [hint for hint in PROJECT_KEYWORD_HINTS_REGISTRY.get(canonical, []) if hint]
+
+
+def _project_keyword_hit_count(project: str, text: str) -> int:
+    blob = text or ""
+    if not blob or not project:
+        return 0
+    hits = 0
+    for hint in _project_keyword_hints(project):
+        if hint and hint in blob:
+            hits += 1
+    return hits
+
+
+def _infer_project_from_keyword_hints(text: str, known_projects: List[str]) -> Tuple[str, int]:
+    blob = text or ""
+    if not blob:
+        return "", 0
+    scores: Dict[str, int] = {}
+    for project in sorted(set([x for x in known_projects if x and x not in GENERIC_PROJECT_NAMES])):
+        canonical = _canonical_project_display_name(project)
+        score = 0
+        for hint in _project_keyword_hints(canonical):
+            count = blob.count(hint)
+            if count <= 0:
+                continue
+            weight = 2
+            if re.search(r"[A-Za-z0-9]", hint):
+                weight += 1
+            if len(hint) >= 5:
+                weight += 1
+            score += min(count, 4) * weight
+        if score > 0:
+            scores[canonical] = score
+    if not scores:
+        return "", 0
+    ordered = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    if len(ordered) > 1 and ordered[0][1] == ordered[1][1]:
+        return "", ordered[0][1]
+    return ordered[0]
 
 
 def infer_primary_project(
@@ -1409,6 +1519,10 @@ def infer_registry_project_hints(
         score = 0
         aliases = []
         aliases.extend(entry.get("aliases") or [])
+        client_name = str(entry.get("client_name") or "").strip()
+        if client_name:
+            aliases.append(client_name)
+        aliases.extend(entry.get("related_entities") or [])
         aliases.extend(PROJECT_EXTRA_ALIASES.get(canonical) or [])
         local_llm = entry.get("local_llm") or {}
         aliases.extend(local_llm.get("aliases") or [])
@@ -1419,7 +1533,12 @@ def infer_registry_project_hints(
                 continue
             count = blob.count(alias_text)
             if count > 0:
-                score += min(count, 5) * max(4, min(len(alias_text), 18))
+                alias_weight = max(4, min(len(alias_text), 18))
+                if alias_text == client_name:
+                    alias_weight += 3
+                elif alias_text in (entry.get("related_entities") or []):
+                    alias_weight += 2
+                score += min(count, 5) * alias_weight
         for row in (entry.get("top_action_patterns") or []):
             if isinstance(row, dict):
                 label = str(row.get("value") or "").strip()
@@ -1636,11 +1755,17 @@ def sanitize_extracted_tasks(
             subtask_blob = "\n".join(
                 [f"{sub.get('title', '')}\n{sub.get('note', '')}" for sub in subtasks[:8]]
             )
-            contextual_project = _infer_project_from_text(
-                "\n".join([note, subtask_blob, source_title]),
+            context_blob = "\n".join([note, subtask_blob, source_title])
+            contextual_keyword_project, contextual_keyword_score = _infer_project_from_keyword_hints(
+                context_blob,
                 known_projects,
             )
+            contextual_project = _infer_project_from_text(context_blob, known_projects)
             project = (
+                _canonical_project_display_name(contextual_keyword_project)
+                if contextual_keyword_project and contextual_keyword_score >= 3
+                else None
+            ) or (
                 _canonical_project_display_name(contextual_project) if contextual_project else None
                 or _resolve_project_name(
                     raw_item_project,
@@ -3110,6 +3235,7 @@ def _group_leaf_minutes_tasks_by_project(
     grouped: List[Dict[str, Any]] = []
     flat_by_project: Dict[str, List[Dict[str, Any]]] = {}
     explicit_parent_subtask_titles: Dict[str, set[str]] = {}
+    explicit_parent_subtask_keys: Dict[str, set[str]] = {}
 
     for item in extracted:
         raw_subtasks = item.get("subtasks") or item.get("children") or []
@@ -3117,6 +3243,7 @@ def _group_leaf_minutes_tasks_by_project(
             normalized_parent = _normalize_task_item(item, default_project)
             project = normalized_parent.get("project") or default_project
             titles = explicit_parent_subtask_titles.setdefault(project, set())
+            keys = explicit_parent_subtask_keys.setdefault(project, set())
             for sub in raw_subtasks:
                 if not isinstance(sub, dict):
                     continue
@@ -3124,6 +3251,9 @@ def _group_leaf_minutes_tasks_by_project(
                 title = _clean_line(str(sub_norm.get("title") or ""))
                 if title:
                     titles.add(title)
+                    key = _minutes_task_similarity_key(title)
+                    if key:
+                        keys.add(key)
             grouped.append(item)
             continue
 
@@ -3135,12 +3265,14 @@ def _group_leaf_minutes_tasks_by_project(
 
     for project, subtasks in flat_by_project.items():
         explicit_titles = explicit_parent_subtask_titles.get(project, set())
-        if explicit_titles:
+        explicit_keys = explicit_parent_subtask_keys.get(project, set())
+        if explicit_titles or explicit_keys:
             merged_subtasks: List[Dict[str, Any]] = []
             duplicate_count = 0
             for sub in subtasks:
                 sub_title = _clean_line(str(sub.get("title") or ""))
-                if sub_title and sub_title in explicit_titles:
+                sub_key = _minutes_task_similarity_key(sub_title)
+                if (sub_title and sub_title in explicit_titles) or (sub_key and sub_key in explicit_keys):
                     duplicate_count += 1
                     continue
                 merged_subtasks.append(sub)
@@ -3149,6 +3281,19 @@ def _group_leaf_minutes_tasks_by_project(
             if not merged_subtasks and duplicate_count:
                 continue
             subtasks = merged_subtasks
+        if not subtasks:
+            continue
+        deduped_subtasks: List[Dict[str, Any]] = []
+        seen_subtask_keys: set[str] = set()
+        for sub in subtasks:
+            sub_title = _clean_line(str(sub.get("title") or ""))
+            sub_key = _minutes_task_similarity_key(sub_title)
+            if sub_key and sub_key in seen_subtask_keys:
+                continue
+            if sub_key:
+                seen_subtask_keys.add(sub_key)
+            deduped_subtasks.append(sub)
+        subtasks = deduped_subtasks
         if not subtasks:
             continue
         parent_note = "自動グループ化: 同一議事録・同一プロジェクトの抽出タスクを親子化"
@@ -3174,6 +3319,21 @@ def _group_leaf_minutes_tasks_by_project(
         )
 
     return grouped
+
+
+def _minutes_task_similarity_key(title: str) -> str:
+    text = _clean_line(str(title or ""))
+    if not text:
+        return ""
+    text = re.sub(r"^[^/／]{1,45}\s*[／/]\s*", "", text)
+    text = re.sub(r"^(?:TODO|ToDo|タスク|対応|要確認|ネクストアクション)[:：]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[【】\[\]（）()「」『』:：,，.。・/\-\s\u3000]+", "", text)
+    text = re.sub(r"(してください|お願いします|して共有する|を共有する|確認する|整理する|調整する|作成する|対応する|実施する|する)$", "", text)
+    text = re.sub(r"(を確認|を整理|を調整|を作成|を対応|を実施)$", "", text)
+    text = re.sub(r"[をにへとがは]$", "", text)
+    if len(text) < 8:
+        return ""
+    return text.lower()
 
 
 def _project_alias_hit_count(project: str, text: str) -> int:
@@ -3257,6 +3417,7 @@ def _has_confident_minutes_project(
     blob = "\n".join([part for part in blob_parts if part]).strip()
     explicit_project = _match_known_project_name(project, known_projects)
     inferred_project = _infer_project_from_text(blob, known_projects)
+    keyword_project, keyword_score = _infer_project_from_keyword_hints(blob, known_projects)
     registry_hints = infer_registry_project_hints(blob, source_title, registry or {})
     doc_hints = [
         _canonical_project_display_name(str(name or ""))
@@ -3264,6 +3425,7 @@ def _has_confident_minutes_project(
         if _canonical_project_display_name(str(name or ""))
     ]
     alias_hits = _project_alias_hit_count(target, blob)
+    keyword_hits = _project_keyword_hit_count(target, blob)
     source_alias_hits = _project_alias_hit_count(target, source_title or "")
     context_fit = _assess_context_seed_task_fit(target, title, note)
 
@@ -3276,12 +3438,16 @@ def _has_confident_minutes_project(
         score += 2
     if alias_hits > 0:
         score += 2 + min(alias_hits, 2)
+    if keyword_hits > 0:
+        score += 1 + min(keyword_hits, 2)
     if source_alias_hits > 0:
         score += 1
     if inferred_project and _canonical_project_display_name(inferred_project) == target:
         score += 3
     if target in registry_hints:
         score += 2
+    if keyword_project and keyword_project == target:
+        score += min(keyword_score, 3)
     if target in doc_hints:
         score += 2
     if note and "review.project_sections.action_candidates" in note:
@@ -3295,11 +3461,23 @@ def _has_confident_minutes_project(
     )
     if has_conflict:
         score -= 3
+    has_keyword_conflict = bool(keyword_project and keyword_project != target and keyword_score >= 3)
+    if has_keyword_conflict:
+        score -= 3
     if note and "review.cross_project_actions" in note:
         score -= 2
     if doc_hints and target not in doc_hints and target not in GENERIC_PROJECT_NAMES:
         score -= 2
 
+    has_external_project_evidence = bool(
+        alias_hits > 0
+        or keyword_hits > 0
+        or source_alias_hits > 0
+        or target in registry_hints
+        or target in doc_hints
+        or int(context_fit.get("positive_hits", 0) or 0) > 0
+        or (note and "review.project_sections.action_candidates" in note)
+    )
     inherited_only = not explicit_project or (
         default_project
         and _canonical_project_display_name(explicit_project or "") == _canonical_project_display_name(default_project)
@@ -3308,6 +3486,8 @@ def _has_confident_minutes_project(
 
     if target_is_generic:
         return score >= 4
+    if doc_hints and explicit_project and _canonical_project_display_name(explicit_project) == target and not has_external_project_evidence:
+        return False
     if doc_hints and inherited_only and target not in doc_hints:
         if alias_hits <= 0 and source_alias_hits <= 0 and target not in registry_hints:
             return False
@@ -3317,6 +3497,8 @@ def _has_confident_minutes_project(
     if inherited_only and score < 3:
         return False
     if has_conflict and score < 5:
+        return False
+    if has_keyword_conflict and score < 5:
         return False
     return score >= 3
 
@@ -3380,9 +3562,13 @@ def build_neuronic_tasks(
 
         filtered_subtasks: List[Dict[str, Any]] = []
         if isinstance(subtasks, list) and subtasks:
+            seen_child_similarity_keys: set[str] = set()
             for sub in subtasks:
                 sub_norm = _normalize_task_item(sub, normalized.get("project") or default_project)
                 if not sub_norm.get("title"):
+                    continue
+                child_key = _minutes_task_similarity_key(str(sub_norm.get("title") or ""))
+                if child_key and child_key in seen_child_similarity_keys:
                     continue
                 if not _should_emit_minutes_task(sub_norm.get("assignee") or ""):
                     continue
@@ -3397,6 +3583,8 @@ def build_neuronic_tasks(
                     registry=registry,
                 ):
                     continue
+                if child_key:
+                    seen_child_similarity_keys.add(child_key)
                 filtered_subtasks.append(sub_norm)
             subtasks = filtered_subtasks
             if not subtasks:
@@ -3462,7 +3650,15 @@ def build_neuronic_tasks(
             "source_doc_id": source_id,
             "source_doc_title": source_title,
         }
-        parent_origin = _stable_origin_id(parent_task, f"{source_id}|parent|{group_index}")
+        parent_source_key = "|".join(
+            [
+                source_id,
+                "parent",
+                _canonical_project_display_name(str(parent_task.get("project") or "")),
+                _minutes_task_similarity_key(str(parent_task.get("title") or "")) or str(parent_task.get("title") or ""),
+            ]
+        )
+        parent_origin = _stable_origin_id(parent_task, parent_source_key)
         parent_task["origin_id"] = parent_origin
         group_ref = f"group:{parent_origin}"
         parent_task["external_ref"] = group_ref
@@ -3505,9 +3701,15 @@ def build_neuronic_tasks(
                     "source_doc_title": source_title,
                     "external_ref": group_ref,
                 }
-                child_task["origin_id"] = _stable_origin_id(
-                    child_task, f"{source_id}|child|{group_index}|{sub_idx}"
+                child_source_key = "|".join(
+                    [
+                        source_id,
+                        "child",
+                        parent_origin,
+                        _minutes_task_similarity_key(str(child_task.get("title") or "")) or str(child_task.get("title") or ""),
+                    ]
                 )
+                child_task["origin_id"] = _stable_origin_id(child_task, child_source_key)
                 tasks.append(child_task)
         else:
             tasks.append(parent_task)
@@ -3632,7 +3834,7 @@ def _apply_hierarchy_send_policy(tasks: List[Dict[str, Any]], env: Dict[str, str
             origin_id = (row.get("origin_id") or "").strip()
             if origin_id and origin_id in known:
                 had_hierarchy = False
-                for key in ("parent_origin_id", "sibling_order", "outline_path", "parentOriginId", "siblingOrder", "outlinePath"):
+                for key in ("sibling_order", "outline_path", "siblingOrder", "outlinePath"):
                     if key in row:
                         had_hierarchy = had_hierarchy or (row.get(key) is not None)
                         row.pop(key, None)
@@ -3759,8 +3961,8 @@ def _format_neuronic_cli_logs(result: Dict[str, Any], verbose: bool = False) -> 
 def _task_group_key(item: Dict[str, Any]) -> str:
     parent = item.get("parent_origin_id")
     if parent:
-        return f"parent:{parent}"
-    return f"root:{item.get('origin_id', '')}"
+        return f"group:{parent}"
+    return f"group:{item.get('origin_id', '')}"
 
 
 def _split_grouped_batches(tasks: List[Dict[str, Any]], default_batch: int, max_batch_bytes: int) -> List[List[Dict[str, Any]]]:
@@ -3794,6 +3996,39 @@ def _split_grouped_batches(tasks: List[Dict[str, Any]], default_batch: int, max_
     if batch:
         batches.append(batch)
     return batches
+
+
+def _group_contiguous_tasks(tasks: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    groups: List[List[Dict[str, Any]]] = []
+    current_group: List[Dict[str, Any]] = []
+    current_key = None
+    for item in tasks:
+        key = _task_group_key(item)
+        if current_key is None or key == current_key:
+            current_group.append(item)
+            current_key = key
+            continue
+        groups.append(current_group)
+        current_group = [item]
+        current_key = key
+    if current_group:
+        groups.append(current_group)
+    return groups
+
+
+def _cap_tasks_preserving_groups(tasks: List[Dict[str, Any]], remaining: int) -> Tuple[List[Dict[str, Any]], int, bool]:
+    if remaining <= 0:
+        return [], len(tasks), bool(tasks)
+    capped: List[Dict[str, Any]] = []
+    dropped = 0
+    reached = False
+    for group in _group_contiguous_tasks(tasks):
+        if len(capped) + len(group) > remaining:
+            dropped += sum(len(rest) for rest in _group_contiguous_tasks(tasks[len(capped) + dropped:]))
+            reached = True
+            break
+        capped.extend(group)
+    return capped, dropped, reached
 
 
 def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
@@ -4311,12 +4546,10 @@ def main() -> int:
             )
             if max_tasks_per_run > 0:
                 remaining = max_tasks_per_run - len(all_tasks)
-                if remaining <= 0:
-                    tasks = []
-                    reached_task_cap = True
-                elif len(tasks) > remaining:
-                    summary["task_run_capped"] += (len(tasks) - remaining)
-                    tasks = tasks[:remaining]
+                tasks, dropped, capped = _cap_tasks_preserving_groups(tasks, remaining)
+                if dropped:
+                    summary["task_run_capped"] += dropped
+                if capped:
                     reached_task_cap = True
             all_tasks.extend(tasks)
             processed_notion[page_id] = item.get("updated", "")
@@ -4432,12 +4665,10 @@ def main() -> int:
             )
             if max_tasks_per_run > 0:
                 remaining = max_tasks_per_run - len(all_tasks)
-                if remaining <= 0:
-                    tasks = []
-                    reached_task_cap = True
-                elif len(tasks) > remaining:
-                    summary["task_run_capped"] += (len(tasks) - remaining)
-                    tasks = tasks[:remaining]
+                tasks, dropped, capped = _cap_tasks_preserving_groups(tasks, remaining)
+                if dropped:
+                    summary["task_run_capped"] += dropped
+                if capped:
                     reached_task_cap = True
             all_tasks.extend(tasks)
             processed_gdocs[doc_id] = item.get("updated", "")

@@ -70,6 +70,28 @@ class TestRobyTokiwagiMasterRegistry(TestCase):
         self.assertIn("会議調整", labels)
         self.assertIn("連携・共有", labels)
 
+    def test_build_context_project_map_extracts_client_and_related_entities(self):
+        class FakeMinutes:
+            @staticmethod
+            def load_context_seed():
+                return {
+                    "projects": [
+                        {
+                            "project": "ボーネルンド",
+                            "client_name": "株式会社ボーネルンド",
+                            "related_entities": ["KIDKID", "キドキド"],
+                        }
+                    ]
+                }
+
+            @staticmethod
+            def _canonical_project_display_name(value):
+                return value.strip()
+
+        context_map = self.mod._build_context_project_map(FakeMinutes())
+        self.assertEqual(context_map["ボーネルンド"]["client_name"], "株式会社ボーネルンド")
+        self.assertEqual(context_map["ボーネルンド"]["related_entities"], ["KIDKID", "キドキド"])
+
 
 if __name__ == "__main__":
     main()

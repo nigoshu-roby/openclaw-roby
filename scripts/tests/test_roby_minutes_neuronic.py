@@ -296,14 +296,15 @@ class TestRobyMinutesNeuronic(TestCase):
         self.assertIn("sibling_order", first_batch[0])
         self.assertIn("parent_origin_id", first_batch[1])
 
-        # 2nd sync (resync): hierarchy fields should be omitted to keep manual edits.
+        # 2nd sync (resync): ordering fields are omitted to keep manual edits,
+        # but parent links are retained so previously orphaned child tasks can be repaired.
         second = self.mod.send_neuronic(tasks, env)
         self.assertTrue(second.get("ok"))
         self.assertEqual(len(captured_batches), 2)
         second_batch = captured_batches[1]
         self.assertNotIn("sibling_order", second_batch[0])
         self.assertNotIn("outline_path", second_batch[0])
-        self.assertNotIn("parent_origin_id", second_batch[1])
+        self.assertEqual(second_batch[1].get("parent_origin_id"), "roby:auto:parent01")
         self.assertNotIn("sibling_order", second_batch[1])
 
 

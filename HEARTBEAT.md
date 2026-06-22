@@ -18,23 +18,28 @@
 
 ### 判定
 
-- 最終同期: 2026-03-12T01:49:27.387941+09:00
-- 現在状態: HEARTBEAT_OK
+- 最終同期: 2026-06-19T15:55:00.421629+09:00
+- 現在状態: HEARTBEAT_ATTENTION
 
 ### いま見るべき運用信号
 
-- stale component: なし
+- stale component: self_growth / notion_sync
 - evaluation(current): PASS 0/7
-- drill(current): PASS 0/13
-- eval fail runs (7d): 23
-- drill fail runs (7d): 1
+- drill(current): FAIL 1/13
+- eval fail runs (7d): 0
+- drill fail runs (7d): 0
 - audit errors (7d): 0
 
 ### 現在の未解消事項
 
-- なし
+- Runbook Drill fail 1/13
+- stale component: self_growth / notion_sync
 
 ### 次に見るべき改善対象
 
-- タスク抽出閾値 - 議事録/Gmail抽出で『依頼・期限・担当・次アクション』が弱い文を除外する。
+- 案件判定
+  - projectタグ付けと案件名推定のルールを見直す。
+- メルマガ判定
+  - Gmail仕訳で広告・メルマガ判定を強め、確認/タスク化を抑制する。
+- 確認タスク判定 - メールは『確認のみ』と『実行タスク化』を分け、確認止まりの条件を明確化する。
 <!-- ROBY:HEARTBEAT-STATUS:END -->

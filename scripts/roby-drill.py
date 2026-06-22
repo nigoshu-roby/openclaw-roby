@@ -29,6 +29,7 @@ LATEST_MD_PATH = STATE_DIR / "latest.md"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 ROBY_STATE_ROOT = Path.home() / ".openclaw" / "roby"
 KEYCHAIN_SECRET_KEYS = {
+    "GOG_KEYRING_PASSWORD",
     "GEMINI_API_KEY",
     "OPENAI_API_KEY",
     "NOTION_TOKEN",
