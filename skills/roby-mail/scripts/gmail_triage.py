@@ -408,7 +408,69 @@ def ensure_state() -> Dict[str, Any]:
 
 def save_state(state: Dict[str, Any]) -> None:
     state["updated_at"] = int(time.time())
-    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(STATE_PATH)
+
+
+def _timestamp_map(state: Dict[str, Any], key: str) -> Dict[str, int]:
+    value = state.get(key)
+    if not isinstance(value, dict):
+        value = {}
+        state[key] = value
+    return value
+
+
+def prune_timestamp_map(values: Dict[str, Any], *, now: int, ttl_seconds: int, max_entries: int) -> Dict[str, int]:
+    cleaned: Dict[str, int] = {}
+    cutoff = now - ttl_seconds if ttl_seconds > 0 else None
+    for key, raw_ts in values.items():
+        try:
+            ts = int(raw_ts)
+        except Exception:
+            continue
+        if cutoff is not None and ts < cutoff:
+            continue
+        cleaned[str(key)] = ts
+    if max_entries > 0 and len(cleaned) > max_entries:
+        keep = sorted(cleaned.items(), key=lambda item: item[1], reverse=True)[:max_entries]
+        cleaned = dict(keep)
+    return cleaned
+
+
+def prune_gmail_state(state: Dict[str, Any], env: Dict[str, str] | None = None) -> None:
+    env = env or {}
+    now = int(time.time())
+    processed_ttl_days = int(str(env.get("GMAIL_TRIAGE_PROCESSED_TTL_DAYS", "14") or "14"))
+    notified_ttl_days = int(str(env.get("GMAIL_TRIAGE_SLACK_NOTIFIED_TTL_DAYS", "14") or "14"))
+    processed_max = int(str(env.get("GMAIL_TRIAGE_PROCESSED_MAX_ENTRIES", "5000") or "5000"))
+    notified_max = int(str(env.get("GMAIL_TRIAGE_SLACK_NOTIFIED_MAX_ENTRIES", "5000") or "5000"))
+    state["processed"] = prune_timestamp_map(
+        _timestamp_map(state, "processed"),
+        now=now,
+        ttl_seconds=max(0, processed_ttl_days) * 86400,
+        max_entries=max(0, processed_max),
+    )
+    state["slack_notified"] = prune_timestamp_map(
+        _timestamp_map(state, "slack_notified"),
+        now=now,
+        ttl_seconds=max(0, notified_ttl_days) * 86400,
+        max_entries=max(0, notified_max),
+    )
+
+
+def gmail_message_state_key(account: str, msg_id: str) -> str:
+    account_part = (account or "-").strip().lower()
+    return f"{account_part}:{str(msg_id or '').strip()}"
+
+
+def reserve_slack_notification(state: Dict[str, Any], account: str, msg_id: str, *, now: int | None = None) -> bool:
+    key = gmail_message_state_key(account, msg_id)
+    if key in _timestamp_map(state, "slack_notified"):
+        return False
+    _timestamp_map(state, "slack_notified")[key] = int(now or time.time())
+    return True
 
 
 def log_run(entry: Dict[str, Any]) -> None:
@@ -1517,6 +1579,7 @@ def main() -> int:
     context_sender_hints, context_domain_hints = build_context_sender_hints(context_seed)
     context_project_hints = build_context_project_hints(context_seed)
     state = ensure_state()
+    prune_gmail_state(state, env)
     processed = state.get("processed", {})
 
     messages = gog_search(args.account, args.query, args.max, env)
@@ -1541,6 +1604,8 @@ def main() -> int:
         "reply_reviews": 0,
         "reply_review_skipped": 0,
         "reply_review_errors": 0,
+        "notify_errors": 0,
+        "duplicates_skipped": 0,
     }
     run_id = build_run_id("gmail")
     summary["run_id"] = run_id
@@ -1563,12 +1628,19 @@ def main() -> int:
     apply_labels = bool(args.apply_labels) if args.apply_labels is not None else shared_env_flag(env, "GMAIL_TRIAGE_APPLY_LABELS", True)
     archive_digest = shared_env_flag(env, "GMAIL_TRIAGE_ARCHIVE_DIGEST", True)
     reply_review_enabled = bool(args.reply_review) if args.reply_review is not None else shared_env_flag(env, "GMAIL_REPLY_REVIEW_ENABLE", True)
+    seen_msg_ids: set[str] = set()
 
     for msg in messages:
-        msg_id = msg.get("id")
+        msg_id = str(msg.get("id") or "").strip()
         if not msg_id:
             continue
-        if msg_id in processed:
+        if msg_id in seen_msg_ids:
+            summary["duplicates_skipped"] += 1
+            continue
+        seen_msg_ids.add(msg_id)
+        msg_state_key = gmail_message_state_key(args.account, msg_id)
+        # Backward compatibility: older state files used the bare Gmail message id.
+        if msg_state_key in processed or msg_id in processed:
             continue
 
         body = strip_html(msg.get("body", ""))
@@ -1734,8 +1806,16 @@ def main() -> int:
         if slack_url and not args.dry_run and work_bucket in ("task", "review", "digest"):
             text = format_gmail_slack_message(msg, work_bucket)
             if notify_max_per_run <= 0 or summary["notified"] < notify_max_per_run:
-                send_slack(slack_url, text)
-                summary["notified"] += 1
+                if reserve_slack_notification(state, args.account, msg_id):
+                    save_state(state)
+                    try:
+                        send_slack(slack_url, text)
+                        summary["notified"] += 1
+                    except Exception as exc:
+                        summary["notify_errors"] += 1
+                        summary["last_notify_error"] = str(exc)[:400]
+                else:
+                    summary["notify_suppressed"] += 1
             else:
                 summary["notify_suppressed"] += 1
 
@@ -1770,7 +1850,9 @@ def main() -> int:
             print(json.dumps(row, ensure_ascii=False))
 
         if not args.dry_run:
-            processed[msg_id] = int(time.time())
+            processed[msg_state_key] = int(time.time())
+            state["processed"] = processed
+            save_state(state)
 
     if not args.dry_run:
         state["processed"] = processed

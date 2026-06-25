@@ -44,6 +44,31 @@ class TestGmailTriageClassify(TestCase):
             self.assertIn("info@social-db.co.jp", [x.lower() for x in rules["force_archive"]["sender_contains"]])
             self.assertIn("tokiwa-gi.com", [x.lower() for x in rules["force_review"]["sender_domains"]])
 
+    def test_reserve_slack_notification_is_idempotent_by_account_and_message(self):
+        state = {}
+        self.assertTrue(self.mod.reserve_slack_notification(state, "s.nigo@tokiwa-gi.com", "msg-1", now=100))
+        self.assertFalse(self.mod.reserve_slack_notification(state, "s.nigo@tokiwa-gi.com", "msg-1", now=101))
+        self.assertTrue(self.mod.reserve_slack_notification(state, "other@example.com", "msg-1", now=102))
+        self.assertEqual(state["slack_notified"]["s.nigo@tokiwa-gi.com:msg-1"], 100)
+
+    def test_prune_gmail_state_keeps_recent_entries_and_caps_size(self):
+        state = {
+            "processed": {"old": 10, "a": 100, "b": 200, "c": 300},
+            "slack_notified": {"old": 10, "a": 100, "b": 200, "c": 300},
+        }
+        with patch.object(self.mod.time, "time", return_value=400):
+            self.mod.prune_gmail_state(
+                state,
+                {
+                    "GMAIL_TRIAGE_PROCESSED_TTL_DAYS": "0",
+                    "GMAIL_TRIAGE_SLACK_NOTIFIED_TTL_DAYS": "0",
+                    "GMAIL_TRIAGE_PROCESSED_MAX_ENTRIES": "2",
+                    "GMAIL_TRIAGE_SLACK_NOTIFIED_MAX_ENTRIES": "2",
+                },
+            )
+        self.assertEqual(list(state["processed"].keys()), ["c", "b"])
+        self.assertEqual(list(state["slack_notified"].keys()), ["c", "b"])
+
     def test_internal_domain_in_cc_forces_review(self):
         category, tags, needs_reply, rule, _meta = self.mod.classify_message(
             subject="FYI",

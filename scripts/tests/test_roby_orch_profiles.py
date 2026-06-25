@@ -78,7 +78,7 @@ class TestRobyOrchProfiles(TestCase):
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_ENABLE"], "0")
         self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE"], "1")
         self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL"], "google/gemini-3-flash-preview")
-        self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN"], "50")
+        self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN"], "8")
         self.assertEqual(overrides["GMAIL_TRIAGE_TASK_LLM_MODEL"], "google/gemini-3-flash-preview")
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_MAX_REVIEWS"], "0")
 
@@ -96,7 +96,7 @@ class TestRobyOrchProfiles(TestCase):
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_MODEL"], "google/gemini-3-flash-preview")
         self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_ENABLE"], "1")
         self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_MODEL"], "google/gemini-3-flash-preview")
-        self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN"], "50")
+        self.assertEqual(overrides["GMAIL_TRIAGE_SEMANTIC_TRIAGE_MAX_PER_RUN"], "24")
         self.assertEqual(overrides["GMAIL_TRIAGE_TASK_LLM_MODEL"], "google/gemini-3-flash-preview")
         self.assertEqual(overrides["GMAIL_TRIAGE_LLM_MAX_REVIEWS"], "7")
 
