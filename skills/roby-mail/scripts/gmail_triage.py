@@ -8,7 +8,6 @@ import subprocess
 import sys
 import time
 import hashlib
-import tempfile
 from datetime import datetime, timedelta
 from html import unescape
 from pathlib import Path
@@ -52,16 +51,12 @@ RUN_LOG_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_runs.jsonl"
 RULES_PATH = Path.home() / ".openclaw" / "roby" / "gmail_triage_rules.json"
 FEEDBACK_MANIFEST_PATH = Path.home() / ".openclaw" / "roby" / "feedback_candidates.jsonl"
 CONTACT_INDEX_PATH = Path.home() / ".openclaw" / "roby" / "gmail_contact_index.json"
-REPLY_REVIEW_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "roby-mail-reply-review.py"
 ENV_PATH = Path.home() / ".openclaw" / ".env"
 KEYCHAIN_SECRET_KEYS = {
     "GEMINI_API_KEY",
     "OPENAI_API_KEY",
     "NOTION_TOKEN",
     "NOTION_API_KEY",
-    "SLACK_WEBHOOK_URL",
-    "SLACK_SIGNING_SECRET",
-    "SLACK_BOT_TOKEN",
     "NEURONIC_TOKEN",
     "OLLAMA_API_KEY",
 }
@@ -443,34 +438,18 @@ def prune_gmail_state(state: Dict[str, Any], env: Dict[str, str] | None = None) 
     env = env or {}
     now = int(time.time())
     processed_ttl_days = int(str(env.get("GMAIL_TRIAGE_PROCESSED_TTL_DAYS", "14") or "14"))
-    notified_ttl_days = int(str(env.get("GMAIL_TRIAGE_SLACK_NOTIFIED_TTL_DAYS", "14") or "14"))
     processed_max = int(str(env.get("GMAIL_TRIAGE_PROCESSED_MAX_ENTRIES", "5000") or "5000"))
-    notified_max = int(str(env.get("GMAIL_TRIAGE_SLACK_NOTIFIED_MAX_ENTRIES", "5000") or "5000"))
     state["processed"] = prune_timestamp_map(
         _timestamp_map(state, "processed"),
         now=now,
         ttl_seconds=max(0, processed_ttl_days) * 86400,
         max_entries=max(0, processed_max),
     )
-    state["slack_notified"] = prune_timestamp_map(
-        _timestamp_map(state, "slack_notified"),
-        now=now,
-        ttl_seconds=max(0, notified_ttl_days) * 86400,
-        max_entries=max(0, notified_max),
-    )
 
 
 def gmail_message_state_key(account: str, msg_id: str) -> str:
     account_part = (account or "-").strip().lower()
     return f"{account_part}:{str(msg_id or '').strip()}"
-
-
-def reserve_slack_notification(state: Dict[str, Any], account: str, msg_id: str, *, now: int | None = None) -> bool:
-    key = gmail_message_state_key(account, msg_id)
-    if key in _timestamp_map(state, "slack_notified"):
-        return False
-    _timestamp_map(state, "slack_notified")[key] = int(now or time.time())
-    return True
 
 
 def log_run(entry: Dict[str, Any]) -> None:
@@ -752,113 +731,6 @@ def modify_thread_labels(
         cmd += ["--account", account]
     timeout_sec = int((env.get("GMAIL_TRIAGE_LABEL_TIMEOUT_SEC", "20") or "20").strip())
     subprocess.run(cmd, env=env, check=True, timeout=timeout_sec)
-
-
-def should_propose_reply_review(
-    work_bucket: str,
-    raw_category: str,
-    needs_reply: bool,
-    meta: Dict[str, Any],
-    tags: List[str],
-    sender: str,
-) -> bool:
-    if work_bucket != "task":
-        return False
-    signals = meta.get("signals") if isinstance(meta, dict) else {}
-    if not isinstance(signals, dict):
-        signals = {}
-    sender_lower = (sender or "").lower()
-    if signals.get("is_noreply") or "no-reply" in sender_lower or "noreply" in sender_lower:
-        return False
-    if any(tag in {"tool:autoro", "tool:aws", "tool:google", "tool:notion"} for tag in tags):
-        return False
-    if raw_category == "needs_reply" or needs_reply:
-        return True
-    if signals.get("meeting_coordination") or signals.get("contract_followup_subject"):
-        return True
-    if signals.get("context_project_match") and (signals.get("business_review") or signals.get("actionable_notice")):
-        return True
-    return False
-
-
-def propose_reply_review(
-    account: str,
-    msg: Dict[str, Any],
-    body: str,
-    env: Dict[str, str],
-) -> Dict[str, Any]:
-    if not REPLY_REVIEW_SCRIPT.exists():
-        return {"ok": False, "skipped": True, "reason": "script_missing"}
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
-        f.write(body or "")
-        body_path = f.name
-    cmd = [
-        "python3",
-        str(REPLY_REVIEW_SCRIPT),
-        "propose",
-        "--message-id",
-        str(msg.get("id") or ""),
-        "--thread-id",
-        str(msg.get("threadId") or ""),
-        "--subject",
-        str(msg.get("subject") or ""),
-        "--sender",
-        str(msg.get("from") or ""),
-        "--body-file",
-        body_path,
-    ]
-    if account:
-        cmd += ["--account", account]
-    try:
-        proc = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=shared_int_from_env(env, "GMAIL_REPLY_REVIEW_PROPOSE_TIMEOUT_SEC", 90),
-        )
-        raw = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else "{}"
-        try:
-            data = json.loads(raw)
-        except Exception:
-            data = {"ok": False, "raw": raw}
-        if proc.returncode != 0:
-            data["ok"] = False
-            data["error"] = (proc.stderr or proc.stdout or f"exit={proc.returncode}")[:1200]
-        return data
-    finally:
-        try:
-            Path(body_path).unlink()
-        except Exception:
-            pass
-
-
-def send_slack(webhook_url: str, text: str) -> None:
-    import urllib.request
-
-    data = json.dumps({"text": text}).encode("utf-8")
-    req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        resp.read()
-
-
-def format_gmail_slack_message(msg: Dict[str, Any], category: str) -> str:
-    category_label = WORK_BUCKET_LABELS.get(category, category)
-    subject = str(msg.get("subject", "") or "(件名なし)").strip()
-    sender = str(msg.get("from", "") or "-").strip()
-    date = str(msg.get("date", "") or "-").strip()
-    thread_id = str(msg.get("threadId", "") or "").strip()
-    msg_url = f"https://mail.google.com/mail/u/0/#inbox/{thread_id}" if thread_id else "-"
-    lines = [
-        "【Roby Gmail通知】",
-        f"・分類: {category_label}",
-        f"・件名: {subject}",
-        f"・送信者: {sender}",
-        f"・日時: {date}",
-        f"・リンク: {msg_url}",
-    ]
-    return "\n".join(lines)
-
 
 def send_neuronic(tasks: List[Dict[str, Any]], env: Dict[str, str]) -> Dict[str, Any]:
     if not tasks:
@@ -1566,9 +1438,7 @@ def main() -> int:
     parser.add_argument("--no-archive-ads", dest="archive_ads", action="store_false")
     parser.add_argument("--apply-labels", dest="apply_labels", action="store_true")
     parser.add_argument("--no-apply-labels", dest="apply_labels", action="store_false")
-    parser.add_argument("--reply-review", dest="reply_review", action="store_true")
-    parser.add_argument("--no-reply-review", dest="reply_review", action="store_false")
-    parser.set_defaults(archive_ads=True, apply_labels=None, reply_review=None)
+    parser.set_defaults(archive_ads=True, apply_labels=None)
     args = parser.parse_args()
 
     env = load_env()
@@ -1601,10 +1471,6 @@ def main() -> int:
         "labels_applied": 0,
         "label_errors": 0,
         "digest_archived": 0,
-        "reply_reviews": 0,
-        "reply_review_skipped": 0,
-        "reply_review_errors": 0,
-        "notify_errors": 0,
         "duplicates_skipped": 0,
     }
     run_id = build_run_id("gmail")
@@ -1622,12 +1488,10 @@ def main() -> int:
         shared_int_from_env(env, "GMAIL_TRIAGE_LLM_MAX_REVIEWS", 0),
     )
     semantic_review_count = 0
-    notify_max_per_run = int((env.get("GMAIL_TRIAGE_NOTIFY_MAX_PER_RUN", "12") or "12").strip())
     task_actions_max_per_mail = int((env.get("GMAIL_TRIAGE_TASK_MAX_ACTIONS_PER_MAIL", "6") or "6").strip())
     task_items_max_per_run = int((env.get("GMAIL_TRIAGE_TASK_MAX_ITEMS_PER_RUN", "120") or "120").strip())
     apply_labels = bool(args.apply_labels) if args.apply_labels is not None else shared_env_flag(env, "GMAIL_TRIAGE_APPLY_LABELS", True)
     archive_digest = shared_env_flag(env, "GMAIL_TRIAGE_ARCHIVE_DIGEST", True)
-    reply_review_enabled = bool(args.reply_review) if args.reply_review is not None else shared_env_flag(env, "GMAIL_REPLY_REVIEW_ENABLE", True)
     seen_msg_ids: set[str] = set()
 
     for msg in messages:
@@ -1768,22 +1632,6 @@ def main() -> int:
 
         category_counts[work_bucket] = category_counts.get(work_bucket, 0) + 1
 
-        if (
-            reply_review_enabled
-            and not args.dry_run
-            and should_propose_reply_review(work_bucket, category, needs_reply, classify_meta, tags, sender)
-        ):
-            resp = propose_reply_review(args.account, msg, body, env)
-            if resp.get("ok"):
-                if resp.get("skipped"):
-                    summary["reply_review_skipped"] += 1
-                else:
-                    summary["reply_reviews"] += 1
-            elif resp.get("skipped"):
-                summary["reply_review_skipped"] += 1
-            else:
-                summary["reply_review_errors"] += 1
-
         if apply_labels and not args.dry_run:
             add_labels, remove_labels = label_changes_for_work_bucket(work_bucket, archive_digest=archive_digest)
             try:
@@ -1800,24 +1648,6 @@ def main() -> int:
                         summary["digest_archived"] += 1
             except Exception:
                 summary["label_errors"] += 1
-
-        # Slack notify
-        slack_url = env.get("SLACK_WEBHOOK_URL")
-        if slack_url and not args.dry_run and work_bucket in ("task", "review", "digest"):
-            text = format_gmail_slack_message(msg, work_bucket)
-            if notify_max_per_run <= 0 or summary["notified"] < notify_max_per_run:
-                if reserve_slack_notification(state, args.account, msg_id):
-                    save_state(state)
-                    try:
-                        send_slack(slack_url, text)
-                        summary["notified"] += 1
-                    except Exception as exc:
-                        summary["notify_errors"] += 1
-                        summary["last_notify_error"] = str(exc)[:400]
-                else:
-                    summary["notify_suppressed"] += 1
-            else:
-                summary["notify_suppressed"] += 1
 
         # Archive ads
         if work_bucket == "archive" and args.archive_ads and not args.dry_run:

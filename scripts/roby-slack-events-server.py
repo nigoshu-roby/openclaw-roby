@@ -269,9 +269,7 @@ def parse_triage_command(rest: str, default_account: str) -> Tuple[List[str], st
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--archive-ads", dest="archive_ads", action="store_true")
     parser.add_argument("--no-archive-ads", dest="archive_ads", action="store_false")
-    parser.add_argument("--reply-review", dest="reply_review", action="store_true")
-    parser.add_argument("--no-reply-review", dest="reply_review", action="store_false")
-    parser.set_defaults(archive_ads=True, reply_review=None)
+    parser.set_defaults(archive_ads=True)
 
     try:
         args = parser.parse_args(tokens)
@@ -289,10 +287,6 @@ def parse_triage_command(rest: str, default_account: str) -> Tuple[List[str], st
         cmd.append("--verbose")
     if not args.archive_ads:
         cmd.append("--no-archive-ads")
-    if args.reply_review:
-        cmd.append("--reply-review")
-    elif args.reply_review is False:
-        cmd.append("--no-reply-review")
     return cmd, "ok"
 
 
@@ -305,7 +299,6 @@ def help_text() -> str:
         "- @roby triage --query \"newer_than:1d in:inbox\" --max 30\n"
         "- @roby ask 相談内容...\n"
         "- @roby dev 開発指示...\n"
-        "- メール返信案スレッドでは `1` / `2` で送信、`1を...` で修正、`キャンセル` で中止\n"
         "- メンションなしでもチャンネル投稿を処理できます\n\n"
         "※ ask/dev を省略した場合は自動判定します（開発系→dev、それ以外→ask）。"
     )

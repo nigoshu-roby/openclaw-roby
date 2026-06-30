@@ -48,7 +48,7 @@ flowchart LR
 ## 6. 主要業務フロー
 
 - フローA: Notion + Google Docs議事録収集 → 要約 → タスク抽出 → タスク細分化 → Neuronic Upsert
-- フローB: Gmail仕分け → 要返信/要確認/アーカイブ判定 → 必要時Neuronic登録 → Slack通知
+- フローB: Gmail仕分け → 要返信/要確認/アーカイブ判定 → 必要時Neuronic登録（Slack通知なし）
 - フローC: 自己成長（レビュー → 実装候補 → テスト → 反映判定）
 
 ## 7. Neuronic連携仕様（確定）
