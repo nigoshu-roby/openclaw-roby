@@ -256,6 +256,52 @@ class TestRobyGmailTasks(TestCase):
         self.assertIn("Link: https://mail.google.com/mail/u/0/#inbox/thread-1", tasks[0]["note"])
         self.assertNotIn("Parent:", tasks[0]["note"])
 
+    def test_build_tasks_uses_semantic_identity_for_duplicate_invoice_mail(self):
+        first = self.mod.build_tasks(
+            [
+                {
+                    "title": "株式会社DIPROの2026年6月分請求書の内容確認と支払い手続き",
+                    "project": "email",
+                    "task_kind": "action",
+                }
+            ],
+            {
+                "id": "19f1bb980117b992",
+                "threadId": "thread-a",
+                "subject": "【株式会社DIPRO】 請求書送付のご案内（2026年6月分）",
+                "from": "株式会社DIPRO <billing@dipro.example>",
+                "date": "2026-07-01",
+            },
+            "task",
+            [],
+            run_id="roby:gmail:test-a",
+            raw_category="needs_review",
+        )
+        second = self.mod.build_tasks(
+            [
+                {
+                    "title": "株式会社DIPROの2026年6月分請求書を確認し、支払処理を行う",
+                    "project": "email",
+                    "task_kind": "action",
+                }
+            ],
+            {
+                "id": "19f1bc57c699e499",
+                "threadId": "thread-b",
+                "subject": "【株式会社DIPRO】 請求書送付のご案内（2026年6月分）",
+                "from": "株式会社DIPRO <billing@dipro.example>",
+                "date": "2026-07-01",
+            },
+            "task",
+            [],
+            run_id="roby:gmail:test-b",
+            raw_category="needs_review",
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(first[0]["origin_id"], second[0]["origin_id"])
+
     def test_build_tasks_creates_parent_only_for_multiple_email_actions(self):
         tasks = self.mod.build_tasks(
             [

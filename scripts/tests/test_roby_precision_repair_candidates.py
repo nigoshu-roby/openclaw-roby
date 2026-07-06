@@ -67,6 +67,43 @@ class PrecisionRepairCandidateTests(unittest.TestCase):
         self.assertEqual(repair["keep"]["origin_id"], "older")
         self.assertEqual(repair["duplicates"][0]["origin_id"], "newer")
 
+    def test_gmail_duplicate_repair_candidates_include_invoice_semantic_duplicates(self):
+        payload = module.build_payload(
+            [],
+            base_url="http://127.0.0.1:5174/api/v1",
+            duplicate_entries=[
+                {
+                    "source_run_id": "roby:gmail:1",
+                    "origin_id": "roby:auto:c893d39d1ec4",
+                    "task_id": "task-a",
+                    "source_doc_id": "19f1bb980117b992",
+                    "source_doc_title": "【株式会社DIPRO】 請求書送付のご案内（2026年6月分）",
+                    "sender_label": "株式会社DIPRO",
+                    "project": "email",
+                    "title": "【株式会社DIPRO】株式会社DIPROの2026年6月分請求書の内容確認と支払い手続き",
+                    "created_at": "2026-07-01T00:00:00Z",
+                },
+                {
+                    "source_run_id": "roby:gmail:2",
+                    "origin_id": "roby:auto:057a3c106a43",
+                    "task_id": "task-b",
+                    "source_doc_id": "19f1bc57c699e499",
+                    "source_doc_title": "【株式会社DIPRO】 請求書送付のご案内（2026年6月分）",
+                    "sender_label": "株式会社DIPRO",
+                    "project": "email",
+                    "title": "【株式会社DIPRO】株式会社DIPROの2026年6月分請求書を確認し、支払処理を行う",
+                    "created_at": "2026-07-01T00:10:00Z",
+                },
+            ],
+        )
+
+        self.assertEqual(payload["summary"]["duplicate_groups"], 1)
+        repair = payload["duplicates"][0]
+        self.assertEqual(repair["type"], "gmail_semantic_duplicate")
+        self.assertEqual(repair["domain"], "gmail")
+        self.assertEqual(repair["keep"]["origin_id"], "roby:auto:c893d39d1ec4")
+        self.assertEqual(repair["duplicates"][0]["origin_id"], "roby:auto:057a3c106a43")
+
 
 if __name__ == "__main__":
     unittest.main()

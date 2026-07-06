@@ -183,6 +183,38 @@ def duplicate_similarity_key(entry: Dict[str, Any]) -> str:
     return title.lower()
 
 
+def compact_gmail_identity_text(value: Any) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[\s　【】\[\]（）()「」『』:：,，.。・/\-＿_]+", "", text)
+    text = text.replace("お支払い", "支払").replace("支払い", "支払").replace("支払処理", "支払")
+    text = text.replace("内容確認", "確認").replace("ご確認", "確認")
+    text = re.sub(r"(してください|お願いいたします|お願いします|を行う|をする|する)$", "", text)
+    return text
+
+
+def gmail_duplicate_similarity_key(entry: Dict[str, Any]) -> str:
+    title = compact_gmail_identity_text(entry.get("title"))
+    source_title = compact_gmail_identity_text(entry.get("source_doc_title"))
+    sender = compact_gmail_identity_text(entry.get("sender_label"))
+    combined = f"{source_title}|{title}"
+    period_match = re.search(r"(20\d{2}年\d{1,2}月(?:分)?)", combined)
+    has_invoice = "請求書" in combined
+    has_payment_intent = any(token in combined for token in ("支払", "振込", "入金", "請求確認"))
+    if has_invoice and (has_payment_intent or "確認" in title):
+        period = period_match.group(1) if period_match else source_title
+        return f"gmail:invoice_payment:{sender}:{period}"
+    return f"gmail:{sender}:{source_title}:{duplicate_similarity_key(entry)}"
+
+
+def duplicate_group_key(entry: Dict[str, Any]) -> Tuple[str, str, str, str]:
+    domain = detect_domain(entry)
+    project = str(entry.get("project") or "")
+    if domain == "gmail":
+        return domain, "", project, gmail_duplicate_similarity_key(entry)
+    source = str(entry.get("source_doc_id") or entry.get("source_doc_title") or "")
+    return domain, source, project, duplicate_similarity_key(entry)
+
+
 def looks_like_auto_parent_title(entry: Dict[str, Any]) -> bool:
     title = str(entry.get("title") or "")
     project = str(entry.get("project") or "")
@@ -196,25 +228,33 @@ def looks_like_auto_parent_title(entry: Dict[str, Any]) -> bool:
 
 
 def annotate_duplicate_clusters(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    buckets: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
+    buckets: Dict[Tuple[str, str, str, str], List[Dict[str, Any]]] = defaultdict(list)
     for row in entries:
         domain = detect_domain(row)
-        if domain != "minutes":
+        if domain not in {"minutes", "gmail"}:
             continue
-        key = duplicate_similarity_key(row)
-        if len(key) < 8:
+        group_key = duplicate_group_key(row)
+        if len(group_key[3]) < 8:
             continue
-        buckets[(str(row.get("source_doc_id") or row.get("source_doc_title") or ""), str(row.get("project") or ""), key)].append(row)
+        buckets[group_key].append(row)
     annotated: List[Dict[str, Any]] = []
     for rows in buckets.values():
         if len(rows) < 2:
             continue
+        domain = detect_domain(rows[0])
         annotated.append(
             {
-                "kind": "parent_group_duplicate" if looks_like_auto_parent_title(rows[0]) else "child_action_duplicate",
+                "kind": (
+                    "gmail_semantic_duplicate"
+                    if domain == "gmail"
+                    else "parent_group_duplicate"
+                    if looks_like_auto_parent_title(rows[0])
+                    else "child_action_duplicate"
+                ),
+                "domain": domain,
                 "source_doc_title": rows[0].get("source_doc_title") or "",
                 "project": rows[0].get("project") or "",
-                "similarity_key": duplicate_similarity_key(rows[0]),
+                "similarity_key": duplicate_group_key(rows[0])[3],
                 "count": len(rows),
                 "examples": [str(row.get("title") or "") for row in rows[:5]],
             }

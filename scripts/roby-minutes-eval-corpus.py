@@ -129,7 +129,7 @@ def fetch_all_roby_tasks(env: Dict[str, str], *, limit: int, max_pages: int) -> 
             if str(row.get("source") or "").strip() == "roby":
                 collected.append(row)
         offset += len(items)
-        if len(items) < limit:
+        if len(items) < limit and (total_hint is None or offset >= total_hint):
             break
         if total_hint is not None and offset >= total_hint:
             break

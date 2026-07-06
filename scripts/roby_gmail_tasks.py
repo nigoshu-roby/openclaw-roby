@@ -604,6 +604,49 @@ def _stable_origin_id(task: Dict[str, Any], source_key: str = "") -> str:
     return f"roby:auto:{sha1_12}"
 
 
+def _stable_origin_id_from_identity(task: Dict[str, Any], identity_key: str, source_key: str = "") -> str:
+    raw = "|".join([
+        (identity_key or "").strip(),
+        (task.get("project") or "").strip(),
+        (task.get("due_date") or "").strip(),
+        (task.get("assignee") or "").strip(),
+        (source_key or "").strip(),
+    ])
+    sha1_12 = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return f"roby:auto:{sha1_12}"
+
+
+def _compact_identity_text(value: str) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[\s　【】\[\]（）()「」『』:：,，.。・/\-＿_]+", "", text)
+    text = text.replace("お支払い", "支払").replace("支払い", "支払").replace("支払処理", "支払")
+    text = text.replace("内容確認", "確認").replace("ご確認", "確認")
+    text = re.sub(r"(してください|お願いいたします|お願いします|を行う|をする|する)$", "", text)
+    return text
+
+
+def _email_action_identity_key(
+    *,
+    display_title: str,
+    msg_subject: str,
+    sender_label: str,
+    project: str,
+    due: str,
+    task_kind: str,
+) -> str:
+    subject_compact = _compact_identity_text(msg_subject)
+    title_compact = _compact_identity_text(display_title)
+    sender_compact = _compact_identity_text(sender_label)
+    combined = f"{subject_compact}|{title_compact}"
+    period_match = re.search(r"(20\d{2}年\d{1,2}月(?:分)?)", combined)
+    has_invoice = "請求書" in combined
+    has_payment_intent = any(token in combined for token in ("支払", "支払い", "振込", "入金", "請求確認"))
+    if has_invoice and (has_payment_intent or "確認" in title_compact):
+        period = period_match.group(1) if period_match else subject_compact
+        return f"invoice_payment:{sender_compact}:{period}:{project or 'email'}:{due}"
+    return f"{task_kind}:{sender_compact}:{subject_compact}:{title_compact}:{project or 'email'}:{due}"
+
+
 def _sender_label(raw_from: str) -> str:
     display_name, address = parseaddr((raw_from or "").strip())
     label = (display_name or address or "").strip().strip("\"'")
@@ -711,6 +754,14 @@ def build_tasks(
         note = str(item.get("note") or "").strip()
         task_type_tag = "task_type:reply" if task_kind == "reply" else "task_type:action"
         display_title = _display_email_action_title(str(item.get("title") or ""), raw_category, note, msg_subject, task_kind)
+        identity_key = _email_action_identity_key(
+            display_title=display_title,
+            msg_subject=msg_subject,
+            sender_label=sender_label,
+            project=project,
+            due=due,
+            task_kind=task_kind,
+        )
         task = {
             "title": _decorate_email_task_title(display_title, sender_label),
             "project": project,
@@ -734,7 +785,7 @@ def build_tasks(
             "source_doc_id": msg_id or msg_thread_id,
             "source_doc_title": msg_subject,
         }
-        task["origin_id"] = _stable_origin_id(task, f"{msg_thread_id}|single|{task_kind}")
+        task["origin_id"] = _stable_origin_id_from_identity(task, identity_key, f"single|{task_kind}")
         task["external_ref"] = f"group:{task['origin_id']}"
         return [task]
 
@@ -763,7 +814,15 @@ def build_tasks(
         "source_doc_id": msg_id or msg_thread_id,
         "source_doc_title": msg_subject,
     }
-    parent_origin = _stable_origin_id(parent_task, f"{msg_thread_id}|parent")
+    parent_identity_key = _email_action_identity_key(
+        display_title=f"メール対応: {msg_subject}" if msg_subject else "メール対応タスク",
+        msg_subject=msg_subject,
+        sender_label=sender_label,
+        project="email",
+        due="",
+        task_kind="parent",
+    )
+    parent_origin = _stable_origin_id_from_identity(parent_task, parent_identity_key, "parent")
     parent_task["origin_id"] = parent_origin
     parent_task["external_ref"] = f"group:{parent_origin}"
     parent_title = parent_task["title"]
@@ -781,9 +840,18 @@ def build_tasks(
             task_kind = "reply" if _looks_like_reply_task(title, note) else "action"
         task_type_tag = "task_type:reply" if task_kind == "reply" else "task_type:action"
         item_tags = _dedupe_tags(base_tags + [f"project:{project}", f"assignee:{assignee}", task_type_tag])
+        display_title = _display_email_action_title(title, raw_category, note, msg_subject, task_kind)
+        identity_key = _email_action_identity_key(
+            display_title=display_title,
+            msg_subject=msg_subject,
+            sender_label=sender_label,
+            project=project,
+            due=due,
+            task_kind=task_kind,
+        )
         task = {
             "title": _decorate_email_task_title(
-                _display_email_action_title(title, raw_category, note, msg_subject, task_kind),
+                display_title,
                 sender_label,
             ),
             "project": project,
@@ -809,7 +877,7 @@ def build_tasks(
             "source_doc_title": msg_subject,
             "external_ref": f"group:{parent_origin}",
         }
-        task["origin_id"] = _stable_origin_id(task, f"{msg_thread_id}|child|{i}")
+        task["origin_id"] = _stable_origin_id_from_identity(task, identity_key, f"child|{i}")
         tasks.append(task)
     return tasks
 

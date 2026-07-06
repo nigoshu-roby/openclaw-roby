@@ -113,16 +113,14 @@ def build_semantic_parent_repairs(entries: List[Dict[str, Any]]) -> List[Dict[st
 
 
 def _duplicate_group_key(row: Dict[str, Any]) -> Tuple[str, str, str]:
-    source = str(row.get("source_doc_id") or row.get("source_doc_title") or "")
-    project = str(row.get("project") or "")
-    key = diagnostics.duplicate_similarity_key(row)
+    _domain, source, project, key = diagnostics.duplicate_group_key(row)
     return source, project, key
 
 
 def build_duplicate_repairs(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     buckets: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
     for row in entries:
-        if diagnostics.detect_domain(row) != "minutes":
+        if diagnostics.detect_domain(row) not in {"minutes", "gmail"}:
             continue
         key = _duplicate_group_key(row)
         if len(key[2]) < 8:
@@ -136,10 +134,18 @@ def build_duplicate_repairs(entries: List[Dict[str, Any]]) -> List[Dict[str, Any
         ordered = sorted(rows, key=lambda row: (parse_dt(row.get("created_at")), str(row.get("origin_id") or "")))
         keep = ordered[0]
         duplicates = ordered[1:]
-        kind = "parent_group_duplicate" if diagnostics.looks_like_auto_parent_title(keep) else "child_action_duplicate"
+        domain = diagnostics.detect_domain(keep)
+        kind = (
+            "gmail_semantic_duplicate"
+            if domain == "gmail"
+            else "parent_group_duplicate"
+            if diagnostics.looks_like_auto_parent_title(keep)
+            else "child_action_duplicate"
+        )
         repairs.append(
             {
                 "type": kind,
+                "domain": domain,
                 "confidence": "review" if kind == "child_action_duplicate" else "high",
                 "recommended_action": "keep_oldest_and_archive_or_merge_duplicates",
                 "similarity_key": similarity_key,
@@ -223,7 +229,7 @@ def build_payload(entries: List[Dict[str, Any]], *, base_url: str = "", duplicat
         "mode": "dry_run",
         "notes": {
             "safety": "This report does not mutate Neuronic. Review candidates before applying any move/archive/update.",
-            "scope": "Existing Roby minutes tasks only; future prevention lives in roby-minutes gates.",
+            "scope": "Existing Roby minutes and Gmail tasks; future prevention lives in source-specific gates and stable task identities.",
         },
         "source": {"neuronic_base_url": base_url},
         "summary": {
@@ -240,12 +246,14 @@ def build_payload(entries: List[Dict[str, Any]], *, base_url: str = "", duplicat
 
 def collect_entries(limit: int, max_pages: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], str]:
     minutes_mod = load_module(SCRIPTS_DIR / "roby-minutes-eval-corpus.py", "roby_minutes_eval_for_repair")
+    gmail_mod = load_module(SCRIPTS_DIR / "roby-gmail-eval-corpus.py", "roby_gmail_eval_for_repair")
     env = minutes_mod.load_env()
     tasks, base_url = minutes_mod.fetch_all_roby_tasks(env, limit=limit, max_pages=max_pages)
     candidate_index = minutes_mod.read_feedback_candidate_index(minutes_mod.CANDIDATES_PATH)
     reviewed_entries = minutes_mod.build_minutes_review_entries(tasks, candidate_index)
+    gmail_entries = gmail_mod.build_gmail_review_entries(tasks, candidate_index)
     live_entries = build_live_minutes_entries(tasks, candidate_index)
-    return reviewed_entries, live_entries, base_url
+    return [*reviewed_entries, *gmail_entries], [*live_entries, *gmail_entries], base_url
 
 
 def write_json(path: Path, payload: Dict[str, Any]) -> None:

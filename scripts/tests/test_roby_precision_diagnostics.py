@@ -127,6 +127,35 @@ class PrecisionDiagnosticsTests(unittest.TestCase):
         clusters = module.annotate_duplicate_clusters(module.apply_annotations(entries))
         self.assertEqual(clusters[0]["kind"], "parent_group_duplicate")
 
+    def test_gmail_invoice_duplicates_are_clustered_across_message_ids(self):
+        entries = [
+            {
+                "source_run_id": "roby:gmail:1",
+                "origin_id": "roby:auto:c893d39d1ec4",
+                "source_doc_id": "19f1bb980117b992",
+                "source_doc_title": "【株式会社DIPRO】 請求書送付のご案内（2026年6月分）",
+                "sender_label": "株式会社DIPRO",
+                "project": "email",
+                "title": "【株式会社DIPRO】株式会社DIPROの2026年6月分請求書の内容確認と支払い手続き",
+            },
+            {
+                "source_run_id": "roby:gmail:2",
+                "origin_id": "roby:auto:057a3c106a43",
+                "source_doc_id": "19f1bc57c699e499",
+                "source_doc_title": "【株式会社DIPRO】 請求書送付のご案内（2026年6月分）",
+                "sender_label": "株式会社DIPRO",
+                "project": "email",
+                "title": "【株式会社DIPRO】株式会社DIPROの2026年6月分請求書を確認し、支払処理を行う",
+            },
+        ]
+
+        clusters = module.annotate_duplicate_clusters(module.apply_annotations(entries))
+
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(clusters[0]["kind"], "gmail_semantic_duplicate")
+        self.assertEqual(clusters[0]["domain"], "gmail")
+        self.assertEqual(clusters[0]["count"], 2)
+
     def test_build_diagnostics_lists_semantic_parent_misnesting_candidates(self):
         entries = [
             {

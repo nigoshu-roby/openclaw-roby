@@ -150,6 +150,33 @@ class GmailEvalCorpusTests(unittest.TestCase):
         self.assertEqual(len(merged), 2)
         self.assertEqual(merged[1]["origin_id"], "manual-2")
 
+    def test_fetch_all_roby_tasks_continues_when_api_caps_page_size(self):
+        original_base_url = module.build_neuronic_base_url
+        original_headers = module.build_headers
+        original_fetch = module.fetch_tasks_page
+
+        pages = {
+            0: ([{"id": "1", "source": "roby"}], 3),
+            1: ([{"id": "2", "source": "other"}], 3),
+            2: ([{"id": "3", "source": "roby"}], 3),
+        }
+
+        def fake_fetch(_base_url, _headers, *, limit, offset):
+            self.assertEqual(limit, 1000)
+            return pages.get(offset, ([], 3))
+
+        try:
+            module.build_neuronic_base_url = lambda _env: "http://example.test/api/v1"
+            module.build_headers = lambda _env: {}
+            module.fetch_tasks_page = fake_fetch
+            tasks, _ = module.fetch_all_roby_tasks({}, limit=1000, max_pages=10)
+        finally:
+            module.build_neuronic_base_url = original_base_url
+            module.build_headers = original_headers
+            module.fetch_tasks_page = original_fetch
+
+        self.assertEqual([row["id"] for row in tasks], ["1", "3"])
+
 
 if __name__ == "__main__":
     unittest.main()
