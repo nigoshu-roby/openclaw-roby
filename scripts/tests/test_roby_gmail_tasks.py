@@ -360,6 +360,31 @@ class TestRobyGmailTasks(TestCase):
         self.assertIsNone(tasks[0]["parent_origin_id"])
         self.assertEqual(tasks[0]["title"], "【高田彰】【返信】兼清杯開催日程のご相談")
 
+    def test_latest_message_body_removes_quoted_thread_history(self):
+        latest, trimmed = self.mod.latest_message_body(
+            "承知しました。こちらで確認します。 "
+            "2026年7月2日(木) 16:43 安本愛理 <airi@example.com>: "
+            "契約書を準備し、見積書を送付してください。"
+        )
+
+        self.assertTrue(trimmed)
+        self.assertEqual(latest, "承知しました。こちらで確認します。")
+        self.assertNotIn("契約書", latest)
+
+    def test_filter_existing_thread_actions_suppresses_prior_thread_tasks(self):
+        rows = [
+            {"title": "契約書を準備する", "task_kind": "action"},
+            {"title": "指定のURLから候補日程の◯✕を回答する", "task_kind": "action"},
+        ]
+
+        kept, suppressed = self.mod.filter_existing_thread_actions(
+            rows,
+            existing_titles=["【安本愛理】契約書を準備する"],
+        )
+
+        self.assertEqual([row["title"] for row in kept], ["指定のURLから候補日程の◯✕を回答する"])
+        self.assertEqual([row["title"] for row in suppressed], ["契約書を準備する"])
+
     def test_cap_extracted_actions_can_be_disabled(self):
         rows = [{"title": "a"}, {"title": "b"}]
         self.assertEqual(self.mod.cap_extracted_actions(rows, 0), rows)

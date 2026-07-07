@@ -37,8 +37,11 @@ from roby_gmail_context import (
 from roby_gmail_tasks import (
     build_tasks,
     cap_extracted_actions,
+    canonical_email_action_key,
     decide_task_gate,
     extract_explicit_email_actions,
+    filter_existing_thread_actions,
+    latest_message_body,
     normalize_extracted_actions,
     summarize_tasks,
 )
@@ -487,6 +490,60 @@ def write_feedback_manifest(tasks: List[Dict[str, Any]], run_id: str) -> None:
             )
             + "\n"
         )
+
+
+def _canonical_thread_subject(subject: str) -> str:
+    text = str(subject or "").strip().lower()
+    while True:
+        cleaned = re.sub(r"^(?:re|fw|fwd)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
+        if cleaned == text:
+            break
+        text = cleaned
+    text = re.sub(r"[\s　【】\[\]（）()「」『』:：,，.。・/\-＿_]+", "", text)
+    return text
+
+
+def load_existing_gmail_thread_titles(subject: str, path: Path | None = None) -> List[str]:
+    subject_key = _canonical_thread_subject(subject)
+    if not subject_key:
+        return []
+    target = (path or FEEDBACK_MANIFEST_PATH).expanduser()
+    if not target.exists():
+        return []
+    titles: List[str] = []
+    seen: set[str] = set()
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            row = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(row, dict) or row.get("event") != "feedback_candidates":
+            continue
+        run_id = str(row.get("run_id") or "")
+        if not run_id.startswith("roby:gmail:"):
+            continue
+        items = row.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if _canonical_thread_subject(str(item.get("source_doc_title") or "")) != subject_key:
+                continue
+            title = str(item.get("title") or "").strip()
+            key = canonical_email_action_key(title)
+            if not title or not key or key in seen:
+                continue
+            seen.add(key)
+            titles.append(title)
+    return titles
 
 
 def _normalize_rule_bucket(bucket: Dict[str, Any] | None) -> Dict[str, List[str]]:
@@ -1508,6 +1565,8 @@ def main() -> int:
             continue
 
         body = strip_html(msg.get("body", ""))
+        task_body, quoted_history_trimmed = latest_message_body(body)
+        body_for_decision = task_body if quoted_history_trimmed else body
         subject = msg.get("subject", "")
         sender = msg.get("from", "")
 
@@ -1515,7 +1574,7 @@ def main() -> int:
         category, tags, needs_reply, rule_applied, classify_meta = classify_message(
             subject,
             sender,
-            body,
+            body_for_decision,
             rules=rules,
             cc=cc,
             env=env,
@@ -1525,6 +1584,8 @@ def main() -> int:
             context_domain_hints=context_domain_hints,
             context_project_hints=context_project_hints,
         )
+        if quoted_history_trimmed:
+            classify_meta["quoted_history_trimmed"] = True
         local_meta = classify_meta.get("local_preclassify") if isinstance(classify_meta, dict) else None
         if isinstance(local_meta, dict) and local_meta.get("enabled") is not False:
             summary["local_preclassified"] += 1
@@ -1532,7 +1593,7 @@ def main() -> int:
             summary["local_overrides"] += 1
         semantic_decision: Dict[str, Any] = {}
         if semantic_enabled and semantic_max_reviews > 0 and semantic_review_count < semantic_max_reviews and not should_skip_semantic_triage(rule_applied) and category in ("archive", "needs_review", "later_check", "needs_reply"):
-            semantic_decision = semantic_triage_decision(subject, sender, cc, body, env)
+            semantic_decision = semantic_triage_decision(subject, sender, cc, body_for_decision, env)
             semantic_review_count += 1
             summary["semantic_reviewed"] = int(summary.get("semantic_reviewed", 0)) + 1
             if semantic_decision:
@@ -1562,7 +1623,7 @@ def main() -> int:
                     f"Subject: {subject}\n"
                     f"From: {sender}\n"
                     f"Date: {msg.get('date','')}\n\n"
-                    f"{body}",
+                    f"{task_body}",
                     env,
                 )
                 llm_task_extracted = bool(extracted)
@@ -1570,7 +1631,7 @@ def main() -> int:
                 extracted = []
             deterministic_actions = extract_explicit_email_actions(
                 subject,
-                body,
+                task_body,
                 raw_category=category,
                 meta=classify_meta,
                 tags=tags,
@@ -1586,12 +1647,28 @@ def main() -> int:
             if llm_task_extracted:
                 summary["task_llm_extracted"] = int(summary.get("task_llm_extracted", 0)) + 1
             if not extracted:
-                if category == "needs_reply":
+                if quoted_history_trimmed and category != "needs_reply":
+                    classify_meta["task_suppressed_reason"] = "no_latest_message_action_after_quote_trim"
+                    work_bucket = "review"
+                elif category == "needs_reply":
                     fallback_title = f"【返信】{subject}" if subject else "返信内容を確認して返信する"
+                    extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": "", "task_kind": "reply"}]
                 else:
                     fallback_title = f"メール対応: {subject}"
-                extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": "", "task_kind": ("reply" if category == "needs_reply" else "action")}]
+                    extracted = [{"title": fallback_title, "due_date": "", "project": "email", "note": "", "task_kind": "action"}]
             extracted = normalize_extracted_actions(extracted, raw_category=category, subject=subject)
+            existing_thread_titles = load_existing_gmail_thread_titles(subject)
+            if existing_thread_titles:
+                filtered, suppressed = filter_existing_thread_actions(extracted, existing_titles=existing_thread_titles)
+                if suppressed:
+                    summary["task_thread_existing_suppressed"] = int(summary.get("task_thread_existing_suppressed", 0)) + len(suppressed)
+                    classify_meta["thread_existing_suppressed_titles"] = [
+                        str(item.get("title") or "").strip() for item in suppressed[:10]
+                    ]
+                extracted = filtered
+                if not extracted and suppressed:
+                    classify_meta["task_suppressed_reason"] = "all_actions_already_exist_in_thread"
+                    work_bucket = "review"
             before_cap = len(extracted)
             extracted = cap_extracted_actions(extracted, task_actions_max_per_mail)
             if len(extracted) < before_cap:

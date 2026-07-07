@@ -625,6 +625,69 @@ def _compact_identity_text(value: str) -> str:
     return text
 
 
+def canonical_email_action_key(title: str) -> str:
+    text = str(title or "").strip()
+    text = re.sub(r"^【[^】]{1,80}】", "", text)
+    text = re.sub(r"^(?:メール対応|メール確認|メール返信)\s*[:：]\s*", "", text)
+    text = re.sub(r"^【返信】\s*", "", text)
+    text = _clean_email_subject(text)
+    return _compact_identity_text(text)
+
+
+def filter_existing_thread_actions(
+    extracted: List[Dict[str, Any]],
+    *,
+    existing_titles: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if not extracted or not existing_titles:
+        return extracted, []
+    existing_keys = {canonical_email_action_key(title) for title in existing_titles}
+    existing_keys = {key for key in existing_keys if key}
+    if not existing_keys:
+        return extracted, []
+    kept: List[Dict[str, Any]] = []
+    suppressed: List[Dict[str, Any]] = []
+    for item in extracted:
+        key = canonical_email_action_key(str(item.get("title") or ""))
+        if key and key in existing_keys:
+            suppressed.append(item)
+            continue
+        kept.append(item)
+    return kept, suppressed
+
+
+QUOTE_HISTORY_PATTERNS = (
+    r"\s-{2,}\s*Original Message\s*-{2,}\s",
+    r"\sOn\s.{10,240}?\swrote:\s",
+    r"\s\d{4}年\d{1,2}月\d{1,2}日.{0,160}?<[^>]+>:\s",
+    r"\s\d{4}/\d{1,2}/\d{1,2}.{0,160}?<[^>]+>:\s",
+    r"\s差出人\s*[:：]\s",
+    r"\sFrom\s*:\s",
+    r"\s転送されたメッセージ\s",
+)
+
+
+def latest_message_body(body: str) -> Tuple[str, bool]:
+    text = str(body or "").strip()
+    if not text:
+        return "", False
+    cut_at: int | None = None
+    for pattern in QUOTE_HISTORY_PATTERNS:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        pos = match.start()
+        if pos < 5:
+            continue
+        cut_at = pos if cut_at is None else min(cut_at, pos)
+    if cut_at is None:
+        return text, False
+    latest = text[:cut_at].strip()
+    if len(latest) < 8:
+        return text, False
+    return latest, True
+
+
 def _email_action_identity_key(
     *,
     display_title: str,

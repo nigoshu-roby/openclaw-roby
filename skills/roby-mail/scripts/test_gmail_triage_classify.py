@@ -58,6 +58,35 @@ class TestGmailTriageClassify(TestCase):
             )
         self.assertEqual(list(state["processed"].keys()), ["c", "b"])
 
+    def test_load_existing_gmail_thread_titles_uses_canonical_subject(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "feedback_candidates.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "event": "feedback_candidates",
+                        "run_id": "roby:gmail:abc",
+                        "items": [
+                            {
+                                "title": "【安本愛理】契約書を準備する",
+                                "source_doc_title": "Re: ボーネルンド様導入の件",
+                            },
+                            {
+                                "title": "ボーネルンド / 2026/06/02社内定例MTG",
+                                "source_doc_title": "2026/06/02社内定例MTG",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            titles = self.mod.load_existing_gmail_thread_titles("Fwd: Re: ボーネルンド様導入の件", path)
+
+        self.assertEqual(titles, ["【安本愛理】契約書を準備する"])
+
     def test_internal_domain_in_cc_forces_review(self):
         category, tags, needs_reply, rule, _meta = self.mod.classify_message(
             subject="FYI",
